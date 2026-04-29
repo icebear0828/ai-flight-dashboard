@@ -7,3 +7,6 @@ build/
 *.db-journal
 *.sqlite
 *.sqlite3
+*.log
+*.db-shm
+*.db-wal
