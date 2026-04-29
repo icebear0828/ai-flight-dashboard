@@ -1,0 +1,9 @@
+dashboard
+node_modules/
+dist/
+build/
+.DS_Store
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
