@@ -152,8 +152,8 @@ func TestAPITrack(t *testing.T) {
 	resp.Body.Close()
 
 	// Verify it was inserted
-	total, _, _, _, _ := database.QueryPeriodStatsAll("remote-test")
-	if total == 0 {
+	cost, _, _, _, _, _ := database.QueryPeriodStatsAll("remote-test")
+	if cost == 0 {
 		t.Fatal("expected cost to be calculated and inserted")
 	}
 }

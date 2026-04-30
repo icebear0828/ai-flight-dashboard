@@ -16,10 +16,11 @@ import (
 
 type periodCost struct {
 	Label        string
-	Cost         float64
-	InputTokens  int
-	CachedTokens int
-	OutputTokens int
+	Cost                float64
+	InputTokens         int
+	CachedTokens        int
+	CacheCreationTokens int
+	OutputTokens        int
 }
 
 type Model struct {
@@ -33,16 +34,18 @@ type Model struct {
 	budgetStatus *alert.BudgetStatus
 	quitting   bool
 	eventCount int // total events seen (usages slice is capped)
+	skipDBWrite bool
 }
 
 const maxLiveEvents = 50 // keep last N events in memory for display
 
-func NewModel(c *calculator.Calculator, w *watcher.Watcher, d *db.DB, ba *alert.BudgetAlert) Model {
+func NewModel(c *calculator.Calculator, w *watcher.Watcher, d *db.DB, ba *alert.BudgetAlert, skipDBWrite bool) Model {
 	return Model{
 		calc:     c,
 		watch:    w,
 		database: d,
 		budget:   ba,
+		skipDBWrite: skipDBWrite,
 	}
 }
 
@@ -79,11 +82,11 @@ func (m Model) refreshPeriods() tea.Cmd {
 
 		var periods []periodCost
 		for _, w := range windows {
-			cost, in, ca, out, _ := m.database.QueryPeriodStatsSince(now.Add(-w.dur), m.watch.DeviceID)
-			periods = append(periods, periodCost{Label: w.label, Cost: cost, InputTokens: in, CachedTokens: ca, OutputTokens: out})
+			cost, in, ca, caw, out, _ := m.database.QueryPeriodStatsSince(now.Add(-w.dur), m.watch.DeviceID)
+			periods = append(periods, periodCost{Label: w.label, Cost: cost, InputTokens: in, CachedTokens: ca, CacheCreationTokens: caw, OutputTokens: out})
 		}
-		total, tIn, tCa, tOut, _ := m.database.QueryPeriodStatsAll(m.watch.DeviceID)
-		periods = append(periods, periodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, OutputTokens: tOut})
+		total, tIn, tCa, tCaw, tOut, _ := m.database.QueryPeriodStatsAll(m.watch.DeviceID)
+		periods = append(periods, periodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, CacheCreationTokens: tCaw, OutputTokens: tOut})
 
 		return periodsMsg(periods)
 	}
@@ -110,11 +113,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.usages = m.usages[len(m.usages)-maxLiveEvents:]
 		}
 		m.eventCount++
-		cost, _ := m.calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.OutputTokens)
+		cost, _ := m.calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens)
 		m.totalCost += cost
 
 		// Async DB write — don't block the render path
-		if m.database != nil {
+		if m.database != nil && !m.skipDBWrite {
 			go m.database.InsertUsage(u, cost, m.watch.DeviceID)
 		}
 
@@ -162,8 +165,8 @@ func (m Model) View() string {
 	b.WriteString(fmt.Sprintf(" Live Events: %d", m.eventCount))
 	if len(m.usages) > 0 {
 		last := m.usages[len(m.usages)-1]
-		b.WriteString(dimStyle.Render(fmt.Sprintf(" │ %s %s │ In:%d Ca:%d Out:%d",
-			last.Source, last.Model, last.InputTokens, last.CachedTokens, last.OutputTokens)))
+		b.WriteString(dimStyle.Render(fmt.Sprintf(" │ %s %s │ In:%d CaR:%d CaW:%d Out:%d",
+			last.Source, last.Model, last.InputTokens, last.CachedTokens, last.CacheCreationTokens, last.OutputTokens)))
 	}
 	b.WriteString("\n")
 

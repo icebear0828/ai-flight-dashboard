@@ -110,7 +110,7 @@ func TestImportCSV(t *testing.T) {
 	}
 
 	// Verify data in DB
-	cost, _, _, _, _ := database.QueryPeriodStatsAll("remote-mac")
+	cost, _, _, _, _, _ := database.QueryPeriodStatsAll("remote-mac")
 	if cost < 2.09 || cost > 2.11 {
 		t.Errorf("expected ~2.10 cost, got %f", cost)
 	}
@@ -143,7 +143,7 @@ func TestImportCSV_Dedup(t *testing.T) {
 		t.Errorf("expected 1 skipped (dedup), got %d", skipped)
 	}
 
-	cost, _, _, _, _ := database.QueryPeriodStatsAll("")
+	cost, _, _, _, _, _ := database.QueryPeriodStatsAll("")
 	if cost < 1.49 || cost > 1.51 {
 		t.Errorf("expected ~1.50 (no dup), got %f", cost)
 	}
@@ -181,8 +181,8 @@ func TestExportImportRoundTrip(t *testing.T) {
 	}
 
 	// Verify totals match
-	srcCost, _, _, _, _ := srcDB.QueryPeriodStatsAll("")
-	dstCost, _, _, _, _ := dstDB.QueryPeriodStatsAll("")
+	srcCost, _, _, _, _, _ := srcDB.QueryPeriodStatsAll("")
+	dstCost, _, _, _, _, _ := dstDB.QueryPeriodStatsAll("")
 	if srcCost < dstCost-0.01 || srcCost > dstCost+0.01 {
 		t.Errorf("round-trip cost mismatch: src=%f dst=%f", srcCost, dstCost)
 	}

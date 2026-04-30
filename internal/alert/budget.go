@@ -44,8 +44,8 @@ func (b *BudgetAlert) Check() BudgetStatus {
 	}
 
 	now := time.Now().UTC()
-	since := now.Add(-24 * time.Hour)
-	spent, _, _, _, err := b.db.QueryPeriodStatsSince(since, "")
+	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	spent, _, _, _, _, err := b.db.QueryPeriodStatsSince(startOfDay, "all")
 	if err != nil {
 		log.Printf("Budget check failed to query DB: %v", err)
 	}

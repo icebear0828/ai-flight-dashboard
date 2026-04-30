@@ -248,12 +248,14 @@ func parseClaudeUsage(container map[string]interface{}, usage map[string]interfa
 	// We store InputTokens = input + cache_read so that Calculator's formula
 	// (baseInput = InputTokens - CachedTokens) yields the correct new-input cost.
 	cached := toInt(usage["cache_read_input_tokens"])
+	cacheCreation := toInt(usage["cache_creation_input_tokens"])
 	return TokenUsage{
-		Source:       source,
-		Model:        model,
-		InputTokens:  toInt(usage["input_tokens"]) + cached,
-		OutputTokens: toInt(usage["output_tokens"]),
-		CachedTokens: cached,
+		Source:              source,
+		Model:               model,
+		InputTokens:         toInt(usage["input_tokens"]) + cached + cacheCreation,
+		OutputTokens:        toInt(usage["output_tokens"]),
+		CachedTokens:        cached,
+		CacheCreationTokens: cacheCreation,
 	}
 }
 
@@ -262,7 +264,7 @@ func isNoiseRecord(u TokenUsage) bool {
 	if strings.HasPrefix(u.Model, "<") {
 		return true // <synthetic> etc
 	}
-	if u.InputTokens == 0 && u.OutputTokens == 0 && u.CachedTokens == 0 {
+	if u.InputTokens == 0 && u.OutputTokens == 0 && u.CachedTokens == 0 && u.CacheCreationTokens == 0 {
 		return true
 	}
 	return false

@@ -24,7 +24,7 @@ func New(database *db.DB, calc *calculator.Calculator, deviceID string) *Scanner
 
 // ScanAll walks all dirs, finds .jsonl files, reads from last offset, parses usage, inserts into DB.
 // Returns the number of new usage records inserted.
-func (s *Scanner) ScanAll(dirs []string) (int, error) {
+func (s *Scanner) ScanAll(dirs []string, usageChan chan<- watcher.TokenUsage) (int, error) {
 	total := 0
 	for _, dir := range dirs {
 		err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
@@ -34,7 +34,7 @@ func (s *Scanner) ScanAll(dirs []string) (int, error) {
 			if d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
 				return nil
 			}
-			n, err := s.scanFile(path)
+			n, err := s.scanFile(path, usageChan)
 			if err != nil {
 				return nil // skip broken files, don't abort scan
 			}
@@ -48,7 +48,35 @@ func (s *Scanner) ScanAll(dirs []string) (int, error) {
 	return total, nil
 }
 
-func (s *Scanner) scanFile(path string) (int, error) {
+// ScanKnownFiles reads all known file paths from the database and directly stats them.
+// This is extremely fast (<1ms) compared to ScanAll, avoiding directory traversal overhead.
+func (s *Scanner) ScanKnownFiles(usageChan chan<- watcher.TokenUsage) (int, error) {
+	files, err := s.db.ListKnownFiles()
+	if err != nil {
+		return 0, err
+	}
+	
+	total := 0
+	for _, path := range files {
+		// Only check if it exists and hasn't shrunk/disappeared
+		info, err := os.Stat(path)
+		if err != nil {
+			continue // skip broken files
+		}
+		
+		// Optimization: Check offset here to avoid opening file if no new data
+		offset, _ := s.db.GetOffset(path)
+		if info.Size() == offset {
+			continue
+		}
+		
+		n, _ := s.scanFile(path, usageChan)
+		total += n
+	}
+	return total, nil
+}
+
+func (s *Scanner) scanFile(path string, usageChan chan<- watcher.TokenUsage) (int, error) {
 	offset, err := s.db.GetOffset(path)
 	if err != nil {
 		return 0, err
@@ -93,7 +121,7 @@ func (s *Scanner) scanFile(path string) (int, error) {
 		if !ok {
 			continue
 		}
-		cost, _ := s.calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.OutputTokens)
+		cost, _ := s.calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens)
 		ts := u.Timestamp
 		if ts.IsZero() {
 			ts = info.ModTime()
@@ -112,11 +140,17 @@ func (s *Scanner) scanFile(path string) (int, error) {
 		if err := s.db.InsertUsageWithTime(e.u, e.cost, e.ts, path, s.DeviceID); err != nil {
 			continue
 		}
+		if usageChan != nil {
+			usageChan <- e.u
+		}
 		count++
 	}
 	for _, e := range noUUID {
 		if err := s.db.InsertUsageWithTime(e.u, e.cost, e.ts, path, s.DeviceID); err != nil {
 			continue
+		}
+		if usageChan != nil {
+			usageChan <- e.u
 		}
 		count++
 	}
