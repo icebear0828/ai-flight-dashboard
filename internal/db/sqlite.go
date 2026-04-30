@@ -16,9 +16,10 @@ type ModelStat struct {
 	Model      string
 	Source     string
 	Events     int
-	InputTokens  int
-	CachedTokens int
-	OutputTokens int
+	InputTokens         int
+	CachedTokens        int
+	CacheCreationTokens int
+	OutputTokens        int
 	TotalCost  float64
 }
 
@@ -27,6 +28,9 @@ func New(dsn string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Enforce single connection pool to prevent concurrent write locks in WAL mode
+	conn.SetMaxOpenConns(1)
 
 	// WAL mode for concurrent read/write
 	conn.Exec("PRAGMA journal_mode=WAL")
@@ -49,13 +53,16 @@ func initSchema(conn *sql.DB) error {
 		model TEXT NOT NULL,
 		input_tokens INTEGER NOT NULL,
 		cached_tokens INTEGER NOT NULL,
+		cache_creation_tokens INTEGER DEFAULT 0,
 		output_tokens INTEGER NOT NULL,
 		cost_usd REAL NOT NULL,
 		file_path TEXT DEFAULT '',
-		device_id TEXT DEFAULT 'local'
+		device_id TEXT DEFAULT 'local',
+		uuid TEXT
 	);
 	CREATE INDEX IF NOT EXISTS idx_usage_log_ts ON usage_records(log_timestamp);
 	CREATE INDEX IF NOT EXISTS idx_usage_device ON usage_records(device_id);
+	CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_uuid ON usage_records(uuid) WHERE uuid IS NOT NULL AND uuid != '';
 
 	CREATE TABLE IF NOT EXISTS scan_offsets (
 		file_path TEXT PRIMARY KEY,
@@ -74,7 +81,10 @@ func initSchema(conn *sql.DB) error {
 
 	// Lightweight migrations for existing tables
 	conn.Exec("ALTER TABLE usage_records ADD COLUMN device_id TEXT DEFAULT 'local'")
-	conn.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_dedup ON usage_records(log_timestamp, file_path, model, input_tokens, cached_tokens, output_tokens, device_id)")
+	conn.Exec("ALTER TABLE usage_records ADD COLUMN cache_creation_tokens INTEGER DEFAULT 0")
+	conn.Exec("ALTER TABLE usage_records ADD COLUMN uuid TEXT")
+	conn.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_uuid ON usage_records(uuid) WHERE uuid IS NOT NULL AND uuid != ''")
+	conn.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_dedup ON usage_records(log_timestamp, file_path, model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, device_id)")
 
 	return nil
 }
@@ -89,13 +99,30 @@ func (d *DB) InsertUsage(u model.TokenUsage, cost float64, deviceID string) erro
 }
 
 // InsertUsageWithTime inserts a usage record with an explicit log timestamp.
-// Duplicate records (same timestamp, file, model, tokens, device) are silently ignored.
+// If UUID is present, it will UPSERT (overwrite older states of the same generation).
+// If UUID is empty, duplicate records are silently ignored.
 func (d *DB) InsertUsageWithTime(u model.TokenUsage, cost float64, logTS time.Time, filePath string, deviceID string) error {
+	if u.UUID != "" {
+		query := `
+		INSERT INTO usage_records (uuid, log_timestamp, source, model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd, file_path, device_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(uuid) WHERE uuid IS NOT NULL AND uuid != '' DO UPDATE SET
+			log_timestamp = excluded.log_timestamp,
+			input_tokens = excluded.input_tokens,
+			cached_tokens = excluded.cached_tokens,
+			cache_creation_tokens = excluded.cache_creation_tokens,
+			output_tokens = excluded.output_tokens,
+			cost_usd = excluded.cost_usd
+		`
+		_, err := d.conn.Exec(query, u.UUID, logTS.Format(time.RFC3339), u.Source, u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens, cost, filePath, deviceID)
+		return err
+	}
+
 	query := `
-	INSERT OR IGNORE INTO usage_records (log_timestamp, source, model, input_tokens, cached_tokens, output_tokens, cost_usd, file_path, device_id)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	INSERT OR IGNORE INTO usage_records (log_timestamp, source, model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd, file_path, device_id)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
-	_, err := d.conn.Exec(query, logTS.Format(time.RFC3339), u.Source, u.Model, u.InputTokens, u.CachedTokens, u.OutputTokens, cost, filePath, deviceID)
+	_, err := d.conn.Exec(query, logTS.Format(time.RFC3339), u.Source, u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens, cost, filePath, deviceID)
 	return err
 }
 
@@ -118,10 +145,10 @@ func (d *DB) SetOffset(filePath string, offset int64) error {
 }
 
 // QueryPeriodStatsSince returns total cost and token breakdown since the given time.
-func (d *DB) QueryPeriodStatsSince(since time.Time, deviceID string) (float64, int, int, int, error) {
+func (d *DB) QueryPeriodStatsSince(since time.Time, deviceID string) (float64, int, int, int, int, error) {
 	var cost sql.NullFloat64
-	var inTok, cacheTok, outTok sql.NullInt64
-	query := "SELECT COALESCE(SUM(cost_usd), 0), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(output_tokens), 0) FROM usage_records WHERE log_timestamp >= ?"
+	var inTok, cacheTok, cacheCreationTok, outTok sql.NullInt64
+	query := "SELECT COALESCE(SUM(cost_usd), 0), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(cache_creation_tokens), 0), COALESCE(SUM(output_tokens), 0) FROM usage_records WHERE log_timestamp >= ?"
 	args := []interface{}{since.Format(time.RFC3339)}
 	
 	if deviceID != "" && deviceID != "all" {
@@ -129,18 +156,18 @@ func (d *DB) QueryPeriodStatsSince(since time.Time, deviceID string) (float64, i
 		args = append(args, deviceID)
 	}
 
-	err := d.conn.QueryRow(query, args...).Scan(&cost, &inTok, &cacheTok, &outTok)
+	err := d.conn.QueryRow(query, args...).Scan(&cost, &inTok, &cacheTok, &cacheCreationTok, &outTok)
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, 0, 0, 0, err
 	}
-	return cost.Float64, int(inTok.Int64), int(cacheTok.Int64), int(outTok.Int64), nil
+	return cost.Float64, int(inTok.Int64), int(cacheTok.Int64), int(cacheCreationTok.Int64), int(outTok.Int64), nil
 }
 
 // QueryPeriodStatsAll returns total cumulative cost and token breakdown.
-func (d *DB) QueryPeriodStatsAll(deviceID string) (float64, int, int, int, error) {
+func (d *DB) QueryPeriodStatsAll(deviceID string) (float64, int, int, int, int, error) {
 	var cost sql.NullFloat64
-	var inTok, cacheTok, outTok sql.NullInt64
-	query := "SELECT COALESCE(SUM(cost_usd), 0), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(output_tokens), 0) FROM usage_records WHERE 1=1"
+	var inTok, cacheTok, cacheCreationTok, outTok sql.NullInt64
+	query := "SELECT COALESCE(SUM(cost_usd), 0), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(cache_creation_tokens), 0), COALESCE(SUM(output_tokens), 0) FROM usage_records WHERE 1=1"
 	var args []interface{}
 
 	if deviceID != "" && deviceID != "all" {
@@ -148,18 +175,18 @@ func (d *DB) QueryPeriodStatsAll(deviceID string) (float64, int, int, int, error
 		args = append(args, deviceID)
 	}
 
-	err := d.conn.QueryRow(query, args...).Scan(&cost, &inTok, &cacheTok, &outTok)
+	err := d.conn.QueryRow(query, args...).Scan(&cost, &inTok, &cacheTok, &cacheCreationTok, &outTok)
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, 0, 0, 0, err
 	}
-	return cost.Float64, int(inTok.Int64), int(cacheTok.Int64), int(outTok.Int64), nil
+	return cost.Float64, int(inTok.Int64), int(cacheTok.Int64), int(cacheCreationTok.Int64), int(outTok.Int64), nil
 }
 
 // QueryStatsSince returns per-model stats since the given time, sorted by cost descending.
 func (d *DB) QueryStatsSince(since time.Time, deviceID string) ([]ModelStat, error) {
 	query := `
 		SELECT source, model, COUNT(*) as events,
-			SUM(input_tokens), SUM(cached_tokens), SUM(output_tokens),
+			SUM(input_tokens), SUM(cached_tokens), SUM(cache_creation_tokens), SUM(output_tokens),
 			SUM(cost_usd)
 		FROM usage_records
 		WHERE log_timestamp >= ?
@@ -186,7 +213,7 @@ func (d *DB) QueryStatsSince(since time.Time, deviceID string) ([]ModelStat, err
 	for rows.Next() {
 		var s ModelStat
 		if err := rows.Scan(&s.Source, &s.Model, &s.Events,
-			&s.InputTokens, &s.CachedTokens, &s.OutputTokens, &s.TotalCost); err != nil {
+			&s.InputTokens, &s.CachedTokens, &s.CacheCreationTokens, &s.OutputTokens, &s.TotalCost); err != nil {
 			return nil, err
 		}
 		stats = append(stats, s)
@@ -215,16 +242,17 @@ func (d *DB) QueryDevices() ([]string, error) {
 
 // UsageRecord represents a single stored usage record for per-row analysis.
 type UsageRecord struct {
-	Model        string
-	InputTokens  int
-	CachedTokens int
-	OutputTokens int
-	CostUSD      float64
+	Model               string
+	InputTokens         int
+	CachedTokens        int
+	CacheCreationTokens int
+	OutputTokens        int
+	CostUSD             float64
 }
 
 // QueryUsageRecords returns individual usage records since the given time.
 func (d *DB) QueryUsageRecords(since time.Time, deviceID string) ([]UsageRecord, error) {
-	query := `SELECT model, input_tokens, cached_tokens, output_tokens, cost_usd
+	query := `SELECT model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd
 		FROM usage_records WHERE log_timestamp >= ?`
 	args := []interface{}{since.Format(time.RFC3339)}
 
@@ -242,7 +270,7 @@ func (d *DB) QueryUsageRecords(since time.Time, deviceID string) ([]UsageRecord,
 	var records []UsageRecord
 	for rows.Next() {
 		var r UsageRecord
-		if err := rows.Scan(&r.Model, &r.InputTokens, &r.CachedTokens, &r.OutputTokens, &r.CostUSD); err != nil {
+		if err := rows.Scan(&r.Model, &r.InputTokens, &r.CachedTokens, &r.CacheCreationTokens, &r.OutputTokens, &r.CostUSD); err != nil {
 			return nil, err
 		}
 		records = append(records, r)
@@ -281,14 +309,33 @@ func (d *DB) ListKnownDirs() ([]string, error) {
 	return dirs, rows.Err()
 }
 
+// ListKnownFiles returns all file paths cached in scan_offsets.
+func (d *DB) ListKnownFiles() ([]string, error) {
+	rows, err := d.conn.Query("SELECT file_path FROM scan_offsets ORDER BY file_path")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var files []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		files = append(files, p)
+	}
+	return files, rows.Err()
+}
+
 // DeduplicateExisting removes duplicate usage records, keeping the one with the lowest rowid.
 // Returns the number of rows removed.
 func (d *DB) DeduplicateExisting() (int64, error) {
 	query := `
 	DELETE FROM usage_records WHERE id NOT IN (
 		SELECT MIN(id) FROM usage_records
-		GROUP BY log_timestamp, file_path, model, input_tokens, cached_tokens, output_tokens, device_id
-	)`
+		GROUP BY log_timestamp, file_path, model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, device_id
+	) AND (uuid IS NULL OR uuid = '')`
 	result, err := d.conn.Exec(query)
 	if err != nil {
 		return 0, err
