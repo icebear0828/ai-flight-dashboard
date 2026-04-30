@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"ai-flight-dashboard/internal/alert"
 	"ai-flight-dashboard/internal/calculator"
@@ -42,6 +43,7 @@ func main() {
 	billingModeStr := flag.String("billing-mode", "auto", "Billing mode: auto, subscription, api")
 	plan := flag.String("plan", "", "Subscription plan: pro, max5, max20 (only for subscription mode)")
 	budgetDaily := flag.Float64("budget-daily", 0, "Daily budget limit in USD (only for api mode, 0=disabled)")
+	syncMode := flag.String("sync-mode", "poll", "Sync mode: poll (default), fsnotify, once")
 	flag.BoolVar(webMode, "w", false, "Run in web dashboard mode (shorthand)")
 	flag.StringVar(port, "p", "9100", "HTTP port for web mode (shorthand)")
 	flag.Parse()
@@ -143,7 +145,7 @@ func main() {
 
 	// Fast path: register cached known directories (~1ms vs 134ms recursive)
 	knownDirs, _ := database.ListKnownDirs()
-	if len(knownDirs) > 0 {
+	if *syncMode == "fsnotify" && len(knownDirs) > 0 {
 		w.WatchKnownDirs(knownDirs)
 		// Also watch project roots for new session dirs
 		for _, dir := range scanDirs {
@@ -154,28 +156,46 @@ func main() {
 	// Background: full scan + discover new directories
 	go func() {
 		s := scanner.New(database, calc, *deviceID)
-		s.ScanAll(scanDirs) // incremental; auto-caches new dirs to known_dirs
+		s.ScanAll(scanDirs, w.UsageChan) // incremental; auto-caches new dirs to known_dirs
 
-		if len(knownDirs) == 0 {
-			// First run: no cache yet, do full recursive watch
-			for _, dir := range scanDirs {
-				w.WatchDirRecursive(dir)
+		if *syncMode == "fsnotify" {
+			if len(knownDirs) == 0 {
+				// First run: no cache yet, do full recursive watch
+				for _, dir := range scanDirs {
+					w.WatchDirRecursive(dir)
+				}
+			} else {
+				// Subsequent runs: pick up any newly discovered dirs
+				newDirs, _ := database.ListKnownDirs()
+				w.WatchKnownDirs(newDirs)
 			}
-		} else {
-			// Subsequent runs: pick up any newly discovered dirs
-			newDirs, _ := database.ListKnownDirs()
-			w.WatchKnownDirs(newDirs)
+		} else if *syncMode == "poll" {
+			fastTicker := time.NewTicker(2 * time.Second)
+			slowTicker := time.NewTicker(60 * time.Second)
+			defer fastTicker.Stop()
+			defer slowTicker.Stop()
+			for {
+				select {
+				case <-fastTicker.C:
+					s.ScanKnownFiles(w.UsageChan)
+				case <-slowTicker.C:
+					s.ScanAll(scanDirs, w.UsageChan)
+				}
+			}
 		}
+		// "once" mode does nothing more
 	}()
 
 	if *webMode {
 		// Background goroutine: drain watcher events and persist to DB
-		go func() {
-			for u := range w.UsageChan {
-				cost, _ := calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.OutputTokens)
-				database.InsertUsage(u, cost, *deviceID)
-			}
-		}()
+		if *syncMode == "fsnotify" {
+			go func() {
+				for u := range w.UsageChan {
+					cost, _ := calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens)
+					database.InsertUsage(u, cost, *deviceID)
+				}
+			}()
+		}
 
 		// Web dashboard mode with graceful shutdown
 		handler := web.NewHandler(database, calc, *token)
@@ -211,7 +231,8 @@ func main() {
 		fmt.Printf("💰 Budget mode: $%.2f/day limit\n", *budgetDaily)
 	}
 
-	p := tea.NewProgram(tui.NewModel(calc, w, database, budgetAlert))
+	skipDBWrite := (*syncMode != "fsnotify")
+	p := tea.NewProgram(tui.NewModel(calc, w, database, budgetAlert, skipDBWrite))
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Alas, there's been an error: %v", err)
 		os.Exit(1)

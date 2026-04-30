@@ -95,12 +95,15 @@ func TestRealClaudeCodeFormat(t *testing.T) {
 		if usage.Model != "claude-sonnet-4-6" {
 			t.Errorf("Expected model claude-sonnet-4-6, got %s", usage.Model)
 		}
-		// Claude: input_tokens=5000 + cache_read=10000 => InputTokens=15000
-		if usage.InputTokens != 15000 {
-			t.Errorf("Expected input 15000 (5000+10000), got %d", usage.InputTokens)
+		// Claude: input_tokens=5000 + cache_read=10000 + cache_creation=200 => InputTokens=15200
+		if usage.InputTokens != 15200 {
+			t.Errorf("Expected input 15200 (5000+10000+200), got %d", usage.InputTokens)
 		}
 		if usage.CachedTokens != 10000 {
 			t.Errorf("Expected cached 10000, got %d", usage.CachedTokens)
+		}
+		if usage.CacheCreationTokens != 200 {
+			t.Errorf("Expected cache creation 200, got %d", usage.CacheCreationTokens)
 		}
 		if usage.OutputTokens != 1500 {
 			t.Errorf("Expected output 1500, got %d", usage.OutputTokens)

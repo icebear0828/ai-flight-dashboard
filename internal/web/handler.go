@@ -13,33 +13,36 @@ import (
 )
 
 type ModelStats struct {
-	Model       string  `json:"model"`
-	Events      int     `json:"events"`
-	InputTokens int     `json:"input_tokens"`
-	CachedTokens int   `json:"cached_tokens"`
-	OutputTokens int    `json:"output_tokens"`
-	TotalCost   float64 `json:"total_cost"`
-	InputPricePerM  float64 `json:"input_price_per_m"`
-	CachedPricePerM float64 `json:"cached_price_per_m"`
-	OutputPricePerM float64 `json:"output_price_per_m"`
+	Model               string  `json:"model"`
+	Events              int     `json:"events"`
+	InputTokens         int     `json:"input_tokens"`
+	CachedTokens        int     `json:"cached_tokens"`
+	CacheCreationTokens int     `json:"cache_creation_tokens"`
+	OutputTokens        int     `json:"output_tokens"`
+	TotalCost           float64 `json:"total_cost"`
+	InputPricePerM      float64 `json:"input_price_per_m"`
+	CachedPricePerM     float64 `json:"cached_price_per_m"`
+	OutputPricePerM     float64 `json:"output_price_per_m"`
 }
 
 type SourceStats struct {
-	Name         string       `json:"name"`
-	TotalInput   int          `json:"total_input"`
-	TotalCached  int          `json:"total_cached"`
-	TotalOutput  int          `json:"total_output"`
-	TotalCost    float64      `json:"total_cost"`
-	TotalEvents  int          `json:"total_events"`
-	Models       []ModelStats `json:"models"`
+	Name               string       `json:"name"`
+	TotalInput         int          `json:"total_input"`
+	TotalCached        int          `json:"total_cached"`
+	TotalCacheCreation int          `json:"total_cache_creation"`
+	TotalOutput        int          `json:"total_output"`
+	TotalCost          float64      `json:"total_cost"`
+	TotalEvents        int          `json:"total_events"`
+	Models             []ModelStats `json:"models"`
 }
 
 type PeriodCost struct {
-	Label        string  `json:"label"`
-	Cost         float64 `json:"cost"`
-	InputTokens  int     `json:"input_tokens"`
-	CachedTokens int     `json:"cached_tokens"`
-	OutputTokens int     `json:"output_tokens"`
+	Label               string  `json:"label"`
+	Cost                float64 `json:"cost"`
+	InputTokens         int     `json:"input_tokens"`
+	CachedTokens        int     `json:"cached_tokens"`
+	CacheCreationTokens int     `json:"cache_creation_tokens"`
+	OutputTokens        int     `json:"output_tokens"`
 }
 
 type StatsResponse struct {
@@ -90,7 +93,7 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, token string) http
 			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
-		cost, err := calc.CalculateCost(payload.Usage.Model, payload.Usage.InputTokens, payload.Usage.CachedTokens, payload.Usage.OutputTokens)
+		cost, err := calc.CalculateCost(payload.Usage.Model, payload.Usage.InputTokens, payload.Usage.CachedTokens, payload.Usage.CacheCreationTokens, payload.Usage.OutputTokens)
 		if err != nil {
 			// Ignore cost calculation errors (e.g. unknown model) but proceed with inserting usage with 0 cost
 			cost = 0
@@ -131,11 +134,11 @@ func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *
 
 	var periods []PeriodCost
 	for _, win := range windows {
-		cost, inTok, caTok, outTok, _ := database.QueryPeriodStatsSince(now.Add(-win.dur), deviceID)
-		periods = append(periods, PeriodCost{Label: win.label, Cost: cost, InputTokens: inTok, CachedTokens: caTok, OutputTokens: outTok})
+		cost, inTok, caTok, caWTock, outTok, _ := database.QueryPeriodStatsSince(now.Add(-win.dur), deviceID)
+		periods = append(periods, PeriodCost{Label: win.label, Cost: cost, InputTokens: inTok, CachedTokens: caTok, CacheCreationTokens: caWTock, OutputTokens: outTok})
 	}
-	total, tIn, tCa, tOut, _ := database.QueryPeriodStatsAll(deviceID)
-	periods = append(periods, PeriodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, OutputTokens: tOut})
+	total, tIn, tCa, tCaW, tOut, _ := database.QueryPeriodStatsAll(deviceID)
+	periods = append(periods, PeriodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, CacheCreationTokens: tCaW, OutputTokens: tOut})
 
 	// Get all-time stats grouped by model
 	stats, _ := database.QueryStatsSince(time.Time{}, deviceID)
@@ -150,18 +153,20 @@ func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *
 		}
 		price, _ := calc.GetModelPrice(s.Model)
 		src.Models = append(src.Models, ModelStats{
-			Model:           s.Model,
-			Events:          s.Events,
-			InputTokens:     s.InputTokens,
-			CachedTokens:    s.CachedTokens,
-			OutputTokens:    s.OutputTokens,
-			TotalCost:       s.TotalCost,
-			InputPricePerM:  price.InputPricePerM,
-			CachedPricePerM: price.CachedPricePerM,
-			OutputPricePerM: price.OutputPricePerM,
+			Model:               s.Model,
+			Events:              s.Events,
+			InputTokens:         s.InputTokens,
+			CachedTokens:        s.CachedTokens,
+			CacheCreationTokens: s.CacheCreationTokens,
+			OutputTokens:        s.OutputTokens,
+			TotalCost:           s.TotalCost,
+			InputPricePerM:      price.InputPricePerM,
+			CachedPricePerM:     price.CachedPricePerM,
+			OutputPricePerM:     price.OutputPricePerM,
 		})
 		src.TotalInput += s.InputTokens
 		src.TotalCached += s.CachedTokens
+		src.TotalCacheCreation += s.CacheCreationTokens
 		src.TotalOutput += s.OutputTokens
 		src.TotalCost += s.TotalCost
 		src.TotalEvents += s.Events
@@ -200,8 +205,8 @@ func handleCacheSavings(w http.ResponseWriter, r *http.Request, database *db.DB,
 	var totalInput, totalCached int
 
 	for _, rec := range records {
-		actual, _ := calc.CalculateCost(rec.Model, rec.InputTokens, rec.CachedTokens, rec.OutputTokens)
-		hypo, _ := calc.CalculateCostNoCaching(rec.Model, rec.InputTokens, rec.CachedTokens, rec.OutputTokens)
+		actual, _ := calc.CalculateCost(rec.Model, rec.InputTokens, rec.CachedTokens, rec.CacheCreationTokens, rec.OutputTokens)
+		hypo, _ := calc.CalculateCostNoCaching(rec.Model, rec.InputTokens, rec.CachedTokens, rec.CacheCreationTokens, rec.OutputTokens)
 		actualTotal += actual
 		hypoTotal += hypo
 		totalInput += rec.InputTokens
