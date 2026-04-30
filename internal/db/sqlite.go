@@ -5,7 +5,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-	"ai-flight-dashboard/internal/watcher"
+	"ai-flight-dashboard/internal/model"
 )
 
 type DB struct {
@@ -55,10 +55,16 @@ func initSchema(conn *sql.DB) error {
 		device_id TEXT DEFAULT 'local'
 	);
 	CREATE INDEX IF NOT EXISTS idx_usage_log_ts ON usage_records(log_timestamp);
+	CREATE INDEX IF NOT EXISTS idx_usage_device ON usage_records(device_id);
 
 	CREATE TABLE IF NOT EXISTS scan_offsets (
 		file_path TEXT PRIMARY KEY,
 		byte_offset INTEGER NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS known_dirs (
+		dir_path TEXT PRIMARY KEY,
+		last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 	`
 	_, err := conn.Exec(schema)
@@ -66,14 +72,15 @@ func initSchema(conn *sql.DB) error {
 		return err
 	}
 
-	// Lightweight migration for existing tables
+	// Lightweight migrations for existing tables
 	conn.Exec("ALTER TABLE usage_records ADD COLUMN device_id TEXT DEFAULT 'local'")
+	conn.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_dedup ON usage_records(log_timestamp, file_path, model, input_tokens, cached_tokens, output_tokens, device_id)")
 
 	return nil
 }
 
 // InsertUsage inserts a usage record with current timestamp (for live watcher).
-func (d *DB) InsertUsage(u watcher.TokenUsage, cost float64, deviceID string) error {
+func (d *DB) InsertUsage(u model.TokenUsage, cost float64, deviceID string) error {
 	ts := time.Now().UTC()
 	if !u.Timestamp.IsZero() {
 		ts = u.Timestamp
@@ -82,9 +89,10 @@ func (d *DB) InsertUsage(u watcher.TokenUsage, cost float64, deviceID string) er
 }
 
 // InsertUsageWithTime inserts a usage record with an explicit log timestamp.
-func (d *DB) InsertUsageWithTime(u watcher.TokenUsage, cost float64, logTS time.Time, filePath string, deviceID string) error {
+// Duplicate records (same timestamp, file, model, tokens, device) are silently ignored.
+func (d *DB) InsertUsageWithTime(u model.TokenUsage, cost float64, logTS time.Time, filePath string, deviceID string) error {
 	query := `
-	INSERT INTO usage_records (log_timestamp, source, model, input_tokens, cached_tokens, output_tokens, cost_usd, file_path, device_id)
+	INSERT OR IGNORE INTO usage_records (log_timestamp, source, model, input_tokens, cached_tokens, output_tokens, cost_usd, file_path, device_id)
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err := d.conn.Exec(query, logTS.Format(time.RFC3339), u.Source, u.Model, u.InputTokens, u.CachedTokens, u.OutputTokens, cost, filePath, deviceID)
@@ -205,6 +213,91 @@ func (d *DB) QueryDevices() ([]string, error) {
 	return devices, rows.Err()
 }
 
+// UsageRecord represents a single stored usage record for per-row analysis.
+type UsageRecord struct {
+	Model        string
+	InputTokens  int
+	CachedTokens int
+	OutputTokens int
+	CostUSD      float64
+}
+
+// QueryUsageRecords returns individual usage records since the given time.
+func (d *DB) QueryUsageRecords(since time.Time, deviceID string) ([]UsageRecord, error) {
+	query := `SELECT model, input_tokens, cached_tokens, output_tokens, cost_usd
+		FROM usage_records WHERE log_timestamp >= ?`
+	args := []interface{}{since.Format(time.RFC3339)}
+
+	if deviceID != "" && deviceID != "all" {
+		query += " AND device_id = ?"
+		args = append(args, deviceID)
+	}
+
+	rows, err := d.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []UsageRecord
+	for rows.Next() {
+		var r UsageRecord
+		if err := rows.Scan(&r.Model, &r.InputTokens, &r.CachedTokens, &r.OutputTokens, &r.CostUSD); err != nil {
+			return nil, err
+		}
+		records = append(records, r)
+	}
+	return records, rows.Err()
+}
+
 func (d *DB) Close() error {
 	return d.conn.Close()
+}
+
+// UpsertKnownDir records a directory known to contain JSONL files.
+func (d *DB) UpsertKnownDir(dirPath string) error {
+	query := `INSERT INTO known_dirs (dir_path) VALUES (?)
+	ON CONFLICT(dir_path) DO UPDATE SET last_seen = CURRENT_TIMESTAMP`
+	_, err := d.conn.Exec(query, dirPath)
+	return err
+}
+
+// ListKnownDirs returns all cached JSONL directories.
+func (d *DB) ListKnownDirs() ([]string, error) {
+	rows, err := d.conn.Query("SELECT dir_path FROM known_dirs ORDER BY dir_path")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var dirs []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		dirs = append(dirs, p)
+	}
+	return dirs, rows.Err()
+}
+
+// DeduplicateExisting removes duplicate usage records, keeping the one with the lowest rowid.
+// Returns the number of rows removed.
+func (d *DB) DeduplicateExisting() (int64, error) {
+	query := `
+	DELETE FROM usage_records WHERE id NOT IN (
+		SELECT MIN(id) FROM usage_records
+		GROUP BY log_timestamp, file_path, model, input_tokens, cached_tokens, output_tokens, device_id
+	)`
+	result, err := d.conn.Exec(query)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// RawExec executes a raw SQL statement. Exposed for testing only.
+func (d *DB) RawExec(query string, args ...interface{}) error {
+	_, err := d.conn.Exec(query, args...)
+	return err
 }

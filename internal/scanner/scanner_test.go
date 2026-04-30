@@ -146,3 +146,34 @@ func TestScanAll_SkipsNonUsageLines(t *testing.T) {
 		t.Errorf("expected 1 usage line only, got %d", count)
 	}
 }
+
+func TestScanAll_FileTruncation(t *testing.T) {
+	database, _ := db.New(filepath.Join(t.TempDir(), "test.db"))
+	defer database.Close()
+	calc := setupCalc(t)
+
+	logDir := t.TempDir()
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	logFile := filepath.Join(logDir, "session.jsonl")
+
+	// Write 3 lines initially
+	line := fmt.Sprintf(
+		`{"timestamp":"%s","message":{"model":"claude-opus-4-7","type":"message","role":"assistant","content":[],"usage":{"input_tokens":500,"cache_read_input_tokens":0,"output_tokens":100}}}`,
+		ts,
+	) + "\n"
+	os.WriteFile(logFile, []byte(line+line+line), 0644)
+
+	s := scanner.New(database, calc, "local")
+	count1, _ := s.ScanAll([]string{logDir})
+	if count1 != 3 {
+		t.Errorf("first scan: expected 3, got %d", count1)
+	}
+
+	// Truncate and write 1 shorter line (simulates log rotation)
+	os.WriteFile(logFile, []byte(line), 0644)
+
+	count2, _ := s.ScanAll([]string{logDir})
+	if count2 != 1 {
+		t.Errorf("after truncation: expected 1 (re-read from start), got %d", count2)
+	}
+}

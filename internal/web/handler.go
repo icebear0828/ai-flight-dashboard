@@ -9,6 +9,7 @@ import (
 
 	"ai-flight-dashboard/internal/calculator"
 	"ai-flight-dashboard/internal/db"
+	"ai-flight-dashboard/internal/model"
 )
 
 type ModelStats struct {
@@ -47,11 +48,52 @@ type StatsResponse struct {
 	Devices []string      `json:"devices"`
 }
 
-func NewHandler(database *db.DB, calc *calculator.Calculator) http.Handler {
+type CacheSavingsResponse struct {
+	ActualCost       float64 `json:"actual_cost"`
+	HypotheticalCost float64 `json:"hypothetical_cost"`
+	Saved            float64 `json:"saved"`
+	SavedPercent     float64 `json:"saved_percent"`
+	CacheHitRate     float64 `json:"cache_hit_rate"`
+}
+
+func NewHandler(database *db.DB, calc *calculator.Calculator, token string) http.Handler {
 	mux := http.NewServeMux()
+
+	authMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if token != "" {
+				authHeader := r.Header.Get("Authorization")
+				if authHeader != "Bearer "+token {
+					http.Error(w, "Unauthorized", http.StatusUnauthorized)
+					return
+				}
+			}
+			next(w, r)
+		}
+	}
+
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
 		handleStats(w, r, database, calc)
 	})
+
+	mux.HandleFunc("/api/cache-savings", func(w http.ResponseWriter, r *http.Request) {
+		handleCacheSavings(w, r, database, calc)
+	})
+
+	mux.HandleFunc("/api/track", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var payload model.TrackPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		cost, _ := calc.CalculateCost(payload.Usage.Model, payload.Usage.InputTokens, payload.Usage.CachedTokens, payload.Usage.OutputTokens)
+		database.InsertUsage(payload.Usage, cost, payload.DeviceID)
+		w.WriteHeader(http.StatusCreated)
+	}))
 
 	// Serve static files from the "dist" directory embedded in the binary
 	staticFS, err := fs.Sub(StaticFiles, "dist")
@@ -134,5 +176,47 @@ func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *
 		Periods: periods,
 		Sources: sources,
 		Devices: devices,
+	})
+}
+
+func handleCacheSavings(w http.ResponseWriter, r *http.Request, database *db.DB, calc *calculator.Calculator) {
+	deviceID := r.URL.Query().Get("device")
+
+	// Query all records (no time filter = all time)
+	records, err := database.QueryUsageRecords(time.Time{}, deviceID)
+	if err != nil {
+		http.Error(w, "query error", http.StatusInternalServerError)
+		return
+	}
+
+	var actualTotal, hypoTotal float64
+	var totalInput, totalCached int
+
+	for _, rec := range records {
+		actual, _ := calc.CalculateCost(rec.Model, rec.InputTokens, rec.CachedTokens, rec.OutputTokens)
+		hypo, _ := calc.CalculateCostNoCaching(rec.Model, rec.InputTokens, rec.CachedTokens, rec.OutputTokens)
+		actualTotal += actual
+		hypoTotal += hypo
+		totalInput += rec.InputTokens
+		totalCached += rec.CachedTokens
+	}
+
+	saved := hypoTotal - actualTotal
+	savedPct := 0.0
+	if hypoTotal > 0 {
+		savedPct = (saved / hypoTotal) * 100
+	}
+	hitRate := 0.0
+	if totalInput > 0 {
+		hitRate = (float64(totalCached) / float64(totalInput)) * 100
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(CacheSavingsResponse{
+		ActualCost:       actualTotal,
+		HypotheticalCost: hypoTotal,
+		Saved:            saved,
+		SavedPercent:     savedPct,
+		CacheHitRate:     hitRate,
 	})
 }

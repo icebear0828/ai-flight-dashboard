@@ -20,6 +20,11 @@
       "cached_price_per_m": 0.019,
       "output_price_per_m": 0.30
     },
+    "gemini-3.1-pro-preview": {
+      "input_price_per_m": 1.25,
+      "cached_price_per_m": 0.31,
+      "output_price_per_m": 5.00
+    },
     "claude-3-7-sonnet-20250219": {
       "input_price_per_m": 3.00,
       "cached_price_per_m": 0.30,

@@ -10,19 +10,14 @@ import (
 	"sync"
 	"time"
 
+	"ai-flight-dashboard/internal/model"
+
 	"github.com/fsnotify/fsnotify"
 )
 
-type TokenUsage struct {
-	Source       string
-	Model        string
-	InputTokens  int
-	CachedTokens int
-	OutputTokens int
-	Thoughts     int
-	Timestamp    time.Time
-	UUID         string // for dedup: Claude writes snapshots with same uuid
-}
+// TokenUsage is an alias for model.TokenUsage.
+// Retained for backward compatibility with existing consumers.
+type TokenUsage = model.TokenUsage
 
 type Watcher struct {
 	fw            *fsnotify.Watcher
@@ -73,6 +68,14 @@ func (w *Watcher) WatchDirRecursive(dir string) error {
 		}
 		return nil
 	})
+}
+
+// WatchKnownDirs registers specific directories without recursive walk.
+// Used with cached directory lists for fast startup.
+func (w *Watcher) WatchKnownDirs(dirs []string) {
+	for _, dir := range dirs {
+		w.fw.Add(dir)
+	}
 }
 
 func (w *Watcher) Close() error {
@@ -240,16 +243,21 @@ func parseClaudeUsage(container map[string]interface{}, usage map[string]interfa
 	if strings.HasPrefix(model, "gemini") {
 		source = "Gemini CLI"
 	}
+	// Claude API: input_tokens and cache_read_input_tokens are INDEPENDENT fields.
+	// (Unlike Gemini, where input INCLUDES cached.)
+	// We store InputTokens = input + cache_read so that Calculator's formula
+	// (baseInput = InputTokens - CachedTokens) yields the correct new-input cost.
+	cached := toInt(usage["cache_read_input_tokens"])
 	return TokenUsage{
 		Source:       source,
 		Model:        model,
-		InputTokens:  toInt(usage["input_tokens"]),
+		InputTokens:  toInt(usage["input_tokens"]) + cached,
 		OutputTokens: toInt(usage["output_tokens"]),
-		CachedTokens: toInt(usage["cache_read_input_tokens"]),
+		CachedTokens: cached,
 	}
 }
 
-// isNoiseRecord filters out synthetic/empty/non-existent model records
+// isNoiseRecord filters out synthetic/empty model records
 func isNoiseRecord(u TokenUsage) bool {
 	if strings.HasPrefix(u.Model, "<") {
 		return true // <synthetic> etc
@@ -257,25 +265,21 @@ func isNoiseRecord(u TokenUsage) bool {
 	if u.InputTokens == 0 && u.OutputTokens == 0 && u.CachedTokens == 0 {
 		return true
 	}
-	// Non-existent model names that appear in logs
-	switch u.Model {
-	case "claude-sonnet-4-20250514", "gemini-3-flash":
-		return true
-	}
 	return false
 }
 
 func parseTimestamp(data map[string]interface{}) time.Time {
 	if ts, ok := data["timestamp"].(string); ok {
-		// Try ISO8601 with Z
+		// Try ISO8601 / RFC3339
 		if t, err := time.Parse(time.RFC3339, ts); err == nil {
 			return t
 		}
-		// Try ISO8601 with milliseconds
+		// Try ISO8601 with milliseconds (e.g. Gemini logs)
 		if t, err := time.Parse("2006-01-02T15:04:05.000Z", ts); err == nil {
 			return t
 		}
-		if t, err := time.Parse("2006-01-02T15:04:05.999Z", ts); err == nil {
+		// Try RFC3339Nano for nanosecond precision
+		if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
 			return t
 		}
 	}

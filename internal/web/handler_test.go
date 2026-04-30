@@ -6,12 +6,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"ai-flight-dashboard/internal/calculator"
 	"ai-flight-dashboard/internal/db"
-	"ai-flight-dashboard/internal/watcher"
+	"ai-flight-dashboard/internal/model"
 	"ai-flight-dashboard/internal/web"
 )
 
@@ -36,20 +37,20 @@ func TestAPIStats(t *testing.T) {
 
 	// Claude records
 	database.InsertUsageWithTime(
-		watcher.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, CachedTokens: 5000, OutputTokens: 200},
+		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, CachedTokens: 5000, OutputTokens: 200},
 		1.50, now.Add(-30*time.Minute), "/a.jsonl", "local",
 	)
 	database.InsertUsageWithTime(
-		watcher.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 2000, CachedTokens: 8000, OutputTokens: 400},
+		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 2000, CachedTokens: 8000, OutputTokens: 400},
 		3.00, now.Add(-2*time.Hour), "/b.jsonl", "local",
 	)
 	// Gemini records
 	database.InsertUsageWithTime(
-		watcher.TokenUsage{Source: "Gemini CLI", Model: "gemini-2.5-pro", InputTokens: 500, CachedTokens: 0, OutputTokens: 100},
+		model.TokenUsage{Source: "Gemini CLI", Model: "gemini-2.5-pro", InputTokens: 500, CachedTokens: 0, OutputTokens: 100},
 		0.80, now.Add(-10*time.Minute), "/c.jsonl", "local",
 	)
 
-	handler := web.NewHandler(database, calc)
+	handler := web.NewHandler(database, calc, "")
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
@@ -103,7 +104,7 @@ func TestStaticPage(t *testing.T) {
 	database, calc := setup(t)
 	defer database.Close()
 
-	handler := web.NewHandler(database, calc)
+	handler := web.NewHandler(database, calc, "")
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
@@ -113,5 +114,93 @@ func TestStaticPage(t *testing.T) {
 	}
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200 for /, got %d", resp.StatusCode)
+	}
+}
+
+func TestAPITrack(t *testing.T) {
+	database, calc := setup(t)
+	defer database.Close()
+
+	handler := web.NewHandler(database, calc, "secret-token")
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	payload := `{"device_id":"remote-test","usage":{"source":"Claude Code","model":"claude-opus-4-7","input_tokens":100,"output_tokens":50}}`
+
+	// Test unauthorized
+	req, _ := http.NewRequest("POST", srv.URL+"/api/track", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Test authorized
+	req, _ = http.NewRequest("POST", srv.URL+"/api/track", strings.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Verify it was inserted
+	total, _, _, _, _ := database.QueryPeriodStatsAll("remote-test")
+	if total == 0 {
+		t.Fatal("expected cost to be calculated and inserted")
+	}
+}
+
+func TestAPICacheSavings(t *testing.T) {
+	database, calc := setup(t)
+	defer database.Close()
+
+	now := time.Now().UTC()
+
+	// Claude: 1000 input (800 cached), 200 output
+	database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, CachedTokens: 800, OutputTokens: 200},
+		0, now.Add(-10*time.Minute), "/a.jsonl", "local",
+	)
+	// Gemini: 500 input (0 cached), 100 output
+	database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Gemini CLI", Model: "gemini-2.5-pro", InputTokens: 500, CachedTokens: 0, OutputTokens: 100},
+		0, now.Add(-5*time.Minute), "/b.jsonl", "local",
+	)
+
+	handler := web.NewHandler(database, calc, "")
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/cache-savings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var data web.CacheSavingsResponse
+	json.NewDecoder(resp.Body).Decode(&data)
+
+	// actual_cost: calculator computes real cost with cached pricing
+	// hypothetical_cost: calculator computes cost as if cached_tokens were charged at full input price
+	if data.HypotheticalCost <= data.ActualCost {
+		t.Errorf("hypothetical should exceed actual: hypo=%f actual=%f", data.HypotheticalCost, data.ActualCost)
+	}
+	if data.Saved < 0 {
+		t.Errorf("saved should be >= 0, got %f", data.Saved)
+	}
+	if data.CacheHitRate < 0 || data.CacheHitRate > 100 {
+		t.Errorf("cache hit rate should be 0-100, got %f", data.CacheHitRate)
 	}
 }

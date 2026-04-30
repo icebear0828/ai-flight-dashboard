@@ -65,11 +65,11 @@ func (s *Scanner) scanFile(path string) (int, error) {
 		return 0, err
 	}
 
-	if info.Size() <= offset {
-		return 0, nil // no new data
-	}
 	if info.Size() < offset {
-		offset = 0 // file was truncated
+		offset = 0 // file was truncated/rotated, rescan from start
+	}
+	if info.Size() == offset {
+		return 0, nil // no new data
 	}
 
 	if _, err := file.Seek(offset, 0); err != nil {
@@ -124,6 +124,9 @@ func (s *Scanner) scanFile(path string) (int, error) {
 	// Update offset to current position
 	newOffset, _ := file.Seek(0, 1)
 	s.db.SetOffset(path, newOffset)
+
+	// Cache this directory for fast startup next time
+	s.db.UpsertKnownDir(filepath.Dir(path))
 
 	return count, nil
 }

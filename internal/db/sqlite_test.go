@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"ai-flight-dashboard/internal/db"
-	"ai-flight-dashboard/internal/watcher"
+	"ai-flight-dashboard/internal/model"
 )
 
 func TestDBInsert(t *testing.T) {
@@ -19,7 +19,7 @@ func TestDBInsert(t *testing.T) {
 	}
 	defer database.Close()
 
-	u := watcher.TokenUsage{
+	u := model.TokenUsage{
 		Source:       "Test",
 		Model:        "test-model",
 		InputTokens:  100,
@@ -81,7 +81,7 @@ func TestInsertUsageWithTime(t *testing.T) {
 	defer database.Close()
 
 	ts := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
-	u := watcher.TokenUsage{
+	u := model.TokenUsage{
 		Source:       "Claude Code",
 		Model:        "claude-opus-4-7",
 		InputTokens:  1000,
@@ -114,15 +114,15 @@ func TestQueryCostSince(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Insert old record (2 days ago)
-	old := watcher.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50}
+	old := model.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50}
 	database.InsertUsageWithTime(old, 1.00, now.Add(-48*time.Hour), "/a.jsonl", "dev1")
 
 	// Insert recent record (30 min ago)
-	recent := watcher.TokenUsage{Source: "Claude Code", Model: "m2", InputTokens: 200, OutputTokens: 100}
+	recent := model.TokenUsage{Source: "Claude Code", Model: "m2", InputTokens: 200, OutputTokens: 100}
 	database.InsertUsageWithTime(recent, 2.00, now.Add(-30*time.Minute), "/b.jsonl", "dev1")
 
 	// Insert very recent (5 min ago) on different device
-	veryRecent := watcher.TokenUsage{Source: "Gemini CLI", Model: "m3", InputTokens: 300, OutputTokens: 150}
+	veryRecent := model.TokenUsage{Source: "Gemini CLI", Model: "m3", InputTokens: 300, OutputTokens: 150}
 	database.InsertUsageWithTime(veryRecent, 3.00, now.Add(-5*time.Minute), "/c.jsonl", "dev2")
 
 	// Last 1 hour, all devices = 5.00
@@ -160,15 +160,15 @@ func TestQueryStatsSince(t *testing.T) {
 	now := time.Now().UTC()
 
 	database.InsertUsageWithTime(
-		watcher.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, CachedTokens: 500, OutputTokens: 200},
+		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, CachedTokens: 500, OutputTokens: 200},
 		1.50, now.Add(-10*time.Minute), "/a.jsonl", "local",
 	)
 	database.InsertUsageWithTime(
-		watcher.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 2000, CachedTokens: 1000, OutputTokens: 400},
+		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 2000, CachedTokens: 1000, OutputTokens: 400},
 		3.00, now.Add(-5*time.Minute), "/b.jsonl", "local",
 	)
 	database.InsertUsageWithTime(
-		watcher.TokenUsage{Source: "Gemini CLI", Model: "gemini-2.5-pro", InputTokens: 500, CachedTokens: 0, OutputTokens: 100},
+		model.TokenUsage{Source: "Gemini CLI", Model: "gemini-2.5-pro", InputTokens: 500, CachedTokens: 0, OutputTokens: 100},
 		0.80, now.Add(-1*time.Minute), "/c.jsonl", "local",
 	)
 
@@ -202,11 +202,11 @@ func TestQueryDevices(t *testing.T) {
 
 	now := time.Now().UTC()
 	database.InsertUsageWithTime(
-		watcher.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50},
+		model.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50},
 		1.00, now, "/a.jsonl", "mac-pro",
 	)
 	database.InsertUsageWithTime(
-		watcher.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50},
+		model.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50},
 		1.00, now, "/b.jsonl", "linux-server",
 	)
 
@@ -218,3 +218,135 @@ func TestQueryDevices(t *testing.T) {
 		t.Fatalf("expected 2 devices, got %d", len(devices))
 	}
 }
+
+func TestInsertDedup(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	now := time.Now().UTC()
+	u := model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, CachedTokens: 500, OutputTokens: 200}
+
+	// Insert same record twice — second should be silently ignored
+	err = database.InsertUsageWithTime(u, 1.50, now, "/a.jsonl", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = database.InsertUsageWithTime(u, 1.50, now, "/a.jsonl", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should only have 1 record, not 2
+	cost, _, _, _, _ := database.QueryPeriodStatsAll("")
+	if cost < 1.49 || cost > 1.51 {
+		t.Errorf("expected ~1.50 (1 record), got %f (dedup failed)", cost)
+	}
+}
+
+func TestInsertDedup_DifferentDevices(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	now := time.Now().UTC()
+	u := model.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50}
+
+	// Same usage but different devices — should both be kept
+	database.InsertUsageWithTime(u, 1.00, now, "/a.jsonl", "mac")
+	database.InsertUsageWithTime(u, 1.00, now, "/a.jsonl", "linux")
+
+	cost, _, _, _, _ := database.QueryPeriodStatsAll("")
+	if cost < 1.99 || cost > 2.01 {
+		t.Errorf("expected ~2.00 (2 different devices), got %f", cost)
+	}
+}
+
+func TestQueryCacheSavings(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	now := time.Now().UTC()
+
+	// Record 1: 1000 input (800 cached), 200 output
+	database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, CachedTokens: 800, OutputTokens: 200},
+		1.50, now.Add(-10*time.Minute), "/a.jsonl", "local",
+	)
+	// Record 2: 500 input (0 cached), 100 output
+	database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Gemini CLI", Model: "gemini-2.5-pro", InputTokens: 500, CachedTokens: 0, OutputTokens: 100},
+		0.80, now.Add(-5*time.Minute), "/b.jsonl", "local",
+	)
+
+	records, err := database.QueryUsageRecords(now.Add(-1*time.Hour), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("expected 2 records, got %d", len(records))
+	}
+
+	// Verify fields
+	totalCached := 0
+	totalInput := 0
+	for _, r := range records {
+		totalCached += r.CachedTokens
+		totalInput += r.InputTokens
+	}
+	if totalCached != 800 {
+		t.Errorf("expected total cached 800, got %d", totalCached)
+	}
+	if totalInput != 1500 {
+		t.Errorf("expected total input 1500, got %d", totalInput)
+	}
+}
+
+func TestDeduplicateExisting(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	now := time.Now().UTC()
+	u := model.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, CachedTokens: 0, OutputTokens: 50}
+
+	// Simulate legacy data: drop the unique index, force-insert 3 identical rows, then re-add it.
+	database.RawExec("DROP INDEX IF EXISTS idx_usage_dedup")
+	for i := 0; i < 3; i++ {
+		database.RawExec(
+			"INSERT INTO usage_records (log_timestamp, source, model, input_tokens, cached_tokens, output_tokens, cost_usd, file_path, device_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			now.Format(time.RFC3339), u.Source, u.Model, u.InputTokens, u.CachedTokens, u.OutputTokens, 1.00, "/a.jsonl", "local",
+		)
+	}
+
+	// Verify we have 3 records before dedup
+	cost, _, _, _, _ := database.QueryPeriodStatsAll("")
+	if cost < 2.99 {
+		t.Fatalf("setup: expected ~3.00 before dedup, got %f", cost)
+	}
+
+	// Run dedup
+	removed, err := database.DeduplicateExisting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 2 {
+		t.Errorf("expected 2 duplicates removed, got %d", removed)
+	}
+
+	// After dedup, should be exactly 1 record
+	cost, _, _, _, _ = database.QueryPeriodStatsAll("")
+	if cost < 0.99 || cost > 1.01 {
+		t.Errorf("expected ~1.00 after dedup, got %f", cost)
+	}
+}
+

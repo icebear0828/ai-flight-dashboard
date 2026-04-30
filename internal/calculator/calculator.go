@@ -20,16 +20,22 @@ type Calculator struct {
 	prices PricingTable
 }
 
-func New(pricingFilePath string) (*Calculator, error) {
-	data, err := os.ReadFile(pricingFilePath)
-	if err != nil {
-		return nil, fmt.Errorf("read pricing file: %w", err)
-	}
+// NewFromBytes creates a Calculator from raw JSON pricing data.
+func NewFromBytes(data []byte) (*Calculator, error) {
 	var pt PricingTable
 	if err := json.Unmarshal(data, &pt); err != nil {
 		return nil, fmt.Errorf("unmarshal pricing table: %w", err)
 	}
 	return &Calculator{prices: pt}, nil
+}
+
+// New creates a Calculator by reading a pricing JSON file from disk.
+func New(pricingFilePath string) (*Calculator, error) {
+	data, err := os.ReadFile(pricingFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("read pricing file: %w", err)
+	}
+	return NewFromBytes(data)
 }
 
 // CalculateCost takes the specific token metrics and returns the estimated USD cost.
@@ -55,4 +61,17 @@ func (c *Calculator) CalculateCost(model string, inputTokens, cachedTokens, outp
 func (c *Calculator) GetModelPrice(model string) (ModelPrice, bool) {
 	price, ok := c.prices.Models[model]
 	return price, ok
+}
+
+// CalculateCostNoCaching computes a hypothetical cost where cached tokens are
+// charged at the full input price instead of the discounted cached price.
+func (c *Calculator) CalculateCostNoCaching(model string, inputTokens, cachedTokens, outputTokens int) (float64, error) {
+	price, ok := c.prices.Models[model]
+	if !ok {
+		return 0, nil
+	}
+	// Treat ALL input tokens (including cached) at full input price
+	inputCost := (float64(inputTokens) / 1_000_000.0) * price.InputPricePerM
+	outputCost := (float64(outputTokens) / 1_000_000.0) * price.OutputPricePerM
+	return inputCost + outputCost, nil
 }

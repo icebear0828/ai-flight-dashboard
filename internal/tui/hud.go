@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"ai-flight-dashboard/internal/alert"
 	"ai-flight-dashboard/internal/calculator"
 	"ai-flight-dashboard/internal/db"
 	"ai-flight-dashboard/internal/watcher"
@@ -22,20 +23,26 @@ type periodCost struct {
 }
 
 type Model struct {
-	calc      *calculator.Calculator
-	watch     *watcher.Watcher
-	database  *db.DB
-	usages    []watcher.TokenUsage
-	totalCost float64
-	periods   []periodCost
-	quitting  bool
+	calc       *calculator.Calculator
+	watch      *watcher.Watcher
+	database   *db.DB
+	budget     *alert.BudgetAlert
+	usages     []watcher.TokenUsage
+	totalCost  float64
+	periods    []periodCost
+	budgetStatus *alert.BudgetStatus
+	quitting   bool
+	eventCount int // total events seen (usages slice is capped)
 }
 
-func NewModel(c *calculator.Calculator, w *watcher.Watcher, d *db.DB) Model {
+const maxLiveEvents = 50 // keep last N events in memory for display
+
+func NewModel(c *calculator.Calculator, w *watcher.Watcher, d *db.DB, ba *alert.BudgetAlert) Model {
 	return Model{
 		calc:     c,
 		watch:    w,
 		database: d,
+		budget:   ba,
 	}
 }
 
@@ -60,6 +67,7 @@ func (m Model) refreshPeriods() tea.Cmd {
 			return periodsMsg(nil)
 		}
 		now := time.Now().UTC()
+		// Only query the most useful windows to minimize SQL overhead
 		windows := []struct {
 			label string
 			dur   time.Duration
@@ -67,10 +75,6 @@ func (m Model) refreshPeriods() tea.Cmd {
 			{"1h", 1 * time.Hour},
 			{"24h", 24 * time.Hour},
 			{"7d", 7 * 24 * time.Hour},
-			{"30d", 30 * 24 * time.Hour},
-			{"3mo", 90 * 24 * time.Hour},
-			{"6mo", 180 * 24 * time.Hour},
-			{"1y", 365 * 24 * time.Hour},
 		}
 
 		var periods []periodCost
@@ -86,7 +90,7 @@ func (m Model) refreshPeriods() tea.Cmd {
 }
 
 func (m Model) tickRefresh() tea.Cmd {
-	return tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
+	return tea.Tick(1*time.Second, func(t time.Time) tea.Msg {
 		return tickMsg{}
 	})
 }
@@ -101,16 +105,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case usageMsg:
 		u := watcher.TokenUsage(msg)
 		m.usages = append(m.usages, u)
+		// Cap memory: keep only last N events
+		if len(m.usages) > maxLiveEvents {
+			m.usages = m.usages[len(m.usages)-maxLiveEvents:]
+		}
+		m.eventCount++
 		cost, _ := m.calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.OutputTokens)
 		m.totalCost += cost
 
+		// Async DB write — don't block the render path
 		if m.database != nil {
-			m.database.InsertUsage(u, cost, m.watch.DeviceID)
+			go m.database.InsertUsage(u, cost, m.watch.DeviceID)
 		}
 
 		return m, tea.Batch(m.waitForUsage(), m.refreshPeriods())
 	case periodsMsg:
 		m.periods = []periodCost(msg)
+		// Refresh budget status alongside periods
+		if m.budget != nil {
+			s := m.budget.Check()
+			m.budgetStatus = &s
+		}
 		return m, m.tickRefresh()
 	case tickMsg:
 		return m, m.refreshPeriods()
@@ -144,7 +159,7 @@ func (m Model) View() string {
 	}
 
 	// Live event counter
-	b.WriteString(fmt.Sprintf(" Live Events: %d", len(m.usages)))
+	b.WriteString(fmt.Sprintf(" Live Events: %d", m.eventCount))
 	if len(m.usages) > 0 {
 		last := m.usages[len(m.usages)-1]
 		b.WriteString(dimStyle.Render(fmt.Sprintf(" │ %s %s │ In:%d Ca:%d Out:%d",
@@ -152,6 +167,33 @@ func (m Model) View() string {
 	}
 	b.WriteString("\n")
 
-	b.WriteString(dimStyle.Render("\n [q] quit │ refreshes every 5s") + "\n")
+	// Budget alert bar
+	if m.budgetStatus != nil {
+		var budgetColor string
+		var icon string
+		switch m.budgetStatus.Level {
+		case alert.LevelGreen:
+			budgetColor = "42"
+			icon = "🟢"
+		case alert.LevelYellow:
+			budgetColor = "220"
+			icon = "🟡"
+		case alert.LevelRed:
+			budgetColor = "196"
+			icon = "🔴"
+		}
+		budgetStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(budgetColor))
+		if m.budgetStatus.Exceeded {
+			b.WriteString(budgetStyle.Render(fmt.Sprintf(" ❌ BUDGET EXCEEDED! Spent: $%.2f", m.budgetStatus.Spent)) + "\n")
+		} else {
+			b.WriteString(fmt.Sprintf(" %s Budget: %s  Remaining: %s\n",
+				icon,
+				budgetStyle.Render(fmt.Sprintf("$%.2f (%.0f%%)", m.budgetStatus.Spent, m.budgetStatus.Percent)),
+				costStyle.Render(fmt.Sprintf("$%.2f", m.budgetStatus.Remaining)),
+			))
+		}
+	}
+
+	b.WriteString(dimStyle.Render("\n [q] quit │ refreshes every 1s") + "\n")
 	return b.String()
 }

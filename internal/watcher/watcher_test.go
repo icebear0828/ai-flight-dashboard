@@ -37,7 +37,8 @@ func TestWatcher(t *testing.T) {
 		if usage.Source != "Claude Code" {
 			t.Errorf("Expected source Claude Code, got %s", usage.Source)
 		}
-		if usage.InputTokens != 100 || usage.OutputTokens != 50 || usage.CachedTokens != 20 {
+		// Claude: input_tokens=100 + cache_read=20 => InputTokens=120, CachedTokens=20
+		if usage.InputTokens != 120 || usage.OutputTokens != 50 || usage.CachedTokens != 20 {
 			t.Errorf("Tokens parsed incorrectly: %+v", usage)
 		}
 	case <-time.After(2 * time.Second):
@@ -94,8 +95,9 @@ func TestRealClaudeCodeFormat(t *testing.T) {
 		if usage.Model != "claude-sonnet-4-6" {
 			t.Errorf("Expected model claude-sonnet-4-6, got %s", usage.Model)
 		}
-		if usage.InputTokens != 5000 {
-			t.Errorf("Expected input 5000, got %d", usage.InputTokens)
+		// Claude: input_tokens=5000 + cache_read=10000 => InputTokens=15000
+		if usage.InputTokens != 15000 {
+			t.Errorf("Expected input 15000 (5000+10000), got %d", usage.InputTokens)
 		}
 		if usage.CachedTokens != 10000 {
 			t.Errorf("Expected cached 10000, got %d", usage.CachedTokens)
@@ -128,6 +130,7 @@ func TestWatchDirRecursive(t *testing.T) {
 
 	// Write jsonl into a deeply nested subdir (simulates real Claude log location)
 	logFile := filepath.Join(projectDir, "abc-uuid.jsonl")
+	// Claude: input=500 + cache_read=100 => InputTokens=600
 	claudeLog := `{"type":"assistant", "model": "claude-3-7-sonnet-20250219", "usage": {"input_tokens": 500, "output_tokens": 200, "cache_read_input_tokens": 100}}` + "\n"
 	err = os.WriteFile(logFile, []byte(claudeLog), 0644)
 	if err != nil {
@@ -136,8 +139,8 @@ func TestWatchDirRecursive(t *testing.T) {
 
 	select {
 	case usage := <-w.UsageChan:
-		if usage.InputTokens != 500 || usage.OutputTokens != 200 || usage.CachedTokens != 100 {
-			t.Errorf("Nested dir tokens wrong: %+v", usage)
+		if usage.InputTokens != 600 || usage.OutputTokens != 200 || usage.CachedTokens != 100 {
+			t.Errorf("Nested dir tokens wrong: %+v (expected InputTokens=600)", usage)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Timeout: recursive watcher did not pick up nested .jsonl")
@@ -145,6 +148,7 @@ func TestWatchDirRecursive(t *testing.T) {
 
 	// Also write into subagents/ dir
 	subLog := filepath.Join(subagentDir, "agent-xxx.jsonl")
+	// Claude: input=300 + cache_read=0 => InputTokens=300
 	subEntry := `{"type":"assistant", "model": "claude-3-7-sonnet-20250219", "usage": {"input_tokens": 300, "output_tokens": 100, "cache_read_input_tokens": 0}}` + "\n"
 	err = os.WriteFile(subLog, []byte(subEntry), 0644)
 	if err != nil {
@@ -181,6 +185,7 @@ func TestWatchDirRecursive_NewSubdir(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	logFile := filepath.Join(newSessionDir, "session.jsonl")
+	// Claude: input=999 + cache_read=0 => InputTokens=999
 	entry := `{"type":"assistant", "model": "claude-3-7-sonnet-20250219", "usage": {"input_tokens": 999, "output_tokens": 111, "cache_read_input_tokens": 0}}` + "\n"
 	err = os.WriteFile(logFile, []byte(entry), 0644)
 	if err != nil {
