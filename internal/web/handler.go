@@ -134,8 +134,8 @@ func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *
 
 	var periods []PeriodCost
 	for _, win := range windows {
-		cost, inTok, caTok, caWTock, outTok, _ := database.QueryPeriodStatsSince(now.Add(-win.dur), deviceID)
-		periods = append(periods, PeriodCost{Label: win.label, Cost: cost, InputTokens: inTok, CachedTokens: caTok, CacheCreationTokens: caWTock, OutputTokens: outTok})
+		cost, inTok, caTok, caWTok, outTok, _ := database.QueryPeriodStatsSince(now.Add(-win.dur), deviceID)
+		periods = append(periods, PeriodCost{Label: win.label, Cost: cost, InputTokens: inTok, CachedTokens: caTok, CacheCreationTokens: caWTok, OutputTokens: outTok})
 	}
 	total, tIn, tCa, tCaW, tOut, _ := database.QueryPeriodStatsAll(deviceID)
 	periods = append(periods, PeriodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, CacheCreationTokens: tCaW, OutputTokens: tOut})

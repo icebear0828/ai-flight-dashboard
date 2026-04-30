@@ -65,7 +65,10 @@ func (s *Scanner) ScanKnownFiles(usageChan chan<- watcher.TokenUsage) (int, erro
 		}
 		
 		// Optimization: Check offset here to avoid opening file if no new data
-		offset, _ := s.db.GetOffset(path)
+		offset, err := s.db.GetOffset(path)
+		if err != nil {
+			continue
+		}
 		if info.Size() == offset {
 			continue
 		}

@@ -30,6 +30,9 @@ import (
 var embeddedPricing []byte
 
 func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Parse CLI flags
 	webMode := flag.Bool("web", false, "Run in web dashboard mode")
 	port := flag.String("port", "9100", "HTTP port for web mode")
@@ -176,6 +179,8 @@ func main() {
 			defer slowTicker.Stop()
 			for {
 				select {
+				case <-ctx.Done():
+					return
 				case <-fastTicker.C:
 					s.ScanKnownFiles(w.UsageChan)
 				case <-slowTicker.C:
@@ -188,14 +193,22 @@ func main() {
 
 	if *webMode {
 		// Background goroutine: drain watcher events and persist to DB
-		if *syncMode == "fsnotify" {
-			go func() {
-				for u := range w.UsageChan {
-					cost, _ := calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens)
-					database.InsertUsage(u, cost, *deviceID)
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case u, ok := <-w.UsageChan:
+					if !ok {
+						return
+					}
+					if *syncMode == "fsnotify" {
+						cost, _ := calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens)
+						database.InsertUsage(u, cost, *deviceID)
+					}
 				}
-			}()
-		}
+			}
+		}()
 
 		// Web dashboard mode with graceful shutdown
 		handler := web.NewHandler(database, calc, *token)
