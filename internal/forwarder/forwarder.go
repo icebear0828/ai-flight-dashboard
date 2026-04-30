@@ -1,0 +1,83 @@
+package forwarder
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"time"
+
+	"ai-flight-dashboard/internal/model"
+)
+
+// Forwarder listens to a usage channel and forwards events to a remote HTTP endpoint.
+type Forwarder struct {
+	targetURL string
+	token     string
+	deviceID  string
+	client    *http.Client
+}
+
+func New(targetURL, token, deviceID string) *Forwarder {
+	return &Forwarder{
+		targetURL: targetURL,
+		token:     token,
+		deviceID:  deviceID,
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+	}
+}
+
+// Start consumes usage events from the channel and sends them sequentially.
+func (f *Forwarder) Start(usageChan <-chan model.TokenUsage) {
+	for usage := range usageChan {
+		err := f.send(usage)
+		if err != nil {
+			log.Printf("Forwarder failed to send usage: %v", err)
+		} else {
+			log.Printf("Forwarded %d tokens for %s", usage.InputTokens+usage.OutputTokens, usage.Model)
+		}
+	}
+}
+
+func (f *Forwarder) send(usage model.TokenUsage) error {
+	payload := model.TrackPayload{
+		DeviceID: f.deviceID,
+		Usage:    usage,
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	// Simple retry loop
+	var lastErr error
+	for i := 0; i < 3; i++ {
+		req, err := http.NewRequest("POST", f.targetURL, bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if f.token != "" {
+			req.Header.Set("Authorization", "Bearer "+f.token)
+		}
+
+		resp, err := f.client.Do(req)
+		if err != nil {
+			lastErr = err
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return nil
+		}
+		lastErr = fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		time.Sleep(1 * time.Second)
+	}
+	return lastErr
+}
