@@ -37,6 +37,7 @@ func (t *Tracker) Record(tokens int, cost float64, ts time.Time) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.entries = append(t.entries, entry{tokens: tokens, cost: cost, ts: ts})
+	t.evict()
 }
 
 // evict removes entries older than the window. Must be called with lock held.

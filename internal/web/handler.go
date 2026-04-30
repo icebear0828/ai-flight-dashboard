@@ -90,8 +90,15 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, token string) http
 			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
-		cost, _ := calc.CalculateCost(payload.Usage.Model, payload.Usage.InputTokens, payload.Usage.CachedTokens, payload.Usage.OutputTokens)
-		database.InsertUsage(payload.Usage, cost, payload.DeviceID)
+		cost, err := calc.CalculateCost(payload.Usage.Model, payload.Usage.InputTokens, payload.Usage.CachedTokens, payload.Usage.OutputTokens)
+		if err != nil {
+			// Ignore cost calculation errors (e.g. unknown model) but proceed with inserting usage with 0 cost
+			cost = 0
+		}
+		if err := database.InsertUsage(payload.Usage, cost, payload.DeviceID); err != nil {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
 		w.WriteHeader(http.StatusCreated)
 	}))
 
