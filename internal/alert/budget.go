@@ -1,6 +1,7 @@
 package alert
 
 import (
+	"log"
 	"time"
 
 	"ai-flight-dashboard/internal/db"
@@ -44,7 +45,10 @@ func (b *BudgetAlert) Check() BudgetStatus {
 
 	now := time.Now().UTC()
 	since := now.Add(-24 * time.Hour)
-	spent, _, _, _, _ := b.db.QueryPeriodStatsSince(since, "")
+	spent, _, _, _, err := b.db.QueryPeriodStatsSince(since, "")
+	if err != nil {
+		log.Printf("Budget check failed to query DB: %v", err)
+	}
 
 	remaining := b.dailyLimit - spent
 	if remaining < 0 {

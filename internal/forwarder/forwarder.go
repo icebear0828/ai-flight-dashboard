@@ -71,12 +71,13 @@ func (f *Forwarder) send(usage model.TokenUsage) error {
 			time.Sleep(1 * time.Second)
 			continue
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			resp.Body.Close()
 			return nil
 		}
 		lastErr = fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		resp.Body.Close()
 		time.Sleep(1 * time.Second)
 	}
 	return lastErr

@@ -43,7 +43,7 @@ fi
 if [ "$MODE" == "1" ]; then
     read -p "请输入 Web 服务监听端口 [默认 9100]: " PORT
     PORT=${PORT:-9100}
-    EXEC_START="/usr/local/bin/ai-flight-dashboard --web --port ${PORT} --token \"${TOKEN}\""
+    EXEC_START="/usr/local/bin/ai-flight-dashboard --web --port ${PORT}"
     echo -e "${GREEN}配置为: 主控服务端 (端口: ${PORT})${NC}"
 else
     HOSTNAME=$(hostname)
@@ -54,12 +54,17 @@ else
         echo -e "${RED}上报地址不能为空。${NC}"
         exit 1
     fi
-    EXEC_START="/usr/local/bin/ai-flight-dashboard --device-id \"${DEVICE_ID}\" --forward-to \"${FORWARD_URL}\" --token \"${TOKEN}\""
+    EXEC_START="/usr/local/bin/ai-flight-dashboard --device-id \"${DEVICE_ID}\" --forward-to \"${FORWARD_URL}\""
     echo -e "${GREEN}配置为: 探针端 (设备名: ${DEVICE_ID}, 上报至: ${FORWARD_URL})${NC}"
 fi
 
-# 准备 Systemd 服务
+# 准备 Systemd 服务和环境文件
 echo -e "${YELLOW}3. 配置 Systemd 服务...${NC}"
+
+# 安全地写入 Token 到环境文件
+echo "DASHBOARD_TOKEN=\"${TOKEN}\"" > /etc/ai-flight-dashboard.env
+chmod 600 /etc/ai-flight-dashboard.env
+
 cat <<EOF > /etc/systemd/system/ai-flight-dashboard.service
 [Unit]
 Description=AI Flight Dashboard
@@ -69,6 +74,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/var/lib/ai-flight-dashboard
+EnvironmentFile=/etc/ai-flight-dashboard.env
 ExecStart=${EXEC_START}
 Restart=on-failure
 RestartSec=5
