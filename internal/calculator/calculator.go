@@ -7,9 +7,10 @@ import (
 )
 
 type ModelPrice struct {
-	InputPricePerM  float64 `json:"input_price_per_m"`
-	CachedPricePerM float64 `json:"cached_price_per_m"`
-	OutputPricePerM float64 `json:"output_price_per_m"`
+	InputPricePerM          float64 `json:"input_price_per_m"`
+	CachedPricePerM         float64 `json:"cached_price_per_m"`
+	CacheCreationPricePerM  float64 `json:"cache_creation_price_per_m"`
+	OutputPricePerM         float64 `json:"output_price_per_m"`
 }
 
 type PricingTable struct {
@@ -39,22 +40,23 @@ func New(pricingFilePath string) (*Calculator, error) {
 }
 
 // CalculateCost takes the specific token metrics and returns the estimated USD cost.
-func (c *Calculator) CalculateCost(model string, inputTokens, cachedTokens, outputTokens int) (float64, error) {
+func (c *Calculator) CalculateCost(model string, inputTokens, cachedTokens, cacheCreationTokens, outputTokens int) (float64, error) {
 	price, ok := c.prices.Models[model]
 	if !ok {
 		return 0, nil // unknown model, skip silently
 	}
 	
-	baseInput := inputTokens - cachedTokens
+	baseInput := inputTokens - cachedTokens - cacheCreationTokens
 	if baseInput < 0 {
 		baseInput = 0
 	}
 	
 	inputCost := (float64(baseInput) / 1_000_000.0) * price.InputPricePerM
 	cachedCost := (float64(cachedTokens) / 1_000_000.0) * price.CachedPricePerM
+	cacheCreationCost := (float64(cacheCreationTokens) / 1_000_000.0) * price.CacheCreationPricePerM
 	outputCost := (float64(outputTokens) / 1_000_000.0) * price.OutputPricePerM
 	
-	return inputCost + cachedCost + outputCost, nil
+	return inputCost + cachedCost + cacheCreationCost + outputCost, nil
 }
 
 // GetModelPrice returns the price table for a specific model.
@@ -65,12 +67,12 @@ func (c *Calculator) GetModelPrice(model string) (ModelPrice, bool) {
 
 // CalculateCostNoCaching computes a hypothetical cost where cached tokens are
 // charged at the full input price instead of the discounted cached price.
-func (c *Calculator) CalculateCostNoCaching(model string, inputTokens, cachedTokens, outputTokens int) (float64, error) {
+func (c *Calculator) CalculateCostNoCaching(model string, inputTokens, cachedTokens, cacheCreationTokens, outputTokens int) (float64, error) {
 	price, ok := c.prices.Models[model]
 	if !ok {
 		return 0, nil
 	}
-	// Treat ALL input tokens (including cached) at full input price
+	// Treat ALL input tokens (including cached and cache_creation) at full input price
 	inputCost := (float64(inputTokens) / 1_000_000.0) * price.InputPricePerM
 	outputCost := (float64(outputTokens) / 1_000_000.0) * price.OutputPricePerM
 	return inputCost + outputCost, nil
