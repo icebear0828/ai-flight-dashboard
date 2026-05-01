@@ -16,6 +16,7 @@ import (
 
 	"ai-flight-dashboard/internal/alert"
 	"ai-flight-dashboard/internal/calculator"
+	"ai-flight-dashboard/internal/config"
 	"ai-flight-dashboard/internal/db"
 	"ai-flight-dashboard/internal/desktop"
 	"ai-flight-dashboard/internal/forwarder"
@@ -157,6 +158,13 @@ func main() {
 		scanDirs = append(scanDirs, geminiTmp)
 	}
 
+	appConfig, _ := config.LoadConfig()
+	for _, dir := range appConfig.ExtraWatchDirs {
+		if _, err := os.Stat(dir); err == nil {
+			scanDirs = append(scanDirs, dir)
+		}
+	}
+
 	// Initialize Watcher immediately (instant, ~26µs)
 	w, err := watcher.New(*deviceID)
 	if err != nil {
@@ -260,7 +268,7 @@ func main() {
 		}
 
 		// Reuse the existing HTTP handler to serve /api/* routes inside Wails
-		apiHandler := web.NewHandler(database, calc, *token, root.DistBinFS)
+		apiHandler := web.NewHandler(database, calc, w, *token, root.DistBinFS)
 
 		err = wailsrun.Run(&options.App{
 			Title:     "AI Flight Dashboard",
@@ -297,7 +305,7 @@ func main() {
 		startDBDrain()
 
 		// Web dashboard mode with graceful shutdown
-		handler := web.NewHandler(database, calc, *token, root.DistBinFS)
+		handler := web.NewHandler(database, calc, w, *token, root.DistBinFS)
 		srv := &http.Server{Addr: "0.0.0.0:" + *port, Handler: handler}
 
 		go func() {

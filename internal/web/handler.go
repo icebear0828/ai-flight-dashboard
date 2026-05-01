@@ -12,11 +12,13 @@ import (
 	"time"
 
 	"ai-flight-dashboard/internal/calculator"
+	"ai-flight-dashboard/internal/config"
 	"ai-flight-dashboard/internal/db"
 	"ai-flight-dashboard/internal/model"
+	"ai-flight-dashboard/internal/watcher"
 )
 
-func NewHandler(database *db.DB, calc *calculator.Calculator, token string, distBinFS embed.FS) http.Handler {
+func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Watcher, token string, distBinFS embed.FS) http.Handler {
 	mux := http.NewServeMux()
 
 	authMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
@@ -46,6 +48,18 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, token string, dist
 		} else if r.Method == http.MethodPut || r.Method == http.MethodPost {
 			authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				handlePutPricing(w, r, calc)
+			})(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			handleGetConfig(w, r)
+		} else if r.Method == http.MethodPut {
+			authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+				handlePutConfig(w, r, wInst)
 			})(w, r)
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -365,6 +379,40 @@ func handlePutPricing(w http.ResponseWriter, r *http.Request, calc *calculator.C
 
 	// Update memory only if persistence succeeds
 	calc.UpdatePrices(customPrices)
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		http.Error(w, "Failed to load config", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(cfg)
+}
+
+func handlePutConfig(w http.ResponseWriter, r *http.Request, wInst *watcher.Watcher) {
+	var cfg config.AppConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+	
+	if err := config.SaveConfig(&cfg); err != nil {
+		http.Error(w, "Failed to save config", http.StatusInternalServerError)
+		return
+	}
+
+	// Dynamically update watcher
+	if wInst != nil {
+		for _, dir := range cfg.ExtraWatchDirs {
+			if _, err := os.Stat(dir); err == nil {
+				wInst.WatchDirRecursive(dir)
+			}
+		}
+	}
 
 	w.WriteHeader(http.StatusOK)
 }
