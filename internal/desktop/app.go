@@ -241,25 +241,29 @@ func (a *App) SaveConfig(cfg *config.AppConfig) error {
 
 // CheckForUpdates checks for a new release
 func (a *App) CheckForUpdates(currentVersion string) (*updater.Release, error) {
-	return updater.CheckForUpdates(currentVersion)
+	token := os.Getenv("DASHBOARD_TOKEN")
+	if token == "" {
+		token = os.Getenv("GITHUB_TOKEN")
+	}
+	return updater.CheckForUpdates(currentVersion, token)
 }
 
 // ApplyUpdate attempts to apply the OTA update
 func (a *App) ApplyUpdate() error {
+	// 2. Get token from env
+	token := os.Getenv("DASHBOARD_TOKEN")
+	if token == "" {
+		token = os.Getenv("GITHUB_TOKEN")
+	}
+
 	// 1. Fetch latest release
 	// Hardcoding "0.0.0" as current version since we just want the latest release info
-	release, err := updater.CheckForUpdates("0.0.0")
+	release, err := updater.CheckForUpdates("0.0.0", token)
 	if err != nil {
 		return fmt.Errorf("failed to get release info: %v", err)
 	}
 	if release == nil {
 		return fmt.Errorf("no release found")
-	}
-
-	// 2. Get token from env
-	token := os.Getenv("DASHBOARD_TOKEN")
-	if token == "" {
-		token = os.Getenv("GITHUB_TOKEN")
 	}
 
 	// 3. Apply update
