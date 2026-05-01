@@ -68,7 +68,7 @@ func TestAPIStats(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	var data web.StatsResponse
+	var data model.StatsResponse
 	json.NewDecoder(resp.Body).Decode(&data)
 
 	// Should have time periods
@@ -82,7 +82,7 @@ func TestAPIStats(t *testing.T) {
 	}
 
 	// Find Claude source
-	var claude *web.SourceStats
+	var claude *model.SourceStats
 	for i := range data.Sources {
 		if data.Sources[i].Name == "Claude Code" {
 			claude = &data.Sources[i]
@@ -193,7 +193,7 @@ func TestAPICacheSavings(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	var data web.CacheSavingsResponse
+	var data model.CacheSavingsResponse
 	json.NewDecoder(resp.Body).Decode(&data)
 
 	// actual_cost: calculator computes real cost with cached pricing
