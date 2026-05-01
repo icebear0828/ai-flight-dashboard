@@ -10,6 +10,7 @@ import (
 
 	"ai-flight-dashboard/internal/calculator"
 	"ai-flight-dashboard/internal/db"
+	"ai-flight-dashboard/internal/model"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -20,15 +21,13 @@ type App struct {
 	ctx      context.Context
 	database *db.DB
 	calc     *calculator.Calculator
-	deviceID string
 }
 
 // NewApp creates a new App with references to the shared backend services.
-func NewApp(database *db.DB, calc *calculator.Calculator, deviceID string) *App {
+func NewApp(database *db.DB, calc *calculator.Calculator) *App {
 	return &App{
 		database: database,
 		calc:     calc,
-		deviceID: deviceID,
 	}
 }
 
@@ -38,59 +37,17 @@ func (a *App) Startup(ctx context.Context) {
 }
 
 // GetContext returns the Wails runtime context.
+// NOTE: Returns nil before Startup() is called by Wails. Menu callbacks that
+// use this are safe because Startup runs before the UI renders and menus
+// become clickable.
 func (a *App) GetContext() context.Context {
 	return a.ctx
 }
 
-// --- Stats API (mirrors internal/web/handler.go) ---
-
-type ModelStats struct {
-	Model               string  `json:"model"`
-	Events              int     `json:"events"`
-	InputTokens         int     `json:"input_tokens"`
-	CachedTokens        int     `json:"cached_tokens"`
-	CacheCreationTokens int     `json:"cache_creation_tokens"`
-	OutputTokens        int     `json:"output_tokens"`
-	TotalCost           float64 `json:"total_cost"`
-	InputPricePerM      float64 `json:"input_price_per_m"`
-	CachedPricePerM     float64 `json:"cached_price_per_m"`
-	OutputPricePerM     float64 `json:"output_price_per_m"`
-}
-
-type SourceStats struct {
-	Name               string       `json:"name"`
-	TotalInput         int          `json:"total_input"`
-	TotalCached        int          `json:"total_cached"`
-	TotalCacheCreation int          `json:"total_cache_creation"`
-	TotalOutput        int          `json:"total_output"`
-	TotalCost          float64      `json:"total_cost"`
-	TotalEvents        int          `json:"total_events"`
-	Models             []ModelStats `json:"models"`
-}
-
-type PeriodCost struct {
-	Label               string  `json:"label"`
-	Cost                float64 `json:"cost"`
-	InputTokens         int     `json:"input_tokens"`
-	CachedTokens        int     `json:"cached_tokens"`
-	CacheCreationTokens int     `json:"cache_creation_tokens"`
-	OutputTokens        int     `json:"output_tokens"`
-}
-
-type DeviceInfo struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"display_name"`
-}
-
-type StatsResponse struct {
-	Periods  []PeriodCost     `json:"periods"`
-	Sources  []SourceStats    `json:"sources"`
-	Devices  []DeviceInfo     `json:"devices"`
-	Projects []db.ProjectStat `json:"projects"`
-}
+// --- Stats API (shared types from internal/model/stats.go) ---
 
 // GetStats returns the full dashboard statistics, optionally filtered by device.
-func (a *App) GetStats(deviceID string) (*StatsResponse, error) {
+func (a *App) GetStats(deviceID string) (*model.StatsResponse, error) {
 	now := time.Now().UTC()
 
 	if deviceID == "all" {
@@ -110,25 +67,25 @@ func (a *App) GetStats(deviceID string) (*StatsResponse, error) {
 		{"1y", 365 * 24 * time.Hour},
 	}
 
-	var periods []PeriodCost
+	var periods []model.PeriodCost
 	for _, win := range windows {
 		cost, inTok, caTok, caWTok, outTok, _ := a.database.QueryPeriodStatsSince(now.Add(-win.dur), deviceID)
-		periods = append(periods, PeriodCost{Label: win.label, Cost: cost, InputTokens: inTok, CachedTokens: caTok, CacheCreationTokens: caWTok, OutputTokens: outTok})
+		periods = append(periods, model.PeriodCost{Label: win.label, Cost: cost, InputTokens: inTok, CachedTokens: caTok, CacheCreationTokens: caWTok, OutputTokens: outTok})
 	}
 	total, tIn, tCa, tCaW, tOut, _ := a.database.QueryPeriodStatsAll(deviceID)
-	periods = append(periods, PeriodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, CacheCreationTokens: tCaW, OutputTokens: tOut})
+	periods = append(periods, model.PeriodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, CacheCreationTokens: tCaW, OutputTokens: tOut})
 
 	stats, _ := a.database.QueryStatsSince(time.Time{}, deviceID)
 
-	sourceMap := make(map[string]*SourceStats)
+	sourceMap := make(map[string]*model.SourceStats)
 	for _, s := range stats {
 		src, ok := sourceMap[s.Source]
 		if !ok {
-			src = &SourceStats{Name: s.Source}
+			src = &model.SourceStats{Name: s.Source}
 			sourceMap[s.Source] = src
 		}
 		price, _ := a.calc.GetModelPrice(s.Model)
-		src.Models = append(src.Models, ModelStats{
+		src.Models = append(src.Models, model.ModelStats{
 			Model:               s.Model,
 			Events:              s.Events,
 			InputTokens:         s.InputTokens,
@@ -148,7 +105,7 @@ func (a *App) GetStats(deviceID string) (*StatsResponse, error) {
 		src.TotalEvents += s.Events
 	}
 
-	var sources []SourceStats
+	var sources []model.SourceStats
 	for _, s := range sourceMap {
 		sources = append(sources, *s)
 	}
@@ -159,18 +116,18 @@ func (a *App) GetStats(deviceID string) (*StatsResponse, error) {
 	devices, _ := a.database.QueryDevices()
 	aliases, _ := a.database.GetDeviceAliases()
 
-	var deviceInfos []DeviceInfo
+	var deviceInfos []model.DeviceInfo
 	for _, id := range devices {
 		name := id
 		if alias, ok := aliases[id]; ok && alias != "" {
 			name = alias
 		}
-		deviceInfos = append(deviceInfos, DeviceInfo{ID: id, DisplayName: name})
+		deviceInfos = append(deviceInfos, model.DeviceInfo{ID: id, DisplayName: name})
 	}
 
 	projects, _ := a.database.QueryProjectStatsSince(time.Time{}, deviceID)
 
-	return &StatsResponse{
+	return &model.StatsResponse{
 		Periods:  periods,
 		Sources:  sources,
 		Devices:  deviceInfos,
@@ -180,16 +137,8 @@ func (a *App) GetStats(deviceID string) (*StatsResponse, error) {
 
 // --- Cache Savings ---
 
-type CacheSavingsResponse struct {
-	ActualCost       float64 `json:"actual_cost"`
-	HypotheticalCost float64 `json:"hypothetical_cost"`
-	Saved            float64 `json:"saved"`
-	SavedPercent     float64 `json:"saved_percent"`
-	CacheHitRate     float64 `json:"cache_hit_rate"`
-}
-
 // GetCacheSavings returns cache savings analysis.
-func (a *App) GetCacheSavings(deviceID string) (*CacheSavingsResponse, error) {
+func (a *App) GetCacheSavings(deviceID string) (*model.CacheSavingsResponse, error) {
 	if deviceID == "all" {
 		deviceID = ""
 	}
@@ -221,7 +170,7 @@ func (a *App) GetCacheSavings(deviceID string) (*CacheSavingsResponse, error) {
 		hitRate = (float64(totalCached) / float64(totalInput)) * 100
 	}
 
-	return &CacheSavingsResponse{
+	return &model.CacheSavingsResponse{
 		ActualCost:       actualTotal,
 		HypotheticalCost: hypoTotal,
 		Saved:            saved,

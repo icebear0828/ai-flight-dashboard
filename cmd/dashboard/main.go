@@ -233,7 +233,7 @@ func main() {
 	if *guiMode {
 		startDBDrain()
 
-		app := desktop.NewApp(database, calc, *deviceID)
+		app := desktop.NewApp(database, calc)
 
 		// Build system tray / application menu
 		appMenu := menu.NewMenu()

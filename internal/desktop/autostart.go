@@ -48,7 +48,10 @@ func setAutoStartDarwin(enabled bool) error {
 	plistPath := launchAgentPath()
 
 	if !enabled {
-		return os.Remove(plistPath)
+		if err := os.Remove(plistPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
 	}
 
 	exePath, err := os.Executable()
@@ -91,7 +94,10 @@ func setAutoStartLinux(enabled bool) error {
 	desktopPath := autostartDesktopPath()
 
 	if !enabled {
-		return os.Remove(desktopPath)
+		if err := os.Remove(desktopPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
 	}
 
 	exePath, err := os.Executable()

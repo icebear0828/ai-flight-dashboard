@@ -1,72 +1,19 @@
 package web
 
 import (
+	"embed"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
 	"sort"
 	"time"
 
 	"ai-flight-dashboard/internal/calculator"
 	"ai-flight-dashboard/internal/db"
 	"ai-flight-dashboard/internal/model"
-	"os"
-	"fmt"
-	"embed"
 )
-
-type ModelStats struct {
-	Model               string  `json:"model"`
-	Events              int     `json:"events"`
-	InputTokens         int     `json:"input_tokens"`
-	CachedTokens        int     `json:"cached_tokens"`
-	CacheCreationTokens int     `json:"cache_creation_tokens"`
-	OutputTokens        int     `json:"output_tokens"`
-	TotalCost           float64 `json:"total_cost"`
-	InputPricePerM      float64 `json:"input_price_per_m"`
-	CachedPricePerM     float64 `json:"cached_price_per_m"`
-	OutputPricePerM     float64 `json:"output_price_per_m"`
-}
-
-type SourceStats struct {
-	Name               string       `json:"name"`
-	TotalInput         int          `json:"total_input"`
-	TotalCached        int          `json:"total_cached"`
-	TotalCacheCreation int          `json:"total_cache_creation"`
-	TotalOutput        int          `json:"total_output"`
-	TotalCost          float64      `json:"total_cost"`
-	TotalEvents        int          `json:"total_events"`
-	Models             []ModelStats `json:"models"`
-}
-
-type PeriodCost struct {
-	Label               string  `json:"label"`
-	Cost                float64 `json:"cost"`
-	InputTokens         int     `json:"input_tokens"`
-	CachedTokens        int     `json:"cached_tokens"`
-	CacheCreationTokens int     `json:"cache_creation_tokens"`
-	OutputTokens        int     `json:"output_tokens"`
-}
-
-type DeviceInfo struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"display_name"`
-}
-
-type StatsResponse struct {
-	Periods  []PeriodCost     `json:"periods"`
-	Sources  []SourceStats    `json:"sources"`
-	Devices  []DeviceInfo     `json:"devices"`
-	Projects []db.ProjectStat `json:"projects"`
-}
-
-type CacheSavingsResponse struct {
-	ActualCost       float64 `json:"actual_cost"`
-	HypotheticalCost float64 `json:"hypothetical_cost"`
-	Saved            float64 `json:"saved"`
-	SavedPercent     float64 `json:"saved_percent"`
-	CacheHitRate     float64 `json:"cache_hit_rate"`
-}
 
 func NewHandler(database *db.DB, calc *calculator.Calculator, token string, distBinFS embed.FS) http.Handler {
 	mux := http.NewServeMux()
@@ -206,27 +153,27 @@ func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *
 		{"1y", 365 * 24 * time.Hour},
 	}
 
-	var periods []PeriodCost
+	var periods []model.PeriodCost
 	for _, win := range windows {
 		cost, inTok, caTok, caWTok, outTok, _ := database.QueryPeriodStatsSince(now.Add(-win.dur), deviceID)
-		periods = append(periods, PeriodCost{Label: win.label, Cost: cost, InputTokens: inTok, CachedTokens: caTok, CacheCreationTokens: caWTok, OutputTokens: outTok})
+		periods = append(periods, model.PeriodCost{Label: win.label, Cost: cost, InputTokens: inTok, CachedTokens: caTok, CacheCreationTokens: caWTok, OutputTokens: outTok})
 	}
 	total, tIn, tCa, tCaW, tOut, _ := database.QueryPeriodStatsAll(deviceID)
-	periods = append(periods, PeriodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, CacheCreationTokens: tCaW, OutputTokens: tOut})
+	periods = append(periods, model.PeriodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, CacheCreationTokens: tCaW, OutputTokens: tOut})
 
 	// Get all-time stats grouped by model
 	stats, _ := database.QueryStatsSince(time.Time{}, deviceID)
 
 	// Group by source
-	sourceMap := make(map[string]*SourceStats)
+	sourceMap := make(map[string]*model.SourceStats)
 	for _, s := range stats {
 		src, ok := sourceMap[s.Source]
 		if !ok {
-			src = &SourceStats{Name: s.Source}
+			src = &model.SourceStats{Name: s.Source}
 			sourceMap[s.Source] = src
 		}
 		price, _ := calc.GetModelPrice(s.Model)
-		src.Models = append(src.Models, ModelStats{
+		src.Models = append(src.Models, model.ModelStats{
 			Model:               s.Model,
 			Events:              s.Events,
 			InputTokens:         s.InputTokens,
@@ -246,7 +193,7 @@ func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *
 		src.TotalEvents += s.Events
 	}
 
-	var sources []SourceStats
+	var sources []model.SourceStats
 	for _, s := range sourceMap {
 		sources = append(sources, *s)
 	}
@@ -258,19 +205,19 @@ func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *
 	devices, _ := database.QueryDevices()
 	aliases, _ := database.GetDeviceAliases()
 
-	var deviceInfos []DeviceInfo
+	var deviceInfos []model.DeviceInfo
 	for _, id := range devices {
 		name := id
 		if alias, ok := aliases[id]; ok && alias != "" {
 			name = alias
 		}
-		deviceInfos = append(deviceInfos, DeviceInfo{ID: id, DisplayName: name})
+		deviceInfos = append(deviceInfos, model.DeviceInfo{ID: id, DisplayName: name})
 	}
 
 	projects, _ := database.QueryProjectStatsSince(time.Time{}, deviceID)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(StatsResponse{
+	json.NewEncoder(w).Encode(model.StatsResponse{
 		Periods:  periods,
 		Sources:  sources,
 		Devices:  deviceInfos,
@@ -311,7 +258,7 @@ func handleCacheSavings(w http.ResponseWriter, r *http.Request, database *db.DB,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(CacheSavingsResponse{
+	json.NewEncoder(w).Encode(model.CacheSavingsResponse{
 		ActualCost:       actualTotal,
 		HypotheticalCost: hypoTotal,
 		Saved:            saved,
