@@ -1,0 +1,109 @@
+# Design System Document
+
+## 1. Overview & Creative North Star
+
+### The Creative North Star: "Mission Control"
+
+A data-dense operations dashboard inspired by aerospace mission control panels. Dark backgrounds maximize screen time comfort; accent colors encode status at a glance. Information hierarchy is ruthlessly clear — numbers are large, labels are small, and actions are unmistakable.
+
+---
+
+## 2. Colors & Surface Philosophy
+
+### Palette: "Deep Space"
+
+Dark mode with cool blue accents. Status colors are semantic and consistent everywhere.
+
+- **Base Level:** `surface` (#0f172a) — Slate 900
+- **Secondary Sectioning:** `surface-container-low` (#1e293b) — Slate 800
+- **Active Card/Elevated:** `surface-container-lowest` (#334155) — Slate 700
+- **Primary accent:** `primary` (#38bdf8) — Sky 400
+- **Success:** `success` (#4ade80) — Green 400
+- **Warning:** `warning` (#fbbf24) — Amber 400
+- **Danger:** `danger` (#f87171) — Red 400
+- **Text primary:** `on-surface` (#e2e8f0) — Slate 200
+- **Text secondary:** `on-surface-variant` (#94a3b8) — Slate 400
+- **Border:** `outline` (#475569) — Slate 600
+
+### Rules
+
+- Borders are permitted: 1px `outline` for table rows, cards, and inputs.
+- Status badges use semantic background with high-contrast text (e.g., green bg + dark text).
+- Interactive elements use `primary` for hover/focus states.
+
+---
+
+## 3. Typography
+
+- **Headlines:** Inter Bold, 1.25rem–1.5rem. No serif fonts.
+- **Body/Labels:** Inter Regular, 0.85rem–0.95rem. Compact line height (1.4).
+- **Numbers/Stats:** Inter Bold or Tabular Nums, 1.6rem–2rem for key metrics.
+- **Monospace:** JetBrains Mono for emails, tokens, IPs. 0.82rem.
+
+---
+
+## 4. Elevation & Depth
+
+- Cards use `surface-container-low` with 1px `outline` border and `rounded-lg` (0.75rem).
+- No shadows — flat design. Depth via background color layering only.
+- Active/selected states use `primary` left border (3px) or background tint.
+
+---
+
+## 5. Components
+
+### Stat Cards
+- Large number (2rem, bold, `primary` color) + small label below (0.8rem, `on-surface-variant`).
+- Arranged in horizontal flex rows with equal spacing.
+
+### Tables
+- Compact rows (36px height), sticky header.
+- Alternating row background (surface / surface-container-low).
+- Monospace font for emails, IPs, tokens.
+
+### Buttons
+- **Primary:** `primary` background, dark text, rounded-md (6px), padding 6px 16px.
+- **Danger:** `danger` background, white text.
+- **Secondary/Ghost:** transparent background, `primary` text, 1px `outline` border.
+- All buttons: 0.85rem font, no uppercase.
+
+### Badges/Tags
+- Pill shape (rounded-full), small (0.75rem), semantic colors.
+- `completed` = green, `failed` = red, `pending/running` = blue, `warning` = amber.
+
+### Inputs
+- `surface-container-low` background, 1px `outline` border.
+- On focus: `primary` border. Height: 36px. Font: 0.9rem.
+
+### Toggles/Switches
+- Use native checkbox with custom styling or a simple toggle component.
+- ON = `primary`, OFF = `outline`.
+
+### Tabs
+- Horizontal tab bar, active tab has `primary` bottom border (2px).
+- Inactive tabs: `on-surface-variant` text.
+
+---
+
+## 6. Do's and Don'ts
+
+### Do
+- Keep information density high — this is an ops dashboard, not a marketing page.
+- Use consistent 12px/16px spacing. Compact but not cramped.
+- Show numbers prominently — they are the primary content.
+- Use monospace for machine-generated strings (emails, tokens, IPs).
+
+### Don't
+- No decorative elements, illustrations, or gradients.
+- No serif fonts.
+- No rounded-full on cards (only on badges/pills).
+- No light mode — this is dark-only.
+
+---
+
+## 7. Spacing & Rhythm
+
+- Internal component padding: 12px–16px.
+- Section gaps: 20px–24px.
+- Table cell padding: 6px 10px.
+- Stat card grid: auto-fill, minmax(140px, 1fr), gap 12px.
