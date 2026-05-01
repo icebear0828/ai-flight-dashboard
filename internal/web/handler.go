@@ -14,6 +14,7 @@ import (
 	"ai-flight-dashboard/internal/calculator"
 	"ai-flight-dashboard/internal/config"
 	"ai-flight-dashboard/internal/db"
+	"ai-flight-dashboard/internal/lan"
 	"ai-flight-dashboard/internal/model"
 	"ai-flight-dashboard/internal/watcher"
 )
@@ -105,6 +106,23 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
 		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	mux.HandleFunc("/api/lan/scan", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		peers := lan.GetActivePeers()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"peers": peers,
+		})
+	}))
+
+	mux.HandleFunc("/api/lan/join", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		// Acknowledge join
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -400,6 +418,8 @@ func handlePutConfig(w http.ResponseWriter, r *http.Request, wInst *watcher.Watc
 		return
 	}
 	
+	oldCfg, _ := config.LoadConfig()
+
 	if err := config.SaveConfig(&cfg); err != nil {
 		http.Error(w, "Failed to save config", http.StatusInternalServerError)
 		return
@@ -407,6 +427,21 @@ func handlePutConfig(w http.ResponseWriter, r *http.Request, wInst *watcher.Watc
 
 	// Dynamically update watcher
 	if wInst != nil {
+		if oldCfg != nil {
+			for _, oldDir := range oldCfg.ExtraWatchDirs {
+				found := false
+				for _, newDir := range cfg.ExtraWatchDirs {
+					if oldDir == newDir {
+						found = true
+						break
+					}
+				}
+				if !found {
+					wInst.UnwatchDir(oldDir)
+				}
+			}
+		}
+
 		for _, dir := range cfg.ExtraWatchDirs {
 			if _, err := os.Stat(dir); err == nil {
 				wInst.WatchDirRecursive(dir)

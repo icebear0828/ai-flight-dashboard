@@ -176,6 +176,7 @@ func main() {
 		fmt.Printf("📡 LAN discovery enabled. Multicast: %s\n", lan.MulticastAddr)
 		go lan.StartBroadcaster(w.BroadcastChan, *deviceID)
 		go lan.StartListener(w.UsageChan, *deviceID)
+		go lan.StartPinger(*deviceID)
 	}
 
 	// Fast path: register cached known directories (~1ms vs 134ms recursive)
