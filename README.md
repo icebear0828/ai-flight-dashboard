@@ -22,13 +22,9 @@ AI Flight Dashboard 是一个基于 Go 语言构建的 **命令行 UI (TUI) + We
 
 完整的配置指南与集群部署，请参考 [📚 使用手册 (docs/usage.md)](docs/usage.md)。
 
-### macOS 安装 (推荐)
+### macOS 安装
 
-```bash
-curl -sL https://github.com/icebear0828/ai-flight-dashboard/releases/latest/download/install-mac.sh | bash
-```
-
-> 自动检测 Apple Silicon / Intel，下载、安装到 `/Applications`，并解除 Gatekeeper 拦截。
+从 [Releases](https://github.com/icebear0828/ai-flight-dashboard/releases/latest) 下载对应架构的 tar.gz，解压后**双击 `install.command`** 即可自动安装并启动。
 
 ### 一键部署 (服务器/后台)
 

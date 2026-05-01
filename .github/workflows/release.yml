@@ -32,24 +32,26 @@ jobs:
           wails build -platform darwin/arm64 -clean
           mkdir -p ../../build/bin
           mv "build/bin/AI Flight Dashboard.app" "../../build/bin/AI Flight Dashboard.app"
+          cp ../../scripts/install-mac.command ../../build/bin/install.command
+          chmod +x ../../build/bin/install.command
           cd ../../build/bin
-          tar -czvf ai-flight-dashboard-macos-m-series.tar.gz "AI Flight Dashboard.app"
-          rm -rf "AI Flight Dashboard.app"
+          tar -czvf ai-flight-dashboard-macos-m-series.tar.gz "AI Flight Dashboard.app" install.command
+          rm -rf "AI Flight Dashboard.app" install.command
       - name: Build macOS Intel
         run: |
           cd cmd/dashboard
           wails build -platform darwin/amd64 -clean
           mkdir -p ../../build/bin
           mv "build/bin/AI Flight Dashboard.app" "../../build/bin/AI Flight Dashboard.app"
+          cp ../../scripts/install-mac.command ../../build/bin/install.command
+          chmod +x ../../build/bin/install.command
           cd ../../build/bin
-          tar -czvf ai-flight-dashboard-macos-intel.tar.gz "AI Flight Dashboard.app"
-          rm -rf "AI Flight Dashboard.app"
+          tar -czvf ai-flight-dashboard-macos-intel.tar.gz "AI Flight Dashboard.app" install.command
+          rm -rf "AI Flight Dashboard.app" install.command
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            build/bin/*.tar.gz
-            scripts/install-mac.sh
+          files: build/bin/*.tar.gz
 
   build-windows:
     name: Build Windows
