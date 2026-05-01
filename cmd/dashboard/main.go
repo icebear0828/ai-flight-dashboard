@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+
 	"syscall"
 	"time"
 
@@ -47,7 +48,7 @@ func main() {
 
 	// Parse CLI flags
 	webMode := flag.Bool("web", false, "Run in web dashboard mode")
-	guiMode := flag.Bool("gui", false, "Run as native desktop app with system tray")
+	tuiMode := flag.Bool("tui", false, "Run in legacy Terminal UI mode")
 	port := flag.String("port", "9100", "HTTP port for web mode")
 	forwardTo := flag.String("forward-to", "", "Forward local usage to remote dashboard URL (e.g. http://server:9100/api/track)")
 	token := flag.String("token", "", "Authorization token for web mode or forwarder")
@@ -64,6 +65,12 @@ func main() {
 	flag.BoolVar(webMode, "w", false, "Run in web dashboard mode (shorthand)")
 	flag.StringVar(port, "p", "9100", "HTTP port for web mode (shorthand)")
 	flag.Parse()
+
+	// Default to GUI mode unless another mode is explicitly requested
+	runGui := true
+	if *tuiMode || *webMode || *forwardTo != "" || len(flag.Args()) > 0 {
+		runGui = false
+	}
 
 	// Read token from environment variable if not provided via flag
 	if *token == "" {
@@ -138,8 +145,13 @@ func main() {
 	}
 
 	// Initialize Database
-	os.MkdirAll("stats", 0755)
-	database, err := db.New("stats/usage.db")
+	homeDir, _ := os.UserHomeDir()
+	appDataDir := filepath.Join(homeDir, ".ai-flight-dashboard")
+	statsDir := filepath.Join(appDataDir, "stats")
+	os.MkdirAll(statsDir, 0755)
+	
+	dbPath := filepath.Join(statsDir, "usage.db")
+	database, err := db.New(dbPath)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
@@ -244,7 +256,7 @@ func main() {
 		}()
 	}
 
-	if *guiMode {
+	if runGui {
 		startDBDrain()
 
 		app := desktop.NewApp(database, calc)
@@ -325,7 +337,10 @@ func main() {
 	}
 
 	// TUI mode — starts instantly, data populates in background
-	f, err := tea.LogToFile("stats/debug.log", "debug")
+	homeDirTui, _ := os.UserHomeDir()
+	logPath := filepath.Join(homeDirTui, ".ai-flight-dashboard", "stats", "debug.log")
+	os.MkdirAll(filepath.Dir(logPath), 0755)
+	f, err := tea.LogToFile(logPath, "debug")
 	if err != nil {
 		fmt.Println("fatal:", err)
 		os.Exit(1)
@@ -348,8 +363,10 @@ func main() {
 }
 
 func openDB() *db.DB {
-	os.MkdirAll("stats", 0755)
-	database, err := db.New("stats/usage.db")
+	homeDir, _ := os.UserHomeDir()
+	dbPath := filepath.Join(homeDir, ".ai-flight-dashboard", "stats", "usage.db")
+	os.MkdirAll(filepath.Dir(dbPath), 0755)
+	database, err := db.New(dbPath)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
