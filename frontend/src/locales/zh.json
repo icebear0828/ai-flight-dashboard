@@ -3,6 +3,7 @@
   "systemInitializing": "系统初始化中...",
   "aiFlightDashboard": "AI 算力监控雷达",
   "liveOperations": "实况运行",
+  "paused": "已暂停",
   "allDevices": "所有设备",
   "settings": "系统设置",
   "systemLogs": "系统日志",
@@ -39,5 +40,17 @@
   "remove": "移除",
   "noExtraDirectories": "尚未配置额外目录。",
   "addPathPlaceholder": "绝对路径，例如 /Users/name/logs",
-  "addPath": "+ 添加路径"
+  "addPath": "+ 添加路径",
+  "totalSpend": "总花费",
+  "baseInput": "基础输入",
+  "cacheRead": "缓存读取",
+  "cacheWrite": "缓存写入",
+  "outputTokens": "输出",
+  "totalTokens": "总计",
+  "labelIn": "输入",
+  "labelOut": "输出",
+  "modelIdentifier": "模型标识",
+  "rates1M": "单价 (1M)",
+  "events": "事件数",
+  "subtotal": "小计"
 }

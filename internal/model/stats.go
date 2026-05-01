@@ -61,6 +61,7 @@ type StatsResponse struct {
 	Sources  []SourceStats  `json:"sources"`
 	Devices  []DeviceInfo   `json:"devices"`
 	Projects []ProjectStat  `json:"projects"`
+	IsPaused bool           `json:"is_paused"`
 }
 
 // CacheSavingsResponse is the cache savings analysis response.

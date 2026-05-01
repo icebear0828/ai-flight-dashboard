@@ -229,9 +229,13 @@ func main() {
 				case <-ctx.Done():
 					return
 				case <-fastTicker.C:
-					s.ScanKnownFiles(w.UsageChan)
+					if !w.IsPaused() {
+						s.ScanKnownFiles(w.UsageChan)
+					}
 				case <-slowTicker.C:
-					s.ScanAll(scanDirs, w.UsageChan)
+					if !w.IsPaused() {
+						s.ScanAll(scanDirs, w.UsageChan)
+					}
 				}
 			}
 		}
