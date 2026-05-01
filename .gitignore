@@ -9,7 +9,8 @@ node_modules/
 # Build outputs
 dist/
 build/
-dist-bin/
+dist-bin/*
+!dist-bin/.gitkeep
 
 # Database
 *.db

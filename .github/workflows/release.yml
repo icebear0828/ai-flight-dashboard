@@ -22,8 +22,6 @@ jobs:
           node-version: '20'
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
-      - name: Prepare embed dir
-        run: mkdir -p dist-bin && touch dist-bin/dummy.txt
       - name: Build macOS M-Series (Apple Silicon)
         run: |
           wails build -platform darwin/arm64 -clean
@@ -53,8 +51,6 @@ jobs:
           node-version: '20'
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
-      - name: Prepare embed dir
-        run: mkdir -p dist-bin && touch dist-bin/dummy.txt
       - name: Build Windows App
         run: wails build -platform windows/amd64 -clean
       - name: Archive App
@@ -83,8 +79,6 @@ jobs:
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev || sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
-      - name: Prepare embed dir
-        run: mkdir -p dist-bin && touch dist-bin/dummy.txt
       - name: Build Linux App
         run: wails build -platform linux/amd64 -clean
       - name: Archive App
