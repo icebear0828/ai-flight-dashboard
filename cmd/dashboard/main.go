@@ -291,6 +291,12 @@ func main() {
 			Height:    800,
 			MinWidth:  900,
 			MinHeight: 600,
+			SingleInstanceLock: &options.SingleInstanceLock{
+				UniqueId:               "ai-flight-dashboard",
+				OnSecondInstanceLaunch: func(secondInstanceData options.SecondInstanceData) {
+					// Wails handles focusing the primary window automatically
+				},
+			},
 			AssetServer: &assetserver.Options{
 				Assets:  guiAssets,
 				Handler: apiHandler,
