@@ -129,6 +129,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize calculator: %v", err)
 	}
+	
+	home, _ := os.UserHomeDir()
+	customPricingPath := filepath.Join(home, ".ai-flight-dashboard", "custom_pricing.json")
+	if err := calc.LoadCustomPrices(customPricingPath); err != nil {
+		fmt.Printf("⚠️  Failed to load custom pricing: %v\n", err)
+	}
 
 	// Initialize Database
 	os.MkdirAll("stats", 0755)
@@ -139,7 +145,6 @@ func main() {
 	defer database.Close()
 
 	// Collect scan directories
-	home, _ := os.UserHomeDir()
 	var scanDirs []string
 
 	claudeProjects := filepath.Join(home, ".claude", "projects")
