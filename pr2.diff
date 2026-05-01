@@ -1,0 +1,1135 @@
+diff --git a/internal/alert/budget.go b/internal/alert/budget.go
+new file mode 100644
+index 0000000..5ae9776
+--- /dev/null
++++ b/internal/alert/budget.go
+@@ -0,0 +1,71 @@
++package alert
++
++import (
++	"time"
++
++	"ai-flight-dashboard/internal/db"
++)
++
++// AlertLevel indicates the severity of a budget status.
++type AlertLevel int
++
++const (
++	LevelGreen  AlertLevel = iota // < 50%
++	LevelYellow                   // 50-80%
++	LevelRed                      // > 80%
++)
++
++// BudgetStatus is the result of a budget check.
++type BudgetStatus struct {
++	Spent     float64
++	Remaining float64
++	Percent   float64
++	Exceeded  bool
++	Level     AlertLevel
++}
++
++// BudgetAlert checks daily spending against a configured budget.
++type BudgetAlert struct {
++	db         *db.DB
++	dailyLimit float64
++}
++
++// NewBudgetAlert creates a budget alert checker.
++// A dailyLimit of 0 disables the alert (always green).
++func NewBudgetAlert(database *db.DB, dailyLimit float64) *BudgetAlert {
++	return &BudgetAlert{db: database, dailyLimit: dailyLimit}
++}
++
++// Check queries today's total cost and returns the budget status.
++func (b *BudgetAlert) Check() BudgetStatus {
++	if b.dailyLimit <= 0 {
++		return BudgetStatus{Level: LevelGreen}
++	}
++
++	now := time.Now().UTC()
++	since := now.Add(-24 * time.Hour)
++	spent, _, _, _, _ := b.db.QueryPeriodStatsSince(since, "")
++
++	remaining := b.dailyLimit - spent
++	if remaining < 0 {
++		remaining = 0
++	}
++
++	pct := (spent / b.dailyLimit) * 100
++	exceeded := spent >= b.dailyLimit
++
++	level := LevelGreen
++	if pct >= 80 {
++		level = LevelRed
++	} else if pct >= 50 {
++		level = LevelYellow
++	}
++
++	return BudgetStatus{
++		Spent:     spent,
++		Remaining: remaining,
++		Percent:   pct,
++		Exceeded:  exceeded,
++		Level:     level,
++	}
++}
+diff --git a/internal/alert/budget_test.go b/internal/alert/budget_test.go
+new file mode 100644
+index 0000000..4afdb42
+--- /dev/null
++++ b/internal/alert/budget_test.go
+@@ -0,0 +1,123 @@
++package alert_test
++
++import (
++	"path/filepath"
++	"testing"
++	"time"
++
++	"ai-flight-dashboard/internal/alert"
++	"ai-flight-dashboard/internal/db"
++	"ai-flight-dashboard/internal/model"
++)
++
++func setupDB(t *testing.T) *db.DB {
++	t.Helper()
++	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	return database
++}
++
++func TestBudgetCheck_UnderBudget(t *testing.T) {
++	database := setupDB(t)
++	defer database.Close()
++
++	now := time.Now().UTC()
++	database.InsertUsageWithTime(
++		model.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50},
++		5.00, now.Add(-1*time.Hour), "/a.jsonl", "local",
++	)
++
++	ba := alert.NewBudgetAlert(database, 50.00) // $50 daily budget
++	status := ba.Check()
++
++	if status.Spent < 4.99 || status.Spent > 5.01 {
++		t.Errorf("expected spent ~5.00, got %f", status.Spent)
++	}
++	if status.Remaining < 44.99 {
++		t.Errorf("expected remaining ~45.00, got %f", status.Remaining)
++	}
++	if status.Exceeded {
++		t.Error("should not be exceeded")
++	}
++	if status.Level != alert.LevelGreen {
++		t.Errorf("expected green, got %v", status.Level)
++	}
++}
++
++func TestBudgetCheck_Warning(t *testing.T) {
++	database := setupDB(t)
++	defer database.Close()
++
++	now := time.Now().UTC()
++	// Spend $35 of $50 = 70%
++	database.InsertUsageWithTime(
++		model.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50},
++		35.00, now.Add(-1*time.Hour), "/a.jsonl", "local",
++	)
++
++	ba := alert.NewBudgetAlert(database, 50.00)
++	status := ba.Check()
++
++	if status.Level != alert.LevelYellow {
++		t.Errorf("expected yellow at 70%%, got %v (pct=%f)", status.Level, status.Percent)
++	}
++}
++
++func TestBudgetCheck_Critical(t *testing.T) {
++	database := setupDB(t)
++	defer database.Close()
++
++	now := time.Now().UTC()
++	// Spend $45 of $50 = 90%
++	database.InsertUsageWithTime(
++		model.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50},
++		45.00, now.Add(-1*time.Hour), "/a.jsonl", "local",
++	)
++
++	ba := alert.NewBudgetAlert(database, 50.00)
++	status := ba.Check()
++
++	if status.Level != alert.LevelRed {
++		t.Errorf("expected red at 90%%, got %v (pct=%f)", status.Level, status.Percent)
++	}
++}
++
++func TestBudgetCheck_Exceeded(t *testing.T) {
++	database := setupDB(t)
++	defer database.Close()
++
++	now := time.Now().UTC()
++	// Spend $60 of $50 = 120%
++	database.InsertUsageWithTime(
++		model.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50},
++		60.00, now.Add(-1*time.Hour), "/a.jsonl", "local",
++	)
++
++	ba := alert.NewBudgetAlert(database, 50.00)
++	status := ba.Check()
++
++	if !status.Exceeded {
++		t.Error("should be exceeded")
++	}
++	if status.Remaining != 0 {
++		t.Errorf("remaining should be 0 when exceeded, got %f", status.Remaining)
++	}
++}
++
++func TestBudgetCheck_ZeroBudget(t *testing.T) {
++	database := setupDB(t)
++	defer database.Close()
++
++	// $0 budget = disabled, should always be green
++	ba := alert.NewBudgetAlert(database, 0)
++	status := ba.Check()
++
++	if status.Level != alert.LevelGreen {
++		t.Errorf("zero budget should be green (disabled), got %v", status.Level)
++	}
++	if status.Exceeded {
++		t.Error("zero budget should never be exceeded")
++	}
++}
+diff --git a/internal/db/dir_cache_test.go b/internal/db/dir_cache_test.go
+new file mode 100644
+index 0000000..e615d96
+--- /dev/null
++++ b/internal/db/dir_cache_test.go
+@@ -0,0 +1,39 @@
++package db
++
++import (
++	"path/filepath"
++	"testing"
++)
++
++func TestDirCache(t *testing.T) {
++	database, err := New(filepath.Join(t.TempDir(), "test.db"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer database.Close()
++
++	// Initially empty
++	dirs, err := database.ListKnownDirs()
++	if err != nil {
++		t.Fatalf("ListKnownDirs error: %v", err)
++	}
++	if len(dirs) != 0 {
++		t.Errorf("expected 0 dirs, got %d", len(dirs))
++	}
++
++	// Insert two directories
++	database.UpsertKnownDir("/home/user/.claude/projects/proj-a")
++	database.UpsertKnownDir("/home/user/.claude/projects/proj-b")
++
++	dirs, _ = database.ListKnownDirs()
++	if len(dirs) != 2 {
++		t.Fatalf("expected 2 dirs, got %d", len(dirs))
++	}
++
++	// Upsert same dir again — should not duplicate
++	database.UpsertKnownDir("/home/user/.claude/projects/proj-a")
++	dirs, _ = database.ListKnownDirs()
++	if len(dirs) != 2 {
++		t.Errorf("expected 2 dirs after upsert, got %d", len(dirs))
++	}
++}
+diff --git a/internal/db/export.go b/internal/db/export.go
+new file mode 100644
+index 0000000..1b18920
+--- /dev/null
++++ b/internal/db/export.go
+@@ -0,0 +1,148 @@
++package db
++
++import (
++	"encoding/csv"
++	"fmt"
++	"io"
++	"strconv"
++	"time"
++
++	"ai-flight-dashboard/internal/model"
++)
++
++var csvHeader = []string{
++	"log_timestamp", "source", "model",
++	"input_tokens", "cached_tokens", "output_tokens",
++	"cost_usd", "file_path", "device_id",
++}
++
++// ExportCSV writes all usage records as CSV to w.
++// If deviceID is non-empty and not "all", only that device's records are exported.
++// Returns the number of rows written.
++func (d *DB) ExportCSV(w io.Writer, deviceID string) (int, error) {
++	query := `SELECT log_timestamp, source, model, input_tokens, cached_tokens, output_tokens, cost_usd, file_path, device_id
++		FROM usage_records WHERE 1=1`
++	var args []interface{}
++
++	if deviceID != "" && deviceID != "all" {
++		query += " AND device_id = ?"
++		args = append(args, deviceID)
++	}
++	query += " ORDER BY log_timestamp"
++
++	rows, err := d.conn.Query(query, args...)
++	if err != nil {
++		return 0, err
++	}
++	defer rows.Close()
++
++	cw := csv.NewWriter(w)
++	if err := cw.Write(csvHeader); err != nil {
++		return 0, err
++	}
++
++	count := 0
++	for rows.Next() {
++		var logTS, source, mdl, filePath, devID string
++		var inTok, cacheTok, outTok int
++		var cost float64
++		if err := rows.Scan(&logTS, &source, &mdl, &inTok, &cacheTok, &outTok, &cost, &filePath, &devID); err != nil {
++			return count, err
++		}
++		record := []string{
++			logTS, source, mdl,
++			strconv.Itoa(inTok), strconv.Itoa(cacheTok), strconv.Itoa(outTok),
++			fmt.Sprintf("%.6f", cost), filePath, devID,
++		}
++		if err := cw.Write(record); err != nil {
++			return count, err
++		}
++		count++
++	}
++	cw.Flush()
++	return count, cw.Error()
++}
++
++// ImportCSV reads CSV records from r and inserts them into the database.
++// Duplicates are silently skipped via INSERT OR IGNORE.
++// Returns (imported, skipped, error).
++func (d *DB) ImportCSV(r io.Reader) (int, int, error) {
++	cr := csv.NewReader(r)
++
++	// Read and validate header
++	header, err := cr.Read()
++	if err != nil {
++		return 0, 0, fmt.Errorf("read header: %w", err)
++	}
++	colIdx := make(map[string]int)
++	for i, col := range header {
++		colIdx[col] = i
++	}
++	for _, required := range csvHeader {
++		if _, ok := colIdx[required]; !ok {
++			return 0, 0, fmt.Errorf("missing required column: %s", required)
++		}
++	}
++
++	imported, skipped := 0, 0
++	for {
++		record, err := cr.Read()
++		if err == io.EOF {
++			break
++		}
++		if err != nil {
++			return imported, skipped, fmt.Errorf("read row %d: %w", imported+skipped+1, err)
++		}
++
++		logTS := record[colIdx["log_timestamp"]]
++		source := record[colIdx["source"]]
++		mdl := record[colIdx["model"]]
++		inTok, _ := strconv.Atoi(record[colIdx["input_tokens"]])
++		cacheTok, _ := strconv.Atoi(record[colIdx["cached_tokens"]])
++		outTok, _ := strconv.Atoi(record[colIdx["output_tokens"]])
++		cost, _ := strconv.ParseFloat(record[colIdx["cost_usd"]], 64)
++		filePath := record[colIdx["file_path"]]
++		devID := record[colIdx["device_id"]]
++
++		// Parse timestamp for proper formatting
++		ts, terr := time.Parse(time.RFC3339, logTS)
++		if terr != nil {
++			ts, terr = time.Parse("2006-01-02T15:04:05Z", logTS)
++		}
++		if terr != nil {
++			// Use raw string as-is
++			ts = time.Time{}
++		}
++
++		u := model.TokenUsage{
++			Source:       source,
++			Model:        mdl,
++			InputTokens:  inTok,
++			CachedTokens: cacheTok,
++			OutputTokens: outTok,
++		}
++
++		var tsStr string
++		if ts.IsZero() {
++			tsStr = logTS
++		} else {
++			tsStr = ts.Format(time.RFC3339)
++		}
++
++		query := `INSERT OR IGNORE INTO usage_records
++			(log_timestamp, source, model, input_tokens, cached_tokens, output_tokens, cost_usd, file_path, device_id)
++			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
++		result, err := d.conn.Exec(query, tsStr, u.Source, u.Model, u.InputTokens, u.CachedTokens, u.OutputTokens, cost, filePath, devID)
++		if err != nil {
++			return imported, skipped, fmt.Errorf("insert row %d: %w", imported+skipped+1, err)
++		}
++		affected, _ := result.RowsAffected()
++		if affected > 0 {
++			imported++
++		} else {
++			skipped++
++		}
++	}
++
++	return imported, skipped, nil
++}
+diff --git a/internal/db/export_test.go b/internal/db/export_test.go
+new file mode 100644
+index 0000000..1fce6b7
+--- /dev/null
++++ b/internal/db/export_test.go
+@@ -0,0 +1,189 @@
++package db_test
++
++import (
++	"bytes"
++	"path/filepath"
++	"testing"
++	"time"
++
++	"ai-flight-dashboard/internal/db"
++	"ai-flight-dashboard/internal/model"
++)
++
++func TestExportCSV(t *testing.T) {
++	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer database.Close()
++
++	now := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
++	database.InsertUsageWithTime(
++		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, CachedTokens: 500, OutputTokens: 200},
++		1.50, now, "/a.jsonl", "mac-pro",
++	)
++	database.InsertUsageWithTime(
++		model.TokenUsage{Source: "Gemini CLI", Model: "gemini-2.5-pro", InputTokens: 800, CachedTokens: 0, OutputTokens: 100},
++		0.60, now.Add(time.Minute), "/b.jsonl", "mac-pro",
++	)
++
++	var buf bytes.Buffer
++	count, err := database.ExportCSV(&buf, "")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if count != 2 {
++		t.Errorf("expected 2 rows exported, got %d", count)
++	}
++
++	output := buf.String()
++	// Should have header + 2 data rows
++	lines := bytes.Split(buf.Bytes(), []byte("\n"))
++	// header + 2 data + trailing newline
++	nonEmpty := 0
++	for _, l := range lines {
++		if len(l) > 0 {
++			nonEmpty++
++		}
++	}
++	if nonEmpty != 3 { // header + 2 rows
++		t.Errorf("expected 3 non-empty lines (header+2), got %d\n%s", nonEmpty, output)
++	}
++
++	// Header should contain expected columns
++	header := string(lines[0])
++	for _, col := range []string{"log_timestamp", "source", "model", "input_tokens", "cached_tokens", "output_tokens", "cost_usd", "file_path", "device_id"} {
++		if !bytes.Contains([]byte(header), []byte(col)) {
++			t.Errorf("header missing column %q: %s", col, header)
++		}
++	}
++}
++
++func TestExportCSV_DeviceFilter(t *testing.T) {
++	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer database.Close()
++
++	now := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
++	database.InsertUsageWithTime(
++		model.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50},
++		1.00, now, "/a.jsonl", "mac",
++	)
++	database.InsertUsageWithTime(
++		model.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 200, OutputTokens: 100},
++		2.00, now.Add(time.Minute), "/b.jsonl", "linux",
++	)
++
++	var buf bytes.Buffer
++	count, err := database.ExportCSV(&buf, "mac")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if count != 1 {
++		t.Errorf("expected 1 row for device=mac, got %d", count)
++	}
++}
++
++func TestImportCSV(t *testing.T) {
++	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer database.Close()
++
++	csv := `log_timestamp,source,model,input_tokens,cached_tokens,output_tokens,cost_usd,file_path,device_id
++2026-04-20T10:00:00Z,Claude Code,claude-opus-4-7,1000,500,200,1.50,/a.jsonl,remote-mac
++2026-04-20T10:01:00Z,Gemini CLI,gemini-2.5-pro,800,0,100,0.60,/b.jsonl,remote-mac
++`
++	reader := bytes.NewBufferString(csv)
++	imported, skipped, err := database.ImportCSV(reader)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if imported != 2 {
++		t.Errorf("expected 2 imported, got %d", imported)
++	}
++	if skipped != 0 {
++		t.Errorf("expected 0 skipped, got %d", skipped)
++	}
++
++	// Verify data in DB
++	cost, _, _, _, _ := database.QueryPeriodStatsAll("remote-mac")
++	if cost < 2.09 || cost > 2.11 {
++		t.Errorf("expected ~2.10 cost, got %f", cost)
++	}
++}
++
++func TestImportCSV_Dedup(t *testing.T) {
++	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer database.Close()
++
++	csv := `log_timestamp,source,model,input_tokens,cached_tokens,output_tokens,cost_usd,file_path,device_id
++2026-04-20T10:00:00Z,Claude Code,claude-opus-4-7,1000,500,200,1.50,/a.jsonl,mac
++`
++	// Import once
++	reader := bytes.NewBufferString(csv)
++	database.ImportCSV(reader)
++
++	// Import same data again — should be skipped
++	reader = bytes.NewBufferString(csv)
++	imported, skipped, err := database.ImportCSV(reader)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if imported != 0 {
++		t.Errorf("expected 0 imported (dedup), got %d", imported)
++	}
++	if skipped != 1 {
++		t.Errorf("expected 1 skipped (dedup), got %d", skipped)
++	}
++
++	cost, _, _, _, _ := database.QueryPeriodStatsAll("")
++	if cost < 1.49 || cost > 1.51 {
++		t.Errorf("expected ~1.50 (no dup), got %f", cost)
++	}
++}
++
++func TestExportImportRoundTrip(t *testing.T) {
++	// Create source DB with data
++	srcDB, _ := db.New(filepath.Join(t.TempDir(), "src.db"))
++	defer srcDB.Close()
++
++	now := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
++	srcDB.InsertUsageWithTime(
++		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, CachedTokens: 500, OutputTokens: 200},
++		1.50, now, "/a.jsonl", "device-A",
++	)
++	srcDB.InsertUsageWithTime(
++		model.TokenUsage{Source: "Gemini CLI", Model: "gemini-2.5-pro", InputTokens: 800, CachedTokens: 0, OutputTokens: 100},
++		0.60, now.Add(time.Minute), "/b.jsonl", "device-A",
++	)
++
++	// Export
++	var buf bytes.Buffer
++	srcDB.ExportCSV(&buf, "")
++
++	// Import into a fresh DB
++	dstDB, _ := db.New(filepath.Join(t.TempDir(), "dst.db"))
++	defer dstDB.Close()
++
++	imported, _, err := dstDB.ImportCSV(&buf)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if imported != 2 {
++		t.Errorf("expected 2 imported, got %d", imported)
++	}
++
++	// Verify totals match
++	srcCost, _, _, _, _ := srcDB.QueryPeriodStatsAll("")
++	dstCost, _, _, _, _ := dstDB.QueryPeriodStatsAll("")
++	if srcCost < dstCost-0.01 || srcCost > dstCost+0.01 {
++		t.Errorf("round-trip cost mismatch: src=%f dst=%f", srcCost, dstCost)
++	}
++}
+diff --git a/internal/forwarder/forwarder.go b/internal/forwarder/forwarder.go
+new file mode 100644
+index 0000000..217ee8d
+--- /dev/null
++++ b/internal/forwarder/forwarder.go
+@@ -0,0 +1,83 @@
++package forwarder
++
++import (
++	"bytes"
++	"encoding/json"
++	"fmt"
++	"log"
++	"net/http"
++	"time"
++
++	"ai-flight-dashboard/internal/model"
++)
++
++// Forwarder listens to a usage channel and forwards events to a remote HTTP endpoint.
++type Forwarder struct {
++	targetURL string
++	token     string
++	deviceID  string
++	client    *http.Client
++}
++
++func New(targetURL, token, deviceID string) *Forwarder {
++	return &Forwarder{
++		targetURL: targetURL,
++		token:     token,
++		deviceID:  deviceID,
++		client: &http.Client{
++			Timeout: 10 * time.Second,
++		},
++	}
++}
++
++// Start consumes usage events from the channel and sends them sequentially.
++func (f *Forwarder) Start(usageChan <-chan model.TokenUsage) {
++	for usage := range usageChan {
++		err := f.send(usage)
++		if err != nil {
++			log.Printf("Forwarder failed to send usage: %v", err)
++		} else {
++			log.Printf("Forwarded %d tokens for %s", usage.InputTokens+usage.OutputTokens, usage.Model)
++		}
++	}
++}
++
++func (f *Forwarder) send(usage model.TokenUsage) error {
++	payload := model.TrackPayload{
++		DeviceID: f.deviceID,
++		Usage:    usage,
++	}
++
++	body, err := json.Marshal(payload)
++	if err != nil {
++		return err
++	}
++
++	// Simple retry loop
++	var lastErr error
++	for i := 0; i < 3; i++ {
++		req, err := http.NewRequest("POST", f.targetURL, bytes.NewReader(body))
++		if err != nil {
++			return err
++		}
++		req.Header.Set("Content-Type", "application/json")
++		if f.token != "" {
++			req.Header.Set("Authorization", "Bearer "+f.token)
++		}
++
++		resp, err := f.client.Do(req)
++		if err != nil {
++			lastErr = err
++			time.Sleep(1 * time.Second)
++			continue
++		}
++		defer resp.Body.Close()
++
++		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
++			return nil
++		}
++		lastErr = fmt.Errorf("unexpected status code: %d", resp.StatusCode)
++		time.Sleep(1 * time.Second)
++	}
++	return lastErr
++}
+diff --git a/internal/forwarder/forwarder_test.go b/internal/forwarder/forwarder_test.go
+new file mode 100644
+index 0000000..9e170a9
+--- /dev/null
++++ b/internal/forwarder/forwarder_test.go
+@@ -0,0 +1,78 @@
++package forwarder_test
++
++import (
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"testing"
++	"time"
++
++	"ai-flight-dashboard/internal/forwarder"
++	"ai-flight-dashboard/internal/model"
++)
++
++func TestForwarder_Success(t *testing.T) {
++	var receivedPayload model.TrackPayload
++	var authHeader string
++
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		authHeader = r.Header.Get("Authorization")
++		json.NewDecoder(r.Body).Decode(&receivedPayload)
++		w.WriteHeader(http.StatusCreated)
++	}))
++	defer srv.Close()
++
++	fw := forwarder.New(srv.URL, "test-token", "test-device")
++
++	ch := make(chan model.TokenUsage, 1)
++	ch <- model.TokenUsage{
++		Source:       "Test",
++		Model:        "test-model",
++		InputTokens:  10,
++		OutputTokens: 20,
++	}
++	close(ch)
++
++	// Run forwarder synchronously
++	fw.Start(ch)
++
++	if authHeader != "Bearer test-token" {
++		t.Errorf("expected Bearer test-token, got %s", authHeader)
++	}
++	if receivedPayload.DeviceID != "test-device" {
++		t.Errorf("expected test-device, got %s", receivedPayload.DeviceID)
++	}
++	if receivedPayload.Usage.Model != "test-model" {
++		t.Errorf("expected test-model, got %s", receivedPayload.Usage.Model)
++	}
++}
++
++func TestForwarder_Retry(t *testing.T) {
++	attempts := 0
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		attempts++
++		if attempts < 3 {
++			w.WriteHeader(http.StatusInternalServerError)
++			return
++		}
++		w.WriteHeader(http.StatusCreated)
++	}))
++	defer srv.Close()
++
++	fw := forwarder.New(srv.URL, "", "test-device")
++
++	ch := make(chan model.TokenUsage, 1)
++	ch <- model.TokenUsage{Model: "test-model"}
++	close(ch)
++
++	start := time.Now()
++	fw.Start(ch)
++	dur := time.Since(start)
++
++	if attempts != 3 {
++		t.Errorf("expected 3 attempts, got %d", attempts)
++	}
++	if dur < 2*time.Second {
++		t.Errorf("expected retry delay, took %v", dur)
++	}
++}
+diff --git a/internal/session/tracker.go b/internal/session/tracker.go
+new file mode 100644
+index 0000000..5b3f996
+--- /dev/null
++++ b/internal/session/tracker.go
+@@ -0,0 +1,123 @@
++package session
++
++import (
++	"sync"
++	"time"
++
++	"ai-flight-dashboard/internal/model"
++)
++
++type entry struct {
++	tokens int
++	cost   float64
++	ts     time.Time
++}
++
++// Tracker monitors token usage within a rolling time window for subscription plans.
++type Tracker struct {
++	windowSize time.Duration
++	plan       string
++	limit      model.PlanLimit
++	mu         sync.Mutex
++	entries    []entry
++}
++
++// NewTracker creates a session tracker for the given plan and window size.
++func NewTracker(plan string, windowSize time.Duration) *Tracker {
++	limit := model.PlanLimits[plan]
++	return &Tracker{
++		windowSize: windowSize,
++		plan:       plan,
++		limit:      limit,
++	}
++}
++
++// Record adds a usage event to the tracker.
++func (t *Tracker) Record(tokens int, cost float64, ts time.Time) {
++	t.mu.Lock()
++	defer t.mu.Unlock()
++	t.entries = append(t.entries, entry{tokens: tokens, cost: cost, ts: ts})
++}
++
++// evict removes entries older than the window. Must be called with lock held.
++func (t *Tracker) evict() {
++	cutoff := time.Now().Add(-t.windowSize)
++	i := 0
++	for i < len(t.entries) && t.entries[i].ts.Before(cutoff) {
++		i++
++	}
++	if i > 0 {
++		t.entries = t.entries[i:]
++	}
++}
++
++// WindowUsage returns total tokens and cost within the current window.
++func (t *Tracker) WindowUsage() (int, float64) {
++	t.mu.Lock()
++	defer t.mu.Unlock()
++	t.evict()
++
++	var tokens int
++	var cost float64
++	for _, e := range t.entries {
++		tokens += e.tokens
++		cost += e.cost
++	}
++	return tokens, cost
++}
++
++// BurnRate returns the consumption rate in tokens per minute based on entries in the window.
++// Returns 0 if fewer than 2 entries exist.
++func (t *Tracker) BurnRate() float64 {
++	t.mu.Lock()
++	defer t.mu.Unlock()
++	t.evict()
++
++	if len(t.entries) < 2 {
++		return 0
++	}
++
++	first := t.entries[0].ts
++	last := t.entries[len(t.entries)-1].ts
++	elapsed := last.Sub(first).Minutes()
++	if elapsed <= 0 {
++		return 0
++	}
++
++	var total int
++	for _, e := range t.entries {
++		total += e.tokens
++	}
++	return float64(total) / elapsed
++}
++
++// TimeToExhaustion predicts how long until the plan's token limit is exhausted
++// based on the current burn rate. Returns 0 if already exhausted or rate is 0.
++func (t *Tracker) TimeToExhaustion() time.Duration {
++	tokens, _ := t.WindowUsage()
++	remaining := t.limit.TokenLimit - tokens
++	if remaining <= 0 {
++		return 0
++	}
++
++	rate := t.BurnRate()
++	if rate <= 0 {
++		return 0
++	}
++
++	minutes := float64(remaining) / rate
++	return time.Duration(minutes * float64(time.Minute))
++}
++
++// WindowReset returns the time when the oldest entry in the window will expire.
++// Returns zero time if no entries exist.
++func (t *Tracker) WindowReset() time.Time {
++	t.mu.Lock()
++	defer t.mu.Unlock()
++	t.evict()
++
++	if len(t.entries) == 0 {
++		return time.Time{}
++	}
++	return t.entries[0].ts.Add(t.windowSize)
++}
+diff --git a/internal/session/tracker_test.go b/internal/session/tracker_test.go
+new file mode 100644
+index 0000000..f79a4bd
+--- /dev/null
++++ b/internal/session/tracker_test.go
+@@ -0,0 +1,129 @@
++package session_test
++
++import (
++	"testing"
++	"time"
++
++	"ai-flight-dashboard/internal/session"
++)
++
++func TestWindowUsage_EmptyTracker(t *testing.T) {
++	tr := session.NewTracker("pro", 5*time.Hour)
++	tokens, cost := tr.WindowUsage()
++	if tokens != 0 || cost != 0 {
++		t.Errorf("empty tracker: expected 0/0, got %d/%.2f", tokens, cost)
++	}
++}
++
++func TestWindowUsage_WithinWindow(t *testing.T) {
++	tr := session.NewTracker("pro", 5*time.Hour)
++
++	now := time.Now()
++	tr.Record(1000, 1.50, now.Add(-1*time.Hour))
++	tr.Record(2000, 3.00, now.Add(-30*time.Minute))
++
++	tokens, cost := tr.WindowUsage()
++	if tokens != 3000 {
++		t.Errorf("expected 3000 tokens, got %d", tokens)
++	}
++	if cost < 4.49 || cost > 4.51 {
++		t.Errorf("expected ~4.50 cost, got %.2f", cost)
++	}
++}
++
++func TestWindowUsage_ExpiredEvicted(t *testing.T) {
++	tr := session.NewTracker("pro", 5*time.Hour)
++
++	now := time.Now()
++	// This one is 6h ago — outside the 5h window
++	tr.Record(5000, 10.00, now.Add(-6*time.Hour))
++	// This one is 1h ago — inside
++	tr.Record(1000, 2.00, now.Add(-1*time.Hour))
++
++	tokens, cost := tr.WindowUsage()
++	if tokens != 1000 {
++		t.Errorf("expected 1000 tokens (old evicted), got %d", tokens)
++	}
++	if cost < 1.99 || cost > 2.01 {
++		t.Errorf("expected ~2.00 cost, got %.2f", cost)
++	}
++}
++
++func TestBurnRate(t *testing.T) {
++	tr := session.NewTracker("pro", 5*time.Hour)
++
++	now := time.Now()
++	// 6000 tokens over the last 60 minutes = 100 tok/min
++	tr.Record(3000, 1.00, now.Add(-60*time.Minute))
++	tr.Record(3000, 1.00, now.Add(-1*time.Minute))
++
++	rate := tr.BurnRate()
++	// Rate should be around 100 tok/min (6000 tokens / 59 minutes)
++	if rate < 80 || rate > 120 {
++		t.Errorf("expected burn rate ~100 tok/min, got %.1f", rate)
++	}
++}
++
++func TestBurnRate_SingleEntry(t *testing.T) {
++	tr := session.NewTracker("pro", 5*time.Hour)
++	tr.Record(1000, 1.00, time.Now())
++
++	rate := tr.BurnRate()
++	if rate != 0 {
++		t.Errorf("single entry should have 0 burn rate, got %.1f", rate)
++	}
++}
++
++func TestTimeToExhaustion(t *testing.T) {
++	tr := session.NewTracker("pro", 5*time.Hour) // pro = 19000 tokens
++
++	now := time.Now()
++	// Already used 9500 tokens, burn rate = ~100 tok/min
++	tr.Record(4750, 1.00, now.Add(-60*time.Minute))
++	tr.Record(4750, 1.00, now.Add(-1*time.Minute))
++
++	ttl := tr.TimeToExhaustion()
++	// remaining = 19000 - 9500 = 9500, rate ~161 tok/min → ~59 min
++	// Allow wide tolerance since this is a rough estimate
++	if ttl <= 0 {
++		t.Errorf("expected positive time to exhaustion, got %v", ttl)
++	}
++	if ttl > 5*time.Hour {
++		t.Errorf("time to exhaustion seems too high: %v", ttl)
++	}
++}
++
++func TestTimeToExhaustion_AlreadyExhausted(t *testing.T) {
++	tr := session.NewTracker("pro", 5*time.Hour) // pro = 19000 tokens
++
++	now := time.Now()
++	// Already used 20000 tokens — over the limit
++	tr.Record(20000, 50.00, now.Add(-1*time.Minute))
++
++	ttl := tr.TimeToExhaustion()
++	if ttl != 0 {
++		t.Errorf("exhausted tracker should return 0, got %v", ttl)
++	}
++}
++
++func TestWindowReset(t *testing.T) {
++	tr := session.NewTracker("pro", 5*time.Hour)
++
++	now := time.Now()
++	tr.Record(1000, 1.00, now.Add(-2*time.Hour))
++
++	reset := tr.WindowReset()
++	// Should be ~3 hours from now (first entry was 2h ago, window is 5h)
++	remaining := time.Until(reset)
++	if remaining < 2*time.Hour || remaining > 4*time.Hour {
++		t.Errorf("expected reset in ~3h, got %v", remaining)
++	}
++}
++
++func TestWindowReset_NoData(t *testing.T) {
++	tr := session.NewTracker("pro", 5*time.Hour)
++	reset := tr.WindowReset()
++	if !reset.IsZero() {
++		t.Errorf("no data should return zero time, got %v", reset)
++	}
++}
+diff --git a/scripts/deploy.sh b/scripts/deploy.sh
+new file mode 100755
+index 0000000..02e0061
+--- /dev/null
++++ b/scripts/deploy.sh
+@@ -0,0 +1,92 @@
++#!/usr/bin/env bash
++set -e
++
++GREEN='\033[0;32m'
++BLUE='\033[0;34m'
++YELLOW='\033[1;33m'
++RED='\033[0;31m'
++NC='\033[0m' # No Color
++
++echo -e "${BLUE}=== AI Flight Dashboard 一键部署脚本 ===${NC}"
++
++if [ "$EUID" -ne 0 ]; then
++  echo -e "${RED}请使用 root 权限 (sudo) 运行此脚本。${NC}"
++  exit 1
++fi
++
++if ! command -v go &> /dev/null; then
++    echo -e "${RED}未检测到 Go 环境，请先安装 Go: https://golang.org/dl/${NC}"
++    exit 1
++fi
++
++echo -e "${YELLOW}1. 编译二进制文件...${NC}"
++go build -o dashboard ./cmd/dashboard
++cp dashboard /usr/local/bin/ai-flight-dashboard
++chmod +x /usr/local/bin/ai-flight-dashboard
++
++echo -e "${YELLOW}2. 选择部署模式:${NC}"
++echo "  1) 主控服务端 (Receiver) - 接收并展示面板"
++echo "  2) 探针端 (Forwarder) - 仅收集当前机器数据并上报"
++read -p "请输入模式编号 [1/2]: " MODE
++
++if [ "$MODE" != "1" ] && [ "$MODE" != "2" ]; then
++    echo -e "${RED}无效的输入。${NC}"
++    exit 1
++fi
++
++read -p "请输入通信密钥 Token (用于接口校验): " TOKEN
++if [ -z "$TOKEN" ]; then
++    echo -e "${RED}Token 不能为空。${NC}"
++    exit 1
++fi
++
++if [ "$MODE" == "1" ]; then
++    read -p "请输入 Web 服务监听端口 [默认 9100]: " PORT
++    PORT=${PORT:-9100}
++    EXEC_START="/usr/local/bin/ai-flight-dashboard --web --port ${PORT} --token \"${TOKEN}\""
++    echo -e "${GREEN}配置为: 主控服务端 (端口: ${PORT})${NC}"
++else
++    HOSTNAME=$(hostname)
++    read -p "请输入本设备名称 Device ID [默认 ${HOSTNAME}]: " DEVICE_ID
++    DEVICE_ID=${DEVICE_ID:-$HOSTNAME}
++    read -p "请输入主控上报地址 (例如 http://192.168.1.100:9100/api/track): " FORWARD_URL
++    if [ -z "$FORWARD_URL" ]; then
++        echo -e "${RED}上报地址不能为空。${NC}"
++        exit 1
++    fi
++    EXEC_START="/usr/local/bin/ai-flight-dashboard --device-id \"${DEVICE_ID}\" --forward-to \"${FORWARD_URL}\" --token \"${TOKEN}\""
++    echo -e "${GREEN}配置为: 探针端 (设备名: ${DEVICE_ID}, 上报至: ${FORWARD_URL})${NC}"
++fi
++
++# 准备 Systemd 服务
++echo -e "${YELLOW}3. 配置 Systemd 服务...${NC}"
++cat <<EOF > /etc/systemd/system/ai-flight-dashboard.service
++[Unit]
++Description=AI Flight Dashboard
++After=network.target
++
++[Service]
++Type=simple
++User=root
++WorkingDirectory=/var/lib/ai-flight-dashboard
++ExecStart=${EXEC_START}
++Restart=on-failure
++RestartSec=5
++
++[Install]
++WantedBy=multi-user.target
++EOF
++
++mkdir -p /var/lib/ai-flight-dashboard
++
++systemctl daemon-reload
++systemctl enable --now ai-flight-dashboard
++
++echo -e "${GREEN}=== 部署完成！===${NC}"
++echo -e "服务已后台运行并设置开机自启。"
++echo -e "你可以使用以下命令查看状态和日志："
++echo -e "  systemctl status ai-flight-dashboard"
++echo -e "  journalctl -fu ai-flight-dashboard"
++if [ "$MODE" == "1" ]; then
++    echo -e "\n请在浏览器访问 http://<你的IP>:${PORT} 查看主控面板。"
++fi

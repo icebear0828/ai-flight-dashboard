@@ -52,7 +52,7 @@ func TestExportCSV(t *testing.T) {
 
 	// Header should contain expected columns
 	header := string(lines[0])
-	for _, col := range []string{"log_timestamp", "source", "model", "input_tokens", "cached_tokens", "output_tokens", "cost_usd", "file_path", "device_id"} {
+	for _, col := range []string{"log_timestamp", "source", "model", "input_tokens", "cached_tokens", "cache_creation_tokens", "output_tokens", "cost_usd", "file_path", "device_id"} {
 		if !bytes.Contains([]byte(header), []byte(col)) {
 			t.Errorf("header missing column %q: %s", col, header)
 		}
@@ -93,9 +93,9 @@ func TestImportCSV(t *testing.T) {
 	}
 	defer database.Close()
 
-	csv := `log_timestamp,source,model,input_tokens,cached_tokens,output_tokens,cost_usd,file_path,device_id
-2026-04-20T10:00:00Z,Claude Code,claude-opus-4-7,1000,500,200,1.50,/a.jsonl,remote-mac
-2026-04-20T10:01:00Z,Gemini CLI,gemini-2.5-pro,800,0,100,0.60,/b.jsonl,remote-mac
+	csv := `log_timestamp,source,model,input_tokens,cached_tokens,cache_creation_tokens,output_tokens,cost_usd,file_path,device_id
+2026-04-20T10:00:00Z,Claude Code,claude-opus-4-7,1000,500,200,200,1.50,/a.jsonl,remote-mac
+2026-04-20T10:01:00Z,Gemini CLI,gemini-2.5-pro,800,0,0,100,0.60,/b.jsonl,remote-mac
 `
 	reader := bytes.NewBufferString(csv)
 	imported, skipped, err := database.ImportCSV(reader)
@@ -110,7 +110,7 @@ func TestImportCSV(t *testing.T) {
 	}
 
 	// Verify data in DB
-	cost, _, _, _, _ := database.QueryPeriodStatsAll("remote-mac")
+	cost, _, _, _, _, _ := database.QueryPeriodStatsAll("remote-mac")
 	if cost < 2.09 || cost > 2.11 {
 		t.Errorf("expected ~2.10 cost, got %f", cost)
 	}
@@ -123,8 +123,8 @@ func TestImportCSV_Dedup(t *testing.T) {
 	}
 	defer database.Close()
 
-	csv := `log_timestamp,source,model,input_tokens,cached_tokens,output_tokens,cost_usd,file_path,device_id
-2026-04-20T10:00:00Z,Claude Code,claude-opus-4-7,1000,500,200,1.50,/a.jsonl,mac
+	csv := `log_timestamp,source,model,input_tokens,cached_tokens,cache_creation_tokens,output_tokens,cost_usd,file_path,device_id
+2026-04-20T10:00:00Z,Claude Code,claude-opus-4-7,1000,500,200,200,1.50,/a.jsonl,mac
 `
 	// Import once
 	reader := bytes.NewBufferString(csv)
@@ -143,7 +143,7 @@ func TestImportCSV_Dedup(t *testing.T) {
 		t.Errorf("expected 1 skipped (dedup), got %d", skipped)
 	}
 
-	cost, _, _, _, _ := database.QueryPeriodStatsAll("")
+	cost, _, _, _, _, _ := database.QueryPeriodStatsAll("")
 	if cost < 1.49 || cost > 1.51 {
 		t.Errorf("expected ~1.50 (no dup), got %f", cost)
 	}
@@ -181,8 +181,8 @@ func TestExportImportRoundTrip(t *testing.T) {
 	}
 
 	// Verify totals match
-	srcCost, _, _, _, _ := srcDB.QueryPeriodStatsAll("")
-	dstCost, _, _, _, _ := dstDB.QueryPeriodStatsAll("")
+	srcCost, _, _, _, _, _ := srcDB.QueryPeriodStatsAll("")
+	dstCost, _, _, _, _, _ := dstDB.QueryPeriodStatsAll("")
 	if srcCost < dstCost-0.01 || srcCost > dstCost+0.01 {
 		t.Errorf("round-trip cost mismatch: src=%f dst=%f", srcCost, dstCost)
 	}

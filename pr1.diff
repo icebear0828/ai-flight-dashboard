@@ -1,0 +1,1269 @@
+diff --git a/go.mod b/go.mod
+index 9efd232..fc3fa6a 100644
+--- a/go.mod
++++ b/go.mod
+@@ -2,21 +2,24 @@ module ai-flight-dashboard
+ 
+ go 1.26.1
+ 
++require (
++	github.com/charmbracelet/bubbletea v1.3.10
++	github.com/charmbracelet/lipgloss v1.1.0
++	github.com/fsnotify/fsnotify v1.9.0
++	github.com/mattn/go-sqlite3 v1.14.42
++)
++
+ require (
+ 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
+-	github.com/charmbracelet/bubbletea v1.3.10 // indirect
+ 	github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc // indirect
+-	github.com/charmbracelet/lipgloss v1.1.0 // indirect
+ 	github.com/charmbracelet/x/ansi v0.10.1 // indirect
+ 	github.com/charmbracelet/x/cellbuf v0.0.13-0.20250311204145-2c3ea96c31dd // indirect
+ 	github.com/charmbracelet/x/term v0.2.1 // indirect
+ 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
+-	github.com/fsnotify/fsnotify v1.9.0 // indirect
+ 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
+ 	github.com/mattn/go-isatty v0.0.20 // indirect
+ 	github.com/mattn/go-localereader v0.0.1 // indirect
+ 	github.com/mattn/go-runewidth v0.0.16 // indirect
+-	github.com/mattn/go-sqlite3 v1.14.42 // indirect
+ 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
+ 	github.com/muesli/cancelreader v0.2.2 // indirect
+ 	github.com/muesli/termenv v0.16.0 // indirect
+diff --git a/go.sum b/go.sum
+index 91a0f4e..4ea8414 100644
+--- a/go.sum
++++ b/go.sum
+@@ -37,6 +37,8 @@ github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=
+ github.com/rivo/uniseg v0.4.7/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUcx88=
+ github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e h1:JVG44RsyaB9T2KIHavMF/ppJZNG9ZpyihvCd0w101no=
+ github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e/go.mod h1:RbqR21r5mrJuqunuUZ/Dhy/avygyECGrLceyNeo4LiM=
++golang.org/x/exp v0.0.0-20220909182711-5c715a9e8561 h1:MDc5xs78ZrZr3HMQugiXOAkSZtfTpbJLDr/lwfgO53E=
++golang.org/x/exp v0.0.0-20220909182711-5c715a9e8561/go.mod h1:cyybsKvd6eL0RnXn6p/Grxp8F5bW7iYuBgsNCOHpMYE=
+ golang.org/x/sys v0.0.0-20210809222454-d867a43fc93e/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+ golang.org/x/sys v0.6.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+ golang.org/x/sys v0.36.0 h1:KVRy2GtZBrk1cBYA7MKu5bEZFxQk4NIDV6RLVcC8o0k=
+diff --git a/internal/calculator/calculator.go b/internal/calculator/calculator.go
+index c8dcfff..da9db43 100644
+--- a/internal/calculator/calculator.go
++++ b/internal/calculator/calculator.go
+@@ -20,11 +20,8 @@ type Calculator struct {
+ 	prices PricingTable
+ }
+ 
+-func New(pricingFilePath string) (*Calculator, error) {
+-	data, err := os.ReadFile(pricingFilePath)
+-	if err != nil {
+-		return nil, fmt.Errorf("read pricing file: %w", err)
+-	}
++// NewFromBytes creates a Calculator from raw JSON pricing data.
++func NewFromBytes(data []byte) (*Calculator, error) {
+ 	var pt PricingTable
+ 	if err := json.Unmarshal(data, &pt); err != nil {
+ 		return nil, fmt.Errorf("unmarshal pricing table: %w", err)
+@@ -32,6 +29,15 @@ func New(pricingFilePath string) (*Calculator, error) {
+ 	return &Calculator{prices: pt}, nil
+ }
+ 
++// New creates a Calculator by reading a pricing JSON file from disk.
++func New(pricingFilePath string) (*Calculator, error) {
++	data, err := os.ReadFile(pricingFilePath)
++	if err != nil {
++		return nil, fmt.Errorf("read pricing file: %w", err)
++	}
++	return NewFromBytes(data)
++}
++
+ // CalculateCost takes the specific token metrics and returns the estimated USD cost.
+ func (c *Calculator) CalculateCost(model string, inputTokens, cachedTokens, outputTokens int) (float64, error) {
+ 	price, ok := c.prices.Models[model]
+@@ -56,3 +62,16 @@ func (c *Calculator) GetModelPrice(model string) (ModelPrice, bool) {
+ 	price, ok := c.prices.Models[model]
+ 	return price, ok
+ }
++
++// CalculateCostNoCaching computes a hypothetical cost where cached tokens are
++// charged at the full input price instead of the discounted cached price.
++func (c *Calculator) CalculateCostNoCaching(model string, inputTokens, cachedTokens, outputTokens int) (float64, error) {
++	price, ok := c.prices.Models[model]
++	if !ok {
++		return 0, nil
++	}
++	// Treat ALL input tokens (including cached) at full input price
++	inputCost := (float64(inputTokens) / 1_000_000.0) * price.InputPricePerM
++	outputCost := (float64(outputTokens) / 1_000_000.0) * price.OutputPricePerM
++	return inputCost + outputCost, nil
++}
+diff --git a/internal/db/sqlite.go b/internal/db/sqlite.go
+index 8d5dd96..fafc6e5 100644
+--- a/internal/db/sqlite.go
++++ b/internal/db/sqlite.go
+@@ -5,7 +5,7 @@ import (
+ 	"time"
+ 
+ 	_ "github.com/mattn/go-sqlite3"
+-	"ai-flight-dashboard/internal/watcher"
++	"ai-flight-dashboard/internal/model"
+ )
+ 
+ type DB struct {
+@@ -55,25 +55,32 @@ func initSchema(conn *sql.DB) error {
+ 		device_id TEXT DEFAULT 'local'
+ 	);
+ 	CREATE INDEX IF NOT EXISTS idx_usage_log_ts ON usage_records(log_timestamp);
++	CREATE INDEX IF NOT EXISTS idx_usage_device ON usage_records(device_id);
+ 
+ 	CREATE TABLE IF NOT EXISTS scan_offsets (
+ 		file_path TEXT PRIMARY KEY,
+ 		byte_offset INTEGER NOT NULL
+ 	);
++
++	CREATE TABLE IF NOT EXISTS known_dirs (
++		dir_path TEXT PRIMARY KEY,
++		last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
++	);
+ 	`
+ 	_, err := conn.Exec(schema)
+ 	if err != nil {
+ 		return err
+ 	}
+ 
+-	// Lightweight migration for existing tables
++	// Lightweight migrations for existing tables
+ 	conn.Exec("ALTER TABLE usage_records ADD COLUMN device_id TEXT DEFAULT 'local'")
++	conn.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_dedup ON usage_records(log_timestamp, file_path, model, input_tokens, cached_tokens, output_tokens, device_id)")
+ 
+ 	return nil
+ }
+ 
+ // InsertUsage inserts a usage record with current timestamp (for live watcher).
+-func (d *DB) InsertUsage(u watcher.TokenUsage, cost float64, deviceID string) error {
++func (d *DB) InsertUsage(u model.TokenUsage, cost float64, deviceID string) error {
+ 	ts := time.Now().UTC()
+ 	if !u.Timestamp.IsZero() {
+ 		ts = u.Timestamp
+@@ -82,9 +89,10 @@ func (d *DB) InsertUsage(u watcher.TokenUsage, cost float64, deviceID string) er
+ }
+ 
+ // InsertUsageWithTime inserts a usage record with an explicit log timestamp.
+-func (d *DB) InsertUsageWithTime(u watcher.TokenUsage, cost float64, logTS time.Time, filePath string, deviceID string) error {
++// Duplicate records (same timestamp, file, model, tokens, device) are silently ignored.
++func (d *DB) InsertUsageWithTime(u model.TokenUsage, cost float64, logTS time.Time, filePath string, deviceID string) error {
+ 	query := `
+-	INSERT INTO usage_records (log_timestamp, source, model, input_tokens, cached_tokens, output_tokens, cost_usd, file_path, device_id)
++	INSERT OR IGNORE INTO usage_records (log_timestamp, source, model, input_tokens, cached_tokens, output_tokens, cost_usd, file_path, device_id)
+ 	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ 	`
+ 	_, err := d.conn.Exec(query, logTS.Format(time.RFC3339), u.Source, u.Model, u.InputTokens, u.CachedTokens, u.OutputTokens, cost, filePath, deviceID)
+@@ -205,6 +213,91 @@ func (d *DB) QueryDevices() ([]string, error) {
+ 	return devices, rows.Err()
+ }
+ 
++// UsageRecord represents a single stored usage record for per-row analysis.
++type UsageRecord struct {
++	Model        string
++	InputTokens  int
++	CachedTokens int
++	OutputTokens int
++	CostUSD      float64
++}
++
++// QueryUsageRecords returns individual usage records since the given time.
++func (d *DB) QueryUsageRecords(since time.Time, deviceID string) ([]UsageRecord, error) {
++	query := `SELECT model, input_tokens, cached_tokens, output_tokens, cost_usd
++		FROM usage_records WHERE log_timestamp >= ?`
++	args := []interface{}{since.Format(time.RFC3339)}
++
++	if deviceID != "" && deviceID != "all" {
++		query += " AND device_id = ?"
++		args = append(args, deviceID)
++	}
++
++	rows, err := d.conn.Query(query, args...)
++	if err != nil {
++		return nil, err
++	}
++	defer rows.Close()
++
++	var records []UsageRecord
++	for rows.Next() {
++		var r UsageRecord
++		if err := rows.Scan(&r.Model, &r.InputTokens, &r.CachedTokens, &r.OutputTokens, &r.CostUSD); err != nil {
++			return nil, err
++		}
++		records = append(records, r)
++	}
++	return records, rows.Err()
++}
++
+ func (d *DB) Close() error {
+ 	return d.conn.Close()
+ }
++
++// UpsertKnownDir records a directory known to contain JSONL files.
++func (d *DB) UpsertKnownDir(dirPath string) error {
++	query := `INSERT INTO known_dirs (dir_path) VALUES (?)
++	ON CONFLICT(dir_path) DO UPDATE SET last_seen = CURRENT_TIMESTAMP`
++	_, err := d.conn.Exec(query, dirPath)
++	return err
++}
++
++// ListKnownDirs returns all cached JSONL directories.
++func (d *DB) ListKnownDirs() ([]string, error) {
++	rows, err := d.conn.Query("SELECT dir_path FROM known_dirs ORDER BY dir_path")
++	if err != nil {
++		return nil, err
++	}
++	defer rows.Close()
++
++	var dirs []string
++	for rows.Next() {
++		var p string
++		if err := rows.Scan(&p); err != nil {
++			return nil, err
++		}
++		dirs = append(dirs, p)
++	}
++	return dirs, rows.Err()
++}
++
++// DeduplicateExisting removes duplicate usage records, keeping the one with the lowest rowid.
++// Returns the number of rows removed.
++func (d *DB) DeduplicateExisting() (int64, error) {
++	query := `
++	DELETE FROM usage_records WHERE id NOT IN (
++		SELECT MIN(id) FROM usage_records
++		GROUP BY log_timestamp, file_path, model, input_tokens, cached_tokens, output_tokens, device_id
++	)`
++	result, err := d.conn.Exec(query)
++	if err != nil {
++		return 0, err
++	}
++	return result.RowsAffected()
++}
++
++// RawExec executes a raw SQL statement. Exposed for testing only.
++func (d *DB) RawExec(query string, args ...interface{}) error {
++	_, err := d.conn.Exec(query, args...)
++	return err
++}
+diff --git a/internal/db/sqlite_test.go b/internal/db/sqlite_test.go
+index 14d73dd..28a33b8 100644
+--- a/internal/db/sqlite_test.go
++++ b/internal/db/sqlite_test.go
+@@ -6,7 +6,7 @@ import (
+ 	"time"
+ 
+ 	"ai-flight-dashboard/internal/db"
+-	"ai-flight-dashboard/internal/watcher"
++	"ai-flight-dashboard/internal/model"
+ )
+ 
+ func TestDBInsert(t *testing.T) {
+@@ -19,7 +19,7 @@ func TestDBInsert(t *testing.T) {
+ 	}
+ 	defer database.Close()
+ 
+-	u := watcher.TokenUsage{
++	u := model.TokenUsage{
+ 		Source:       "Test",
+ 		Model:        "test-model",
+ 		InputTokens:  100,
+@@ -81,7 +81,7 @@ func TestInsertUsageWithTime(t *testing.T) {
+ 	defer database.Close()
+ 
+ 	ts := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
+-	u := watcher.TokenUsage{
++	u := model.TokenUsage{
+ 		Source:       "Claude Code",
+ 		Model:        "claude-opus-4-7",
+ 		InputTokens:  1000,
+@@ -114,15 +114,15 @@ func TestQueryCostSince(t *testing.T) {
+ 	now := time.Now().UTC()
+ 
+ 	// Insert old record (2 days ago)
+-	old := watcher.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50}
++	old := model.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50}
+ 	database.InsertUsageWithTime(old, 1.00, now.Add(-48*time.Hour), "/a.jsonl", "dev1")
+ 
+ 	// Insert recent record (30 min ago)
+-	recent := watcher.TokenUsage{Source: "Claude Code", Model: "m2", InputTokens: 200, OutputTokens: 100}
++	recent := model.TokenUsage{Source: "Claude Code", Model: "m2", InputTokens: 200, OutputTokens: 100}
+ 	database.InsertUsageWithTime(recent, 2.00, now.Add(-30*time.Minute), "/b.jsonl", "dev1")
+ 
+ 	// Insert very recent (5 min ago) on different device
+-	veryRecent := watcher.TokenUsage{Source: "Gemini CLI", Model: "m3", InputTokens: 300, OutputTokens: 150}
++	veryRecent := model.TokenUsage{Source: "Gemini CLI", Model: "m3", InputTokens: 300, OutputTokens: 150}
+ 	database.InsertUsageWithTime(veryRecent, 3.00, now.Add(-5*time.Minute), "/c.jsonl", "dev2")
+ 
+ 	// Last 1 hour, all devices = 5.00
+@@ -160,15 +160,15 @@ func TestQueryStatsSince(t *testing.T) {
+ 	now := time.Now().UTC()
+ 
+ 	database.InsertUsageWithTime(
+-		watcher.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, CachedTokens: 500, OutputTokens: 200},
++		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, CachedTokens: 500, OutputTokens: 200},
+ 		1.50, now.Add(-10*time.Minute), "/a.jsonl", "local",
+ 	)
+ 	database.InsertUsageWithTime(
+-		watcher.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 2000, CachedTokens: 1000, OutputTokens: 400},
++		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 2000, CachedTokens: 1000, OutputTokens: 400},
+ 		3.00, now.Add(-5*time.Minute), "/b.jsonl", "local",
+ 	)
+ 	database.InsertUsageWithTime(
+-		watcher.TokenUsage{Source: "Gemini CLI", Model: "gemini-2.5-pro", InputTokens: 500, CachedTokens: 0, OutputTokens: 100},
++		model.TokenUsage{Source: "Gemini CLI", Model: "gemini-2.5-pro", InputTokens: 500, CachedTokens: 0, OutputTokens: 100},
+ 		0.80, now.Add(-1*time.Minute), "/c.jsonl", "local",
+ 	)
+ 
+@@ -202,11 +202,11 @@ func TestQueryDevices(t *testing.T) {
+ 
+ 	now := time.Now().UTC()
+ 	database.InsertUsageWithTime(
+-		watcher.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50},
++		model.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50},
+ 		1.00, now, "/a.jsonl", "mac-pro",
+ 	)
+ 	database.InsertUsageWithTime(
+-		watcher.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50},
++		model.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50},
+ 		1.00, now, "/b.jsonl", "linux-server",
+ 	)
+ 
+@@ -218,3 +218,135 @@ func TestQueryDevices(t *testing.T) {
+ 		t.Fatalf("expected 2 devices, got %d", len(devices))
+ 	}
+ }
++
++func TestInsertDedup(t *testing.T) {
++	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer database.Close()
++
++	now := time.Now().UTC()
++	u := model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, CachedTokens: 500, OutputTokens: 200}
++
++	// Insert same record twice — second should be silently ignored
++	err = database.InsertUsageWithTime(u, 1.50, now, "/a.jsonl", "local")
++	if err != nil {
++		t.Fatal(err)
++	}
++	err = database.InsertUsageWithTime(u, 1.50, now, "/a.jsonl", "local")
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	// Should only have 1 record, not 2
++	cost, _, _, _, _ := database.QueryPeriodStatsAll("")
++	if cost < 1.49 || cost > 1.51 {
++		t.Errorf("expected ~1.50 (1 record), got %f (dedup failed)", cost)
++	}
++}
++
++func TestInsertDedup_DifferentDevices(t *testing.T) {
++	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer database.Close()
++
++	now := time.Now().UTC()
++	u := model.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50}
++
++	// Same usage but different devices — should both be kept
++	database.InsertUsageWithTime(u, 1.00, now, "/a.jsonl", "mac")
++	database.InsertUsageWithTime(u, 1.00, now, "/a.jsonl", "linux")
++
++	cost, _, _, _, _ := database.QueryPeriodStatsAll("")
++	if cost < 1.99 || cost > 2.01 {
++		t.Errorf("expected ~2.00 (2 different devices), got %f", cost)
++	}
++}
++
++func TestQueryCacheSavings(t *testing.T) {
++	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer database.Close()
++
++	now := time.Now().UTC()
++
++	// Record 1: 1000 input (800 cached), 200 output
++	database.InsertUsageWithTime(
++		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, CachedTokens: 800, OutputTokens: 200},
++		1.50, now.Add(-10*time.Minute), "/a.jsonl", "local",
++	)
++	// Record 2: 500 input (0 cached), 100 output
++	database.InsertUsageWithTime(
++		model.TokenUsage{Source: "Gemini CLI", Model: "gemini-2.5-pro", InputTokens: 500, CachedTokens: 0, OutputTokens: 100},
++		0.80, now.Add(-5*time.Minute), "/b.jsonl", "local",
++	)
++
++	records, err := database.QueryUsageRecords(now.Add(-1*time.Hour), "")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(records) != 2 {
++		t.Fatalf("expected 2 records, got %d", len(records))
++	}
++
++	// Verify fields
++	totalCached := 0
++	totalInput := 0
++	for _, r := range records {
++		totalCached += r.CachedTokens
++		totalInput += r.InputTokens
++	}
++	if totalCached != 800 {
++		t.Errorf("expected total cached 800, got %d", totalCached)
++	}
++	if totalInput != 1500 {
++		t.Errorf("expected total input 1500, got %d", totalInput)
++	}
++}
++
++func TestDeduplicateExisting(t *testing.T) {
++	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer database.Close()
++
++	now := time.Now().UTC()
++	u := model.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, CachedTokens: 0, OutputTokens: 50}
++
++	// Simulate legacy data: drop the unique index, force-insert 3 identical rows, then re-add it.
++	database.RawExec("DROP INDEX IF EXISTS idx_usage_dedup")
++	for i := 0; i < 3; i++ {
++		database.RawExec(
++			"INSERT INTO usage_records (log_timestamp, source, model, input_tokens, cached_tokens, output_tokens, cost_usd, file_path, device_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
++			now.Format(time.RFC3339), u.Source, u.Model, u.InputTokens, u.CachedTokens, u.OutputTokens, 1.00, "/a.jsonl", "local",
++		)
++	}
++
++	// Verify we have 3 records before dedup
++	cost, _, _, _, _ := database.QueryPeriodStatsAll("")
++	if cost < 2.99 {
++		t.Fatalf("setup: expected ~3.00 before dedup, got %f", cost)
++	}
++
++	// Run dedup
++	removed, err := database.DeduplicateExisting()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if removed != 2 {
++		t.Errorf("expected 2 duplicates removed, got %d", removed)
++	}
++
++	// After dedup, should be exactly 1 record
++	cost, _, _, _, _ = database.QueryPeriodStatsAll("")
++	if cost < 0.99 || cost > 1.01 {
++		t.Errorf("expected ~1.00 after dedup, got %f", cost)
++	}
++}
++
+diff --git a/internal/model/config.go b/internal/model/config.go
+new file mode 100644
+index 0000000..995d246
+--- /dev/null
++++ b/internal/model/config.go
+@@ -0,0 +1,47 @@
++package model
++
++import "fmt"
++
++// BillingMode determines how usage is tracked and what alerts are shown.
++type BillingMode string
++
++const (
++	BillingAuto         BillingMode = "auto"
++	BillingSubscription BillingMode = "subscription"
++	BillingAPI          BillingMode = "api"
++)
++
++// ParseBillingMode converts a string to a validated BillingMode.
++func ParseBillingMode(s string) (BillingMode, error) {
++	switch s {
++	case "", "auto":
++		return BillingAuto, nil
++	case "subscription":
++		return BillingSubscription, nil
++	case "api":
++		return BillingAPI, nil
++	default:
++		return "", fmt.Errorf("invalid billing mode %q: must be auto, subscription, or api", s)
++	}
++}
++
++// PlanLimit defines the token and cost caps for a subscription plan.
++type PlanLimit struct {
++	TokenLimit int
++	CostLimit  float64
++}
++
++// PlanLimits maps subscription plan names to their limits.
++var PlanLimits = map[string]PlanLimit{
++	"pro":   {TokenLimit: 19000, CostLimit: 18.00},
++	"max5":  {TokenLimit: 88000, CostLimit: 35.00},
++	"max20": {TokenLimit: 220000, CostLimit: 140.00},
++}
++
++// DashboardConfig holds all runtime configuration parsed from CLI flags.
++type DashboardConfig struct {
++	BillingMode BillingMode
++	Plan        string  // pro, max5, max20 (subscription mode only)
++	BudgetDaily float64 // USD, 0 = disabled (api mode only)
++	DeviceID    string
++}
+diff --git a/internal/model/config_test.go b/internal/model/config_test.go
+new file mode 100644
+index 0000000..3f1da81
+--- /dev/null
++++ b/internal/model/config_test.go
+@@ -0,0 +1,51 @@
++package model_test
++
++import (
++	"testing"
++
++	"ai-flight-dashboard/internal/model"
++)
++
++func TestBillingModeValidation(t *testing.T) {
++	tests := []struct {
++		input string
++		want  model.BillingMode
++		valid bool
++	}{
++		{"auto", model.BillingAuto, true},
++		{"subscription", model.BillingSubscription, true},
++		{"api", model.BillingAPI, true},
++		{"unknown", "", false},
++		{"", model.BillingAuto, true}, // empty defaults to auto
++	}
++
++	for _, tt := range tests {
++		mode, err := model.ParseBillingMode(tt.input)
++		if tt.valid && err != nil {
++			t.Errorf("ParseBillingMode(%q): unexpected error %v", tt.input, err)
++		}
++		if !tt.valid && err == nil {
++			t.Errorf("ParseBillingMode(%q): expected error, got %v", tt.input, mode)
++		}
++		if tt.valid && mode != tt.want {
++			t.Errorf("ParseBillingMode(%q) = %q, want %q", tt.input, mode, tt.want)
++		}
++	}
++}
++
++func TestPlanLimits(t *testing.T) {
++	plans := []string{"pro", "max5", "max20"}
++	for _, p := range plans {
++		limit, ok := model.PlanLimits[p]
++		if !ok {
++			t.Errorf("PlanLimits missing plan %q", p)
++			continue
++		}
++		if limit.TokenLimit <= 0 {
++			t.Errorf("plan %q: token limit should be > 0", p)
++		}
++		if limit.CostLimit <= 0 {
++			t.Errorf("plan %q: cost limit should be > 0", p)
++		}
++	}
++}
+diff --git a/internal/model/usage.go b/internal/model/usage.go
+new file mode 100644
+index 0000000..de77f0e
+--- /dev/null
++++ b/internal/model/usage.go
+@@ -0,0 +1,22 @@
++package model
++
++import "time"
++
++// TokenUsage represents a single AI tool usage event with token counts.
++// Shared by watcher, scanner, db, and tui packages.
++type TokenUsage struct {
++	Source       string    `json:"source"`
++	Model        string    `json:"model"`
++	InputTokens  int       `json:"input_tokens"`
++	CachedTokens int       `json:"cached_tokens"`
++	OutputTokens int       `json:"output_tokens"`
++	Thoughts     int       `json:"thoughts"`
++	Timestamp    time.Time `json:"timestamp"`
++	UUID         string    `json:"uuid"` // for dedup: Claude writes snapshots with same uuid
++}
++
++// TrackPayload is the JSON payload for sending telemetry data to the remote server.
++type TrackPayload struct {
++	DeviceID string     `json:"device_id"`
++	Usage    TokenUsage `json:"usage"`
++}
+diff --git a/internal/scanner/scanner.go b/internal/scanner/scanner.go
+index b4f0b24..e6dead8 100644
+--- a/internal/scanner/scanner.go
++++ b/internal/scanner/scanner.go
+@@ -65,11 +65,11 @@ func (s *Scanner) scanFile(path string) (int, error) {
+ 		return 0, err
+ 	}
+ 
+-	if info.Size() <= offset {
+-		return 0, nil // no new data
+-	}
+ 	if info.Size() < offset {
+-		offset = 0 // file was truncated
++		offset = 0 // file was truncated/rotated, rescan from start
++	}
++	if info.Size() == offset {
++		return 0, nil // no new data
+ 	}
+ 
+ 	if _, err := file.Seek(offset, 0); err != nil {
+@@ -125,5 +125,8 @@ func (s *Scanner) scanFile(path string) (int, error) {
+ 	newOffset, _ := file.Seek(0, 1)
+ 	s.db.SetOffset(path, newOffset)
+ 
++	// Cache this directory for fast startup next time
++	s.db.UpsertKnownDir(filepath.Dir(path))
++
+ 	return count, nil
+ }
+diff --git a/internal/scanner/scanner_test.go b/internal/scanner/scanner_test.go
+index b8dd45e..03314aa 100644
+--- a/internal/scanner/scanner_test.go
++++ b/internal/scanner/scanner_test.go
+@@ -146,3 +146,34 @@ func TestScanAll_SkipsNonUsageLines(t *testing.T) {
+ 		t.Errorf("expected 1 usage line only, got %d", count)
+ 	}
+ }
++
++func TestScanAll_FileTruncation(t *testing.T) {
++	database, _ := db.New(filepath.Join(t.TempDir(), "test.db"))
++	defer database.Close()
++	calc := setupCalc(t)
++
++	logDir := t.TempDir()
++	ts := time.Now().UTC().Format(time.RFC3339Nano)
++	logFile := filepath.Join(logDir, "session.jsonl")
++
++	// Write 3 lines initially
++	line := fmt.Sprintf(
++		`{"timestamp":"%s","message":{"model":"claude-opus-4-7","type":"message","role":"assistant","content":[],"usage":{"input_tokens":500,"cache_read_input_tokens":0,"output_tokens":100}}}`,
++		ts,
++	) + "\n"
++	os.WriteFile(logFile, []byte(line+line+line), 0644)
++
++	s := scanner.New(database, calc, "local")
++	count1, _ := s.ScanAll([]string{logDir})
++	if count1 != 3 {
++		t.Errorf("first scan: expected 3, got %d", count1)
++	}
++
++	// Truncate and write 1 shorter line (simulates log rotation)
++	os.WriteFile(logFile, []byte(line), 0644)
++
++	count2, _ := s.ScanAll([]string{logDir})
++	if count2 != 1 {
++		t.Errorf("after truncation: expected 1 (re-read from start), got %d", count2)
++	}
++}
+diff --git a/internal/tui/hud.go b/internal/tui/hud.go
+index 58df9a7..425ad7c 100644
+--- a/internal/tui/hud.go
++++ b/internal/tui/hud.go
+@@ -5,6 +5,7 @@ import (
+ 	"strings"
+ 	"time"
+ 
++	"ai-flight-dashboard/internal/alert"
+ 	"ai-flight-dashboard/internal/calculator"
+ 	"ai-flight-dashboard/internal/db"
+ 	"ai-flight-dashboard/internal/watcher"
+@@ -22,20 +23,26 @@ type periodCost struct {
+ }
+ 
+ type Model struct {
+-	calc      *calculator.Calculator
+-	watch     *watcher.Watcher
+-	database  *db.DB
+-	usages    []watcher.TokenUsage
+-	totalCost float64
+-	periods   []periodCost
+-	quitting  bool
++	calc       *calculator.Calculator
++	watch      *watcher.Watcher
++	database   *db.DB
++	budget     *alert.BudgetAlert
++	usages     []watcher.TokenUsage
++	totalCost  float64
++	periods    []periodCost
++	budgetStatus *alert.BudgetStatus
++	quitting   bool
++	eventCount int // total events seen (usages slice is capped)
+ }
+ 
+-func NewModel(c *calculator.Calculator, w *watcher.Watcher, d *db.DB) Model {
++const maxLiveEvents = 50 // keep last N events in memory for display
++
++func NewModel(c *calculator.Calculator, w *watcher.Watcher, d *db.DB, ba *alert.BudgetAlert) Model {
+ 	return Model{
+ 		calc:     c,
+ 		watch:    w,
+ 		database: d,
++		budget:   ba,
+ 	}
+ }
+ 
+@@ -60,6 +67,7 @@ func (m Model) refreshPeriods() tea.Cmd {
+ 			return periodsMsg(nil)
+ 		}
+ 		now := time.Now().UTC()
++		// Only query the most useful windows to minimize SQL overhead
+ 		windows := []struct {
+ 			label string
+ 			dur   time.Duration
+@@ -67,10 +75,6 @@ func (m Model) refreshPeriods() tea.Cmd {
+ 			{"1h", 1 * time.Hour},
+ 			{"24h", 24 * time.Hour},
+ 			{"7d", 7 * 24 * time.Hour},
+-			{"30d", 30 * 24 * time.Hour},
+-			{"3mo", 90 * 24 * time.Hour},
+-			{"6mo", 180 * 24 * time.Hour},
+-			{"1y", 365 * 24 * time.Hour},
+ 		}
+ 
+ 		var periods []periodCost
+@@ -86,7 +90,7 @@ func (m Model) refreshPeriods() tea.Cmd {
+ }
+ 
+ func (m Model) tickRefresh() tea.Cmd {
+-	return tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
++	return tea.Tick(1*time.Second, func(t time.Time) tea.Msg {
+ 		return tickMsg{}
+ 	})
+ }
+@@ -101,16 +105,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+ 	case usageMsg:
+ 		u := watcher.TokenUsage(msg)
+ 		m.usages = append(m.usages, u)
++		// Cap memory: keep only last N events
++		if len(m.usages) > maxLiveEvents {
++			m.usages = m.usages[len(m.usages)-maxLiveEvents:]
++		}
++		m.eventCount++
+ 		cost, _ := m.calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.OutputTokens)
+ 		m.totalCost += cost
+ 
++		// Async DB write — don't block the render path
+ 		if m.database != nil {
+-			m.database.InsertUsage(u, cost, m.watch.DeviceID)
++			go m.database.InsertUsage(u, cost, m.watch.DeviceID)
+ 		}
+ 
+ 		return m, tea.Batch(m.waitForUsage(), m.refreshPeriods())
+ 	case periodsMsg:
+ 		m.periods = []periodCost(msg)
++		// Refresh budget status alongside periods
++		if m.budget != nil {
++			s := m.budget.Check()
++			m.budgetStatus = &s
++		}
+ 		return m, m.tickRefresh()
+ 	case tickMsg:
+ 		return m, m.refreshPeriods()
+@@ -144,7 +159,7 @@ func (m Model) View() string {
+ 	}
+ 
+ 	// Live event counter
+-	b.WriteString(fmt.Sprintf(" Live Events: %d", len(m.usages)))
++	b.WriteString(fmt.Sprintf(" Live Events: %d", m.eventCount))
+ 	if len(m.usages) > 0 {
+ 		last := m.usages[len(m.usages)-1]
+ 		b.WriteString(dimStyle.Render(fmt.Sprintf(" │ %s %s │ In:%d Ca:%d Out:%d",
+@@ -152,6 +167,33 @@ func (m Model) View() string {
+ 	}
+ 	b.WriteString("\n")
+ 
+-	b.WriteString(dimStyle.Render("\n [q] quit │ refreshes every 5s") + "\n")
++	// Budget alert bar
++	if m.budgetStatus != nil {
++		var budgetColor string
++		var icon string
++		switch m.budgetStatus.Level {
++		case alert.LevelGreen:
++			budgetColor = "42"
++			icon = "🟢"
++		case alert.LevelYellow:
++			budgetColor = "220"
++			icon = "🟡"
++		case alert.LevelRed:
++			budgetColor = "196"
++			icon = "🔴"
++		}
++		budgetStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(budgetColor))
++		if m.budgetStatus.Exceeded {
++			b.WriteString(budgetStyle.Render(fmt.Sprintf(" ❌ BUDGET EXCEEDED! Spent: $%.2f", m.budgetStatus.Spent)) + "\n")
++		} else {
++			b.WriteString(fmt.Sprintf(" %s Budget: %s  Remaining: %s\n",
++				icon,
++				budgetStyle.Render(fmt.Sprintf("$%.2f (%.0f%%)", m.budgetStatus.Spent, m.budgetStatus.Percent)),
++				costStyle.Render(fmt.Sprintf("$%.2f", m.budgetStatus.Remaining)),
++			))
++		}
++	}
++
++	b.WriteString(dimStyle.Render("\n [q] quit │ refreshes every 1s") + "\n")
+ 	return b.String()
+ }
+diff --git a/internal/watcher/watcher.go b/internal/watcher/watcher.go
+index 562efe1..79e3293 100644
+--- a/internal/watcher/watcher.go
++++ b/internal/watcher/watcher.go
+@@ -10,19 +10,14 @@ import (
+ 	"sync"
+ 	"time"
+ 
++	"ai-flight-dashboard/internal/model"
++
+ 	"github.com/fsnotify/fsnotify"
+ )
+ 
+-type TokenUsage struct {
+-	Source       string
+-	Model        string
+-	InputTokens  int
+-	CachedTokens int
+-	OutputTokens int
+-	Thoughts     int
+-	Timestamp    time.Time
+-	UUID         string // for dedup: Claude writes snapshots with same uuid
+-}
++// TokenUsage is an alias for model.TokenUsage.
++// Retained for backward compatibility with existing consumers.
++type TokenUsage = model.TokenUsage
+ 
+ type Watcher struct {
+ 	fw            *fsnotify.Watcher
+@@ -75,6 +70,14 @@ func (w *Watcher) WatchDirRecursive(dir string) error {
+ 	})
+ }
+ 
++// WatchKnownDirs registers specific directories without recursive walk.
++// Used with cached directory lists for fast startup.
++func (w *Watcher) WatchKnownDirs(dirs []string) {
++	for _, dir := range dirs {
++		w.fw.Add(dir)
++	}
++}
++
+ func (w *Watcher) Close() error {
+ 	close(w.done)
+ 	return w.fw.Close()
+@@ -240,16 +243,21 @@ func parseClaudeUsage(container map[string]interface{}, usage map[string]interfa
+ 	if strings.HasPrefix(model, "gemini") {
+ 		source = "Gemini CLI"
+ 	}
++	// Claude API: input_tokens and cache_read_input_tokens are INDEPENDENT fields.
++	// (Unlike Gemini, where input INCLUDES cached.)
++	// We store InputTokens = input + cache_read so that Calculator's formula
++	// (baseInput = InputTokens - CachedTokens) yields the correct new-input cost.
++	cached := toInt(usage["cache_read_input_tokens"])
+ 	return TokenUsage{
+ 		Source:       source,
+ 		Model:        model,
+-		InputTokens:  toInt(usage["input_tokens"]),
++		InputTokens:  toInt(usage["input_tokens"]) + cached,
+ 		OutputTokens: toInt(usage["output_tokens"]),
+-		CachedTokens: toInt(usage["cache_read_input_tokens"]),
++		CachedTokens: cached,
+ 	}
+ }
+ 
+-// isNoiseRecord filters out synthetic/empty/non-existent model records
++// isNoiseRecord filters out synthetic/empty model records
+ func isNoiseRecord(u TokenUsage) bool {
+ 	if strings.HasPrefix(u.Model, "<") {
+ 		return true // <synthetic> etc
+@@ -257,25 +265,21 @@ func isNoiseRecord(u TokenUsage) bool {
+ 	if u.InputTokens == 0 && u.OutputTokens == 0 && u.CachedTokens == 0 {
+ 		return true
+ 	}
+-	// Non-existent model names that appear in logs
+-	switch u.Model {
+-	case "claude-sonnet-4-20250514", "gemini-3-flash":
+-		return true
+-	}
+ 	return false
+ }
+ 
+ func parseTimestamp(data map[string]interface{}) time.Time {
+ 	if ts, ok := data["timestamp"].(string); ok {
+-		// Try ISO8601 with Z
++		// Try ISO8601 / RFC3339
+ 		if t, err := time.Parse(time.RFC3339, ts); err == nil {
+ 			return t
+ 		}
+-		// Try ISO8601 with milliseconds
++		// Try ISO8601 with milliseconds (e.g. Gemini logs)
+ 		if t, err := time.Parse("2006-01-02T15:04:05.000Z", ts); err == nil {
+ 			return t
+ 		}
+-		if t, err := time.Parse("2006-01-02T15:04:05.999Z", ts); err == nil {
++		// Try RFC3339Nano for nanosecond precision
++		if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+ 			return t
+ 		}
+ 	}
+diff --git a/internal/watcher/watcher_test.go b/internal/watcher/watcher_test.go
+index 3b879ca..7810fbd 100644
+--- a/internal/watcher/watcher_test.go
++++ b/internal/watcher/watcher_test.go
+@@ -37,7 +37,8 @@ func TestWatcher(t *testing.T) {
+ 		if usage.Source != "Claude Code" {
+ 			t.Errorf("Expected source Claude Code, got %s", usage.Source)
+ 		}
+-		if usage.InputTokens != 100 || usage.OutputTokens != 50 || usage.CachedTokens != 20 {
++		// Claude: input_tokens=100 + cache_read=20 => InputTokens=120, CachedTokens=20
++		if usage.InputTokens != 120 || usage.OutputTokens != 50 || usage.CachedTokens != 20 {
+ 			t.Errorf("Tokens parsed incorrectly: %+v", usage)
+ 		}
+ 	case <-time.After(2 * time.Second):
+@@ -94,8 +95,9 @@ func TestRealClaudeCodeFormat(t *testing.T) {
+ 		if usage.Model != "claude-sonnet-4-6" {
+ 			t.Errorf("Expected model claude-sonnet-4-6, got %s", usage.Model)
+ 		}
+-		if usage.InputTokens != 5000 {
+-			t.Errorf("Expected input 5000, got %d", usage.InputTokens)
++		// Claude: input_tokens=5000 + cache_read=10000 => InputTokens=15000
++		if usage.InputTokens != 15000 {
++			t.Errorf("Expected input 15000 (5000+10000), got %d", usage.InputTokens)
+ 		}
+ 		if usage.CachedTokens != 10000 {
+ 			t.Errorf("Expected cached 10000, got %d", usage.CachedTokens)
+@@ -128,6 +130,7 @@ func TestWatchDirRecursive(t *testing.T) {
+ 
+ 	// Write jsonl into a deeply nested subdir (simulates real Claude log location)
+ 	logFile := filepath.Join(projectDir, "abc-uuid.jsonl")
++	// Claude: input=500 + cache_read=100 => InputTokens=600
+ 	claudeLog := `{"type":"assistant", "model": "claude-3-7-sonnet-20250219", "usage": {"input_tokens": 500, "output_tokens": 200, "cache_read_input_tokens": 100}}` + "\n"
+ 	err = os.WriteFile(logFile, []byte(claudeLog), 0644)
+ 	if err != nil {
+@@ -136,8 +139,8 @@ func TestWatchDirRecursive(t *testing.T) {
+ 
+ 	select {
+ 	case usage := <-w.UsageChan:
+-		if usage.InputTokens != 500 || usage.OutputTokens != 200 || usage.CachedTokens != 100 {
+-			t.Errorf("Nested dir tokens wrong: %+v", usage)
++		if usage.InputTokens != 600 || usage.OutputTokens != 200 || usage.CachedTokens != 100 {
++			t.Errorf("Nested dir tokens wrong: %+v (expected InputTokens=600)", usage)
+ 		}
+ 	case <-time.After(2 * time.Second):
+ 		t.Fatal("Timeout: recursive watcher did not pick up nested .jsonl")
+@@ -145,6 +148,7 @@ func TestWatchDirRecursive(t *testing.T) {
+ 
+ 	// Also write into subagents/ dir
+ 	subLog := filepath.Join(subagentDir, "agent-xxx.jsonl")
++	// Claude: input=300 + cache_read=0 => InputTokens=300
+ 	subEntry := `{"type":"assistant", "model": "claude-3-7-sonnet-20250219", "usage": {"input_tokens": 300, "output_tokens": 100, "cache_read_input_tokens": 0}}` + "\n"
+ 	err = os.WriteFile(subLog, []byte(subEntry), 0644)
+ 	if err != nil {
+@@ -181,6 +185,7 @@ func TestWatchDirRecursive_NewSubdir(t *testing.T) {
+ 	time.Sleep(200 * time.Millisecond)
+ 
+ 	logFile := filepath.Join(newSessionDir, "session.jsonl")
++	// Claude: input=999 + cache_read=0 => InputTokens=999
+ 	entry := `{"type":"assistant", "model": "claude-3-7-sonnet-20250219", "usage": {"input_tokens": 999, "output_tokens": 111, "cache_read_input_tokens": 0}}` + "\n"
+ 	err = os.WriteFile(logFile, []byte(entry), 0644)
+ 	if err != nil {
+diff --git a/internal/web/embed.go b/internal/web/embed.go
+index 1c4ec58..8c0241e 100644
+--- a/internal/web/embed.go
++++ b/internal/web/embed.go
+@@ -2,6 +2,5 @@ package web
+ 
+ import "embed"
+ 
+-//go:embed dist/*
+-//go:embed dist/**/*
++//go:embed all:dist
+ var StaticFiles embed.FS
+diff --git a/internal/web/handler.go b/internal/web/handler.go
+index 34c37e6..49614cd 100644
+--- a/internal/web/handler.go
++++ b/internal/web/handler.go
+@@ -9,6 +9,7 @@ import (
+ 
+ 	"ai-flight-dashboard/internal/calculator"
+ 	"ai-flight-dashboard/internal/db"
++	"ai-flight-dashboard/internal/model"
+ )
+ 
+ type ModelStats struct {
+@@ -47,12 +48,53 @@ type StatsResponse struct {
+ 	Devices []string      `json:"devices"`
+ }
+ 
+-func NewHandler(database *db.DB, calc *calculator.Calculator) http.Handler {
++type CacheSavingsResponse struct {
++	ActualCost       float64 `json:"actual_cost"`
++	HypotheticalCost float64 `json:"hypothetical_cost"`
++	Saved            float64 `json:"saved"`
++	SavedPercent     float64 `json:"saved_percent"`
++	CacheHitRate     float64 `json:"cache_hit_rate"`
++}
++
++func NewHandler(database *db.DB, calc *calculator.Calculator, token string) http.Handler {
+ 	mux := http.NewServeMux()
++
++	authMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
++		return func(w http.ResponseWriter, r *http.Request) {
++			if token != "" {
++				authHeader := r.Header.Get("Authorization")
++				if authHeader != "Bearer "+token {
++					http.Error(w, "Unauthorized", http.StatusUnauthorized)
++					return
++				}
++			}
++			next(w, r)
++		}
++	}
++
+ 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
+ 		handleStats(w, r, database, calc)
+ 	})
+ 
++	mux.HandleFunc("/api/cache-savings", func(w http.ResponseWriter, r *http.Request) {
++		handleCacheSavings(w, r, database, calc)
++	})
++
++	mux.HandleFunc("/api/track", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
++		if r.Method != http.MethodPost {
++			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
++			return
++		}
++		var payload model.TrackPayload
++		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
++			http.Error(w, "Bad request", http.StatusBadRequest)
++			return
++		}
++		cost, _ := calc.CalculateCost(payload.Usage.Model, payload.Usage.InputTokens, payload.Usage.CachedTokens, payload.Usage.OutputTokens)
++		database.InsertUsage(payload.Usage, cost, payload.DeviceID)
++		w.WriteHeader(http.StatusCreated)
++	}))
++
+ 	// Serve static files from the "dist" directory embedded in the binary
+ 	staticFS, err := fs.Sub(StaticFiles, "dist")
+ 	if err != nil {
+@@ -136,3 +178,45 @@ func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *
+ 		Devices: devices,
+ 	})
+ }
++
++func handleCacheSavings(w http.ResponseWriter, r *http.Request, database *db.DB, calc *calculator.Calculator) {
++	deviceID := r.URL.Query().Get("device")
++
++	// Query all records (no time filter = all time)
++	records, err := database.QueryUsageRecords(time.Time{}, deviceID)
++	if err != nil {
++		http.Error(w, "query error", http.StatusInternalServerError)
++		return
++	}
++
++	var actualTotal, hypoTotal float64
++	var totalInput, totalCached int
++
++	for _, rec := range records {
++		actual, _ := calc.CalculateCost(rec.Model, rec.InputTokens, rec.CachedTokens, rec.OutputTokens)
++		hypo, _ := calc.CalculateCostNoCaching(rec.Model, rec.InputTokens, rec.CachedTokens, rec.OutputTokens)
++		actualTotal += actual
++		hypoTotal += hypo
++		totalInput += rec.InputTokens
++		totalCached += rec.CachedTokens
++	}
++
++	saved := hypoTotal - actualTotal
++	savedPct := 0.0
++	if hypoTotal > 0 {
++		savedPct = (saved / hypoTotal) * 100
++	}
++	hitRate := 0.0
++	if totalInput > 0 {
++		hitRate = (float64(totalCached) / float64(totalInput)) * 100
++	}
++
++	w.Header().Set("Content-Type", "application/json")
++	json.NewEncoder(w).Encode(CacheSavingsResponse{
++		ActualCost:       actualTotal,
++		HypotheticalCost: hypoTotal,
++		Saved:            saved,
++		SavedPercent:     savedPct,
++		CacheHitRate:     hitRate,
++	})
++}
+diff --git a/internal/web/handler_test.go b/internal/web/handler_test.go
+index 03f2f5c..324091f 100644
+--- a/internal/web/handler_test.go
++++ b/internal/web/handler_test.go
+@@ -6,12 +6,13 @@ import (
+ 	"net/http/httptest"
+ 	"os"
+ 	"path/filepath"
++	"strings"
+ 	"testing"
+ 	"time"
+ 
+ 	"ai-flight-dashboard/internal/calculator"
+ 	"ai-flight-dashboard/internal/db"
+-	"ai-flight-dashboard/internal/watcher"
++	"ai-flight-dashboard/internal/model"
+ 	"ai-flight-dashboard/internal/web"
+ )
+ 
+@@ -36,20 +37,20 @@ func TestAPIStats(t *testing.T) {
+ 
+ 	// Claude records
+ 	database.InsertUsageWithTime(
+-		watcher.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, CachedTokens: 5000, OutputTokens: 200},
++		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, CachedTokens: 5000, OutputTokens: 200},
+ 		1.50, now.Add(-30*time.Minute), "/a.jsonl", "local",
+ 	)
+ 	database.InsertUsageWithTime(
+-		watcher.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 2000, CachedTokens: 8000, OutputTokens: 400},
++		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 2000, CachedTokens: 8000, OutputTokens: 400},
+ 		3.00, now.Add(-2*time.Hour), "/b.jsonl", "local",
+ 	)
+ 	// Gemini records
+ 	database.InsertUsageWithTime(
+-		watcher.TokenUsage{Source: "Gemini CLI", Model: "gemini-2.5-pro", InputTokens: 500, CachedTokens: 0, OutputTokens: 100},
++		model.TokenUsage{Source: "Gemini CLI", Model: "gemini-2.5-pro", InputTokens: 500, CachedTokens: 0, OutputTokens: 100},
+ 		0.80, now.Add(-10*time.Minute), "/c.jsonl", "local",
+ 	)
+ 
+-	handler := web.NewHandler(database, calc)
++	handler := web.NewHandler(database, calc, "")
+ 	srv := httptest.NewServer(handler)
+ 	defer srv.Close()
+ 
+@@ -103,7 +104,7 @@ func TestStaticPage(t *testing.T) {
+ 	database, calc := setup(t)
+ 	defer database.Close()
+ 
+-	handler := web.NewHandler(database, calc)
++	handler := web.NewHandler(database, calc, "")
+ 	srv := httptest.NewServer(handler)
+ 	defer srv.Close()
+ 
+@@ -115,3 +116,91 @@ func TestStaticPage(t *testing.T) {
+ 		t.Fatalf("expected 200 for /, got %d", resp.StatusCode)
+ 	}
+ }
++
++func TestAPITrack(t *testing.T) {
++	database, calc := setup(t)
++	defer database.Close()
++
++	handler := web.NewHandler(database, calc, "secret-token")
++	srv := httptest.NewServer(handler)
++	defer srv.Close()
++
++	payload := `{"device_id":"remote-test","usage":{"source":"Claude Code","model":"claude-opus-4-7","input_tokens":100,"output_tokens":50}}`
++
++	// Test unauthorized
++	req, _ := http.NewRequest("POST", srv.URL+"/api/track", nil)
++	resp, err := http.DefaultClient.Do(req)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if resp.StatusCode != http.StatusUnauthorized {
++		t.Fatalf("expected 401, got %d", resp.StatusCode)
++	}
++	resp.Body.Close()
++
++	// Test authorized
++	req, _ = http.NewRequest("POST", srv.URL+"/api/track", strings.NewReader(payload))
++	req.Header.Set("Authorization", "Bearer secret-token")
++	req.Header.Set("Content-Type", "application/json")
++	resp, err = http.DefaultClient.Do(req)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if resp.StatusCode != http.StatusCreated {
++		t.Fatalf("expected 201, got %d", resp.StatusCode)
++	}
++	resp.Body.Close()
++
++	// Verify it was inserted
++	total, _, _, _, _ := database.QueryPeriodStatsAll("remote-test")
++	if total == 0 {
++		t.Fatal("expected cost to be calculated and inserted")
++	}
++}
++
++func TestAPICacheSavings(t *testing.T) {
++	database, calc := setup(t)
++	defer database.Close()
++
++	now := time.Now().UTC()
++
++	// Claude: 1000 input (800 cached), 200 output
++	database.InsertUsageWithTime(
++		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, CachedTokens: 800, OutputTokens: 200},
++		0, now.Add(-10*time.Minute), "/a.jsonl", "local",
++	)
++	// Gemini: 500 input (0 cached), 100 output
++	database.InsertUsageWithTime(
++		model.TokenUsage{Source: "Gemini CLI", Model: "gemini-2.5-pro", InputTokens: 500, CachedTokens: 0, OutputTokens: 100},
++		0, now.Add(-5*time.Minute), "/b.jsonl", "local",
++	)
++
++	handler := web.NewHandler(database, calc, "")
++	srv := httptest.NewServer(handler)
++	defer srv.Close()
++
++	resp, err := http.Get(srv.URL + "/api/cache-savings")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer resp.Body.Close()
++
++	if resp.StatusCode != 200 {
++		t.Fatalf("expected 200, got %d", resp.StatusCode)
++	}
++
++	var data web.CacheSavingsResponse
++	json.NewDecoder(resp.Body).Decode(&data)
++
++	// actual_cost: calculator computes real cost with cached pricing
++	// hypothetical_cost: calculator computes cost as if cached_tokens were charged at full input price
++	if data.HypotheticalCost <= data.ActualCost {
++		t.Errorf("hypothetical should exceed actual: hypo=%f actual=%f", data.HypotheticalCost, data.ActualCost)
++	}
++	if data.Saved < 0 {
++		t.Errorf("saved should be >= 0, got %f", data.Saved)
++	}
++	if data.CacheHitRate < 0 || data.CacheHitRate > 100 {
++		t.Errorf("cache hit rate should be 0-100, got %f", data.CacheHitRate)
++	}
++}
+diff --git a/stats/pricing_table.json b/stats/pricing_table.json
+index ca2cf25..824af2f 100644
+--- a/stats/pricing_table.json
++++ b/stats/pricing_table.json
+@@ -20,6 +20,11 @@
+       "cached_price_per_m": 0.019,
+       "output_price_per_m": 0.30
+     },
++    "gemini-3.1-pro-preview": {
++      "input_price_per_m": 1.25,
++      "cached_price_per_m": 0.31,
++      "output_price_per_m": 5.00
++    },
+     "claude-3-7-sonnet-20250219": {
+       "input_price_per_m": 3.00,
+       "cached_price_per_m": 0.30,
