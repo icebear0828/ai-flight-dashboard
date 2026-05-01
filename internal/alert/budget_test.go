@@ -1,26 +1,16 @@
 package alert_test
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 
 	"ai-flight-dashboard/internal/alert"
-	"ai-flight-dashboard/internal/db"
 	"ai-flight-dashboard/internal/model"
+	"ai-flight-dashboard/internal/testutil"
 )
 
-func setupDB(t *testing.T) *db.DB {
-	t.Helper()
-	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return database
-}
-
 func TestBudgetCheck_UnderBudget(t *testing.T) {
-	database := setupDB(t)
+	database := testutil.NewTestDB(t)
 	defer database.Close()
 
 	now := time.Now().UTC()
@@ -47,7 +37,7 @@ func TestBudgetCheck_UnderBudget(t *testing.T) {
 }
 
 func TestBudgetCheck_Warning(t *testing.T) {
-	database := setupDB(t)
+	database := testutil.NewTestDB(t)
 	defer database.Close()
 
 	now := time.Now().UTC()
@@ -66,7 +56,7 @@ func TestBudgetCheck_Warning(t *testing.T) {
 }
 
 func TestBudgetCheck_Critical(t *testing.T) {
-	database := setupDB(t)
+	database := testutil.NewTestDB(t)
 	defer database.Close()
 
 	now := time.Now().UTC()
@@ -85,7 +75,7 @@ func TestBudgetCheck_Critical(t *testing.T) {
 }
 
 func TestBudgetCheck_Exceeded(t *testing.T) {
-	database := setupDB(t)
+	database := testutil.NewTestDB(t)
 	defer database.Close()
 
 	now := time.Now().UTC()
@@ -107,7 +97,7 @@ func TestBudgetCheck_Exceeded(t *testing.T) {
 }
 
 func TestBudgetCheck_ZeroBudget(t *testing.T) {
-	database := setupDB(t)
+	database := testutil.NewTestDB(t)
 	defer database.Close()
 
 	// $0 budget = disabled, should always be green
