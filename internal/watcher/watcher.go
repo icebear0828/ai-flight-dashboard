@@ -325,6 +325,7 @@ func toInt(v interface{}) int {
 }
 
 func ExtractProjectName(path string) string {
+	path = filepath.ToSlash(path) // Normalize to forward slashes for Windows support
 	parts := strings.Split(path, ".claude/projects/")
 	if len(parts) > 1 {
 		folderName := strings.Split(parts[1], "/")[0]
