@@ -12,7 +12,7 @@ import (
 
 var csvHeader = []string{
 	"log_timestamp", "source", "model",
-	"input_tokens", "cached_tokens", "output_tokens",
+	"input_tokens", "cached_tokens", "cache_creation_tokens", "output_tokens",
 	"cost_usd", "file_path", "device_id",
 }
 
@@ -20,7 +20,7 @@ var csvHeader = []string{
 // If deviceID is non-empty and not "all", only that device's records are exported.
 // Returns the number of rows written.
 func (d *DB) ExportCSV(w io.Writer, deviceID string) (int, error) {
-	query := `SELECT log_timestamp, source, model, input_tokens, cached_tokens, output_tokens, cost_usd, file_path, device_id
+	query := `SELECT log_timestamp, source, model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd, file_path, device_id
 		FROM usage_records WHERE 1=1`
 	var args []interface{}
 
@@ -44,14 +44,14 @@ func (d *DB) ExportCSV(w io.Writer, deviceID string) (int, error) {
 	count := 0
 	for rows.Next() {
 		var logTS, source, mdl, filePath, devID string
-		var inTok, cacheTok, outTok int
+		var inTok, cacheTok, cacheCreationTok, outTok int
 		var cost float64
-		if err := rows.Scan(&logTS, &source, &mdl, &inTok, &cacheTok, &outTok, &cost, &filePath, &devID); err != nil {
+		if err := rows.Scan(&logTS, &source, &mdl, &inTok, &cacheTok, &cacheCreationTok, &outTok, &cost, &filePath, &devID); err != nil {
 			return count, err
 		}
 		record := []string{
 			logTS, source, mdl,
-			strconv.Itoa(inTok), strconv.Itoa(cacheTok), strconv.Itoa(outTok),
+			strconv.Itoa(inTok), strconv.Itoa(cacheTok), strconv.Itoa(cacheCreationTok), strconv.Itoa(outTok),
 			fmt.Sprintf("%.6f", cost), filePath, devID,
 		}
 		if err := cw.Write(record); err != nil {
@@ -99,6 +99,7 @@ func (d *DB) ImportCSV(r io.Reader) (int, int, error) {
 		mdl := record[colIdx["model"]]
 		inTok, _ := strconv.Atoi(record[colIdx["input_tokens"]])
 		cacheTok, _ := strconv.Atoi(record[colIdx["cached_tokens"]])
+		cacheCreationTok, _ := strconv.Atoi(record[colIdx["cache_creation_tokens"]])
 		outTok, _ := strconv.Atoi(record[colIdx["output_tokens"]])
 		cost, _ := strconv.ParseFloat(record[colIdx["cost_usd"]], 64)
 		filePath := record[colIdx["file_path"]]
@@ -115,11 +116,12 @@ func (d *DB) ImportCSV(r io.Reader) (int, int, error) {
 		}
 
 		u := model.TokenUsage{
-			Source:       source,
-			Model:        mdl,
-			InputTokens:  inTok,
-			CachedTokens: cacheTok,
-			OutputTokens: outTok,
+			Source:              source,
+			Model:               mdl,
+			InputTokens:         inTok,
+			CachedTokens:        cacheTok,
+			CacheCreationTokens: cacheCreationTok,
+			OutputTokens:        outTok,
 		}
 
 		var tsStr string
@@ -130,9 +132,9 @@ func (d *DB) ImportCSV(r io.Reader) (int, int, error) {
 		}
 
 		query := `INSERT OR IGNORE INTO usage_records
-			(log_timestamp, source, model, input_tokens, cached_tokens, output_tokens, cost_usd, file_path, device_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-		result, err := d.conn.Exec(query, tsStr, u.Source, u.Model, u.InputTokens, u.CachedTokens, u.OutputTokens, cost, filePath, devID)
+			(log_timestamp, source, model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd, file_path, device_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		result, err := d.conn.Exec(query, tsStr, u.Source, u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens, cost, filePath, devID)
 		if err != nil {
 			return imported, skipped, fmt.Errorf("insert row %d: %w", imported+skipped+1, err)
 		}
