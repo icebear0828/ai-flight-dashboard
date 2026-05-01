@@ -15,7 +15,7 @@ AI Flight Dashboard is a **TUI + Web dual-mode tool** built in Go. Using a **"pa
 - 💾 **SQLite Persistence**: All captured usage is automatically upserted into `stats/usage.db` for long-term analysis.
 - 🌐 **Web Dashboard**: Start an HTTP server with `--web` to view a React-powered visual dashboard.
 - 📡 **LAN P2P Sharing**: Enable zero-config decentralized UDP multicast with `--lan` to instantly share live token usage across local machines.
-- 📦 **Fat Server Distribution**: Cross-platform binaries embedded natively. Other machines can join simply by running `curl -sL http://<master-ip>:9100/install.sh | bash` to auto-fetch the correct OS version.
+- 📦 **Fat Server Distribution**: Cross-platform binaries embedded natively. Other machines can join simply by running `curl -sL http://<master-ip>:19100/install.sh | bash` to auto-fetch the correct OS version.
 - 🛰️ **Remote Telemetry**: Use `--forward-to` to aggregate logs from multiple remote server probes into a single control panel.
 
 For complete configuration and cluster deployment guides, please refer to the [📚 Usage Guide (docs/usage.md)](docs/usage.md).
@@ -42,7 +42,7 @@ go build -o dashboard ./cmd/dashboard
 # TUI mode — keep it in a terminal sidebar or Tmux split
 ./dashboard
 
-# Web mode — open http://localhost:9100 in your browser
+# Web mode — open http://localhost:19100 in your browser
 ./dashboard --web
 
 # Custom port + device ID

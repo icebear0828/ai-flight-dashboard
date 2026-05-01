@@ -26,7 +26,7 @@ WORKDIR /app
 COPY --from=builder /app/dashboard .
 RUN mkdir -p stats
 
-EXPOSE 9100
+EXPOSE 19100
 
 # Default: web dashboard mode with LAN discovery
 ENTRYPOINT ["./dashboard"]

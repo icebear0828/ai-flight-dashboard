@@ -11,9 +11,25 @@ type AppConfig struct {
 	ExtraWatchDirs []string `json:"extra_watch_dirs"`
 }
 
-func GetConfigPath() string {
+// customDir allows overriding the data directory at runtime.
+var customDir string
+
+// SetDataDir overrides the default ~/.ai-flight-dashboard data directory.
+func SetDataDir(dir string) {
+	customDir = dir
+}
+
+// GetDataDir returns the application data directory.
+func GetDataDir() string {
+	if customDir != "" {
+		return customDir
+	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".ai-flight-dashboard", "config.json")
+	return filepath.Join(home, ".ai-flight-dashboard")
+}
+
+func GetConfigPath() string {
+	return filepath.Join(GetDataDir(), "config.json")
 }
 
 func LoadConfig() (*AppConfig, error) {

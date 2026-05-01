@@ -49,8 +49,8 @@ func main() {
 	// Parse CLI flags
 	webMode := flag.Bool("web", false, "Run in web dashboard mode")
 	tuiMode := flag.Bool("tui", false, "Run in legacy Terminal UI mode")
-	port := flag.String("port", "9100", "HTTP port for web mode")
-	forwardTo := flag.String("forward-to", "", "Forward local usage to remote dashboard URL (e.g. http://server:9100/api/track)")
+	port := flag.String("port", "19100", "HTTP port for web mode")
+	forwardTo := flag.String("forward-to", "", "Forward local usage to remote dashboard URL (e.g. http://server:19100/api/track)")
 	token := flag.String("token", "", "Authorization token for web mode or forwarder")
 	defaultDevice, _ := os.Hostname()
 	if defaultDevice == "" {
@@ -62,8 +62,9 @@ func main() {
 	budgetDaily := flag.Float64("budget-daily", 0, "Daily budget limit in USD (only for api mode, 0=disabled)")
 	syncMode := flag.String("sync-mode", "poll", "Sync mode: poll (default), fsnotify, once")
 	lanMode := flag.Bool("lan", false, "Enable UDP Multicast LAN discovery and broadcast")
+	dataDir := flag.String("data-dir", "", "Data directory for database and config (default: ~/.ai-flight-dashboard)")
 	flag.BoolVar(webMode, "w", false, "Run in web dashboard mode (shorthand)")
-	flag.StringVar(port, "p", "9100", "HTTP port for web mode (shorthand)")
+	flag.StringVar(port, "p", "19100", "HTTP port for web mode (shorthand)")
 	flag.Parse()
 
 	// Default to GUI mode unless another mode is explicitly requested
@@ -145,8 +146,10 @@ func main() {
 	}
 
 	// Initialize Database
-	homeDir, _ := os.UserHomeDir()
-	appDataDir := filepath.Join(homeDir, ".ai-flight-dashboard")
+	if *dataDir != "" {
+		config.SetDataDir(*dataDir)
+	}
+	appDataDir := config.GetDataDir()
 	statsDir := filepath.Join(appDataDir, "stats")
 	os.MkdirAll(statsDir, 0755)
 	

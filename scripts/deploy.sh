@@ -41,15 +41,15 @@ if [ -z "$TOKEN" ]; then
 fi
 
 if [ "$MODE" == "1" ]; then
-    read -p "请输入 Web 服务监听端口 [默认 9100]: " PORT
-    PORT=${PORT:-9100}
+    read -p "请输入 Web 服务监听端口 [默认 19100]: " PORT
+    PORT=${PORT:-19100}
     EXEC_START="/usr/local/bin/ai-flight-dashboard --web --port ${PORT}"
     echo -e "${GREEN}配置为: 主控服务端 (端口: ${PORT})${NC}"
 else
     HOSTNAME=$(hostname)
     read -p "请输入本设备名称 Device ID [默认 ${HOSTNAME}]: " DEVICE_ID
     DEVICE_ID=${DEVICE_ID:-$HOSTNAME}
-    read -p "请输入主控上报地址 (例如 http://192.168.1.100:9100/api/track): " FORWARD_URL
+    read -p "请输入主控上报地址 (例如 http://192.168.1.100:19100/api/track): " FORWARD_URL
     if [ -z "$FORWARD_URL" ]; then
         echo -e "${RED}上报地址不能为空。${NC}"
         exit 1

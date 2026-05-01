@@ -185,7 +185,7 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 	mux.HandleFunc("/install.sh", func(w http.ResponseWriter, r *http.Request) {
 		host := r.Host
 		if host == "" {
-			host = "localhost:9100"
+			host = "localhost:19100"
 		}
 		script := fmt.Sprintf("#!/bin/bash\n"+
 			"OS=$(uname -s | tr '[:upper:]' '[:lower:]')\n"+

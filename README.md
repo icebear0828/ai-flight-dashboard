@@ -15,7 +15,7 @@ AI Flight Dashboard 是一个基于 Go 语言构建的 **命令行 UI (TUI) + We
 - 💾 **SQLite 数据脱水**: 所有捕获的消耗流会自动 upsert 进入 `stats/usage.db`，沉淀长期分析数据。
 - 🌐 **Web 看板模式**: 通过 `--web` 启动 HTTP 服务，在浏览器中查看 React 驱动的可视化仪表盘。
 - 📡 **局域网 P2P 互联**: 通过 `--lan` 启用纯去中心化 UDP 组播，免配置实现局域网内多台电脑 Token 实时共享与探测。
-- 📦 **Fat Server 跨平台分发**: 提供内嵌式多端二进制分发。新设备只需执行 `curl -sL http://主节点IP:9100/install.sh | bash` 即可自适应拉取正确版本的本体并加入雷达网络。
+- 📦 **Fat Server 跨平台分发**: 提供内嵌式多端二进制分发。新设备只需执行 `curl -sL http://主节点IP:19100/install.sh | bash` 即可自适应拉取正确版本的本体并加入雷达网络。
 - 🛰️ **远程集群监控**: 通过 `--forward-to` 将多个服务器探针的日志汇聚到统一主控面板。
 
 ## 🚀 快速体验
@@ -42,7 +42,7 @@ go build -o dashboard ./cmd/dashboard
 # TUI 模式 — 放在终端侧栏或 Tmux 分屏
 ./dashboard
 
-# Web 模式 — 浏览器访问 http://localhost:9100
+# Web 模式 — 浏览器访问 http://localhost:19100
 ./dashboard --web
 
 # 自定义端口 + 设备标识
