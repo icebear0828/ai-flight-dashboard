@@ -9,6 +9,7 @@ import (
 	"ai-flight-dashboard/internal/config"
 	"ai-flight-dashboard/internal/db"
 	"ai-flight-dashboard/internal/model"
+	"ai-flight-dashboard/internal/updater"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -233,3 +234,16 @@ func (a *App) GetConfig() (*config.AppConfig, error) {
 func (a *App) SaveConfig(cfg *config.AppConfig) error {
 	return config.SaveConfig(cfg)
 }
+
+// --- Updater ---
+
+// CheckForUpdates checks for a new release
+func (a *App) CheckForUpdates(currentVersion string) (*updater.Release, error) {
+	return updater.CheckForUpdates(currentVersion)
+}
+
+// ApplyUpdate attempts to apply the OTA update
+func (a *App) ApplyUpdate() error {
+	return updater.ApplyUpdate()
+}
+

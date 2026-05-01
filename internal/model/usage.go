@@ -20,5 +20,6 @@ type TokenUsage struct {
 // TrackPayload is the JSON payload for sending telemetry data to the remote server.
 type TrackPayload struct {
 	DeviceID string     `json:"device_id"`
+	Type     string     `json:"type,omitempty"` // "ping" or empty/"track"
 	Usage    TokenUsage `json:"usage"`
 }
