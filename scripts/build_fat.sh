@@ -12,10 +12,10 @@ rm -f dist-bin/*
 TMP_DIR=$(mktemp -d)
 
 echo "Compiling for macOS (ARM64)..."
-GOOS=darwin GOARCH=arm64 go build -o $TMP_DIR/dashboard-darwin-arm64 ./cmd/dashboard
+CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -o $TMP_DIR/dashboard-darwin-arm64 ./cmd/dashboard
 
 echo "Compiling for macOS (AMD64)..."
-GOOS=darwin GOARCH=amd64 go build -o $TMP_DIR/dashboard-darwin-amd64 ./cmd/dashboard
+CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -o $TMP_DIR/dashboard-darwin-amd64 ./cmd/dashboard
 
 echo "Compiling for Linux (AMD64)..."
 GOOS=linux GOARCH=amd64 go build -o $TMP_DIR/dashboard-linux-amd64 ./cmd/dashboard
