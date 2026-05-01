@@ -5,9 +5,9 @@
 ---
 
 ## 阶段一：Wails/Tauri 架构融合 (GUI 化)
-- [ ] **技术栈融合**：引入 [Wails](https://wails.io/) 框架，将现有的 Go 核心侦听服务与 React 前端无缝缝合为原生桌面应用。
-- [ ] **免终端双击启动**：打包输出原生格式包（macOS `.dmg`，Windows `.exe` 安装程序，Linux `.AppImage`）。
-- [ ] **系统托盘常驻 (System Tray)**：
+- [x] **技术栈融合**：引入 [Wails](https://wails.io/) 框架，将现有的 Go 核心侦听服务与 React 前端无缝缝合为原生桌面应用。
+- [ ] **免终端双击启动**：打包输出原生格式包（macOS `.dmg`，Windows `.exe` 安装程序，Linux `.AppImage`）。 *(Phase 4 完善)*
+- [x] **系统托盘常驻 (System Tray)**：
   - 应用启动后默认隐藏在 Mac 的顶部菜单栏 / Windows 任务栏右下角。
   - 点击托盘图标即可随时弹出仪表盘面板查看实时消耗。
   - 支持设置“开机自启动”，让后台探针无感运行。

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
 
@@ -37,6 +38,18 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, token string, dist
 
 	mux.HandleFunc("/api/cache-savings", func(w http.ResponseWriter, r *http.Request) {
 		handleCacheSavings(w, r, database, calc)
+	})
+
+	mux.HandleFunc("/api/pricing", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			handleGetPricing(w, r, calc)
+		} else if r.Method == http.MethodPut || r.Method == http.MethodPost {
+			authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+				handlePutPricing(w, r, calc)
+			})(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
 	})
 
 	mux.HandleFunc("/api/track", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -265,4 +278,75 @@ func handleCacheSavings(w http.ResponseWriter, r *http.Request, database *db.DB,
 		SavedPercent:     savedPct,
 		CacheHitRate:     hitRate,
 	})
+}
+
+type PricingEntry struct {
+	Model                  string  `json:"model"`
+	InputPricePerM         float64 `json:"input_price_per_m"`
+	CachedPricePerM        float64 `json:"cached_price_per_m"`
+	CacheCreationPricePerM float64 `json:"cache_creation_price_per_m"`
+	OutputPricePerM        float64 `json:"output_price_per_m"`
+}
+
+func handleGetPricing(w http.ResponseWriter, r *http.Request, calc *calculator.Calculator) {
+	models := calc.ListModels()
+	sort.Strings(models)
+	var entries []PricingEntry
+	for _, m := range models {
+		price, _ := calc.GetModelPrice(m)
+		entries = append(entries, PricingEntry{
+			Model:                  m,
+			InputPricePerM:         price.InputPricePerM,
+			CachedPricePerM:        price.CachedPricePerM,
+			CacheCreationPricePerM: price.CacheCreationPricePerM,
+			OutputPricePerM:        price.OutputPricePerM,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(entries)
+}
+
+func handlePutPricing(w http.ResponseWriter, r *http.Request, calc *calculator.Calculator) {
+	var entries []PricingEntry
+	if err := json.NewDecoder(r.Body).Decode(&entries); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	customPrices := make(map[string]calculator.ModelPrice)
+	for _, e := range entries {
+		customPrices[e.Model] = calculator.ModelPrice{
+			InputPricePerM:         e.InputPricePerM,
+			CachedPricePerM:        e.CachedPricePerM,
+			CacheCreationPricePerM: e.CacheCreationPricePerM,
+			OutputPricePerM:        e.OutputPricePerM,
+		}
+	}
+
+	// Update memory
+	calc.UpdatePrices(customPrices)
+
+	// Persist to ~/.ai-flight-dashboard/custom_pricing.json
+	home, err := os.UserHomeDir()
+	if err == nil {
+		configDir := filepath.Join(home, ".ai-flight-dashboard")
+		os.MkdirAll(configDir, 0755)
+		
+		// Load existing first to merge, so we don't lose other custom models
+		existingCustomPrices := make(map[string]calculator.ModelPrice)
+		customPricingPath := filepath.Join(configDir, "custom_pricing.json")
+		if data, err := os.ReadFile(customPricingPath); err == nil {
+			json.Unmarshal(data, &existingCustomPrices)
+		}
+		
+		for k, v := range customPrices {
+			existingCustomPrices[k] = v
+		}
+		
+		if data, err := json.MarshalIndent(existingCustomPrices, "", "  "); err == nil {
+			os.WriteFile(customPricingPath, data, 0644)
+		}
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
