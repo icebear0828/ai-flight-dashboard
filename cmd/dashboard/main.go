@@ -184,11 +184,13 @@ func main() {
 	}
 	defer w.Close()
 
+	var lanInst *lan.LAN
 	if *lanMode {
+		lanInst = lan.New(*deviceID)
 		fmt.Printf("📡 LAN discovery enabled. Multicast: %s\n", lan.MulticastAddr)
-		go lan.StartBroadcaster(w.BroadcastChan, *deviceID)
-		go lan.StartListener(w.UsageChan, *deviceID)
-		go lan.StartPinger(*deviceID)
+		go lanInst.StartBroadcaster(w.BroadcastChan)
+		go lanInst.StartListener(w.UsageChan)
+		go lanInst.StartPinger()
 	}
 
 	// Fast path: register cached known directories (~1ms vs 134ms recursive)
@@ -281,7 +283,7 @@ func main() {
 		}
 
 		// Reuse the existing HTTP handler to serve /api/* routes inside Wails
-		apiHandler := web.NewHandler(database, calc, w, *token, root.DistBinFS)
+		apiHandler := web.NewHandler(database, calc, w, lanInst, *token, root.DistBinFS)
 
 		err = wailsrun.Run(&options.App{
 			Title:     "AI Flight Dashboard",
@@ -318,7 +320,7 @@ func main() {
 		startDBDrain()
 
 		// Web dashboard mode with graceful shutdown
-		handler := web.NewHandler(database, calc, w, *token, root.DistBinFS)
+		handler := web.NewHandler(database, calc, w, lanInst, *token, root.DistBinFS)
 		srv := &http.Server{Addr: "0.0.0.0:" + *port, Handler: handler}
 
 		go func() {

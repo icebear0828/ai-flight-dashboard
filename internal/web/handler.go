@@ -19,7 +19,7 @@ import (
 	"ai-flight-dashboard/internal/watcher"
 )
 
-func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Watcher, token string, distBinFS embed.FS) http.Handler {
+func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Watcher, lanInst *lan.LAN, token string, distBinFS embed.FS) http.Handler {
 	mux := http.NewServeMux()
 
 	authMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
@@ -114,7 +114,10 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		peers := lan.GetActivePeers()
+		var peers []string
+		if lanInst != nil {
+			peers = lanInst.GetActivePeers()
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"peers": peers,
