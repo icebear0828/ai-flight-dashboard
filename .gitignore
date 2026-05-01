@@ -10,7 +10,7 @@ node_modules/
 dist/
 build/
 dist-bin/*
-!dist-bin/.gitkeep
+!dist-bin/empty.txt
 
 # Database
 *.db
