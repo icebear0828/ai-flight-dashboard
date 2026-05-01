@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ai-flight-dashboard/internal/model"
@@ -28,6 +29,7 @@ type Watcher struct {
 	done          chan struct{}
 	recursiveDirs map[string]bool // tracks dirs registered for recursive watching
 	DeviceID      string
+	paused        atomic.Bool
 }
 
 func New(deviceID string) (*Watcher, error) {
@@ -48,6 +50,14 @@ func New(deviceID string) (*Watcher, error) {
 	
 	go w.listen()
 	return w, nil
+}
+
+func (w *Watcher) IsPaused() bool {
+	return w.paused.Load()
+}
+
+func (w *Watcher) SetPaused(p bool) {
+	w.paused.Store(p)
 }
 
 func (w *Watcher) WatchDir(dir string) error {
@@ -182,6 +192,9 @@ func (w *Watcher) processFile(path string) {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
+		if w.IsPaused() {
+			continue // skip parsing and recording while paused
+		}
 		if u, ok := ParseLine(line); ok {
 			u.Project = projectName
 			w.UsageChan <- u
