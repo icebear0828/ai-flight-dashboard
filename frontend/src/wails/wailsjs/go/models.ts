@@ -201,6 +201,7 @@ export namespace model {
 	    sources: SourceStats[];
 	    devices: DeviceInfo[];
 	    projects: ProjectStat[];
+	    is_paused: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new StatsResponse(source);
@@ -212,6 +213,7 @@ export namespace model {
 	        this.sources = this.convertValues(source["sources"], SourceStats);
 	        this.devices = this.convertValues(source["devices"], DeviceInfo);
 	        this.projects = this.convertValues(source["projects"], ProjectStat);
+	        this.is_paused = source["is_paused"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
