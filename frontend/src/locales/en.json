@@ -3,6 +3,7 @@
   "systemInitializing": "SYSTEM INITIALIZING...",
   "aiFlightDashboard": "AI FLIGHT DASHBOARD",
   "liveOperations": "LIVE_OPERATIONS",
+  "paused": "PAUSED",
   "allDevices": "ALL DEVICES",
   "settings": "SETTINGS",
   "systemLogs": "SYSTEM LOGS",
@@ -39,5 +40,17 @@
   "remove": "REMOVE",
   "noExtraDirectories": "No extra directories configured.",
   "addPathPlaceholder": "Absolute path e.g. /Users/name/logs",
-  "addPath": "+ ADD PATH"
+  "addPath": "+ ADD PATH",
+  "totalSpend": "TOTAL SPEND",
+  "baseInput": "BASE IN",
+  "cacheRead": "CA_R",
+  "cacheWrite": "CA_W",
+  "outputTokens": "OUTPUT",
+  "totalTokens": "TOTAL",
+  "labelIn": "IN",
+  "labelOut": "OUT",
+  "modelIdentifier": "Model Identifier",
+  "rates1M": "Rates (1M)",
+  "events": "Events",
+  "subtotal": "Subtotal"
 }

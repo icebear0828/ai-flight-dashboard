@@ -7,26 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"ai-flight-dashboard/internal/calculator"
-	"ai-flight-dashboard/internal/db"
 	"ai-flight-dashboard/internal/scanner"
+	"ai-flight-dashboard/internal/testutil"
 )
 
-func setupCalc(t *testing.T) *calculator.Calculator {
-	t.Helper()
-	pricingPath := filepath.Join(t.TempDir(), "pricing.json")
-	os.WriteFile(pricingPath, []byte(`{"models":{"claude-opus-4-7":{"input_price_per_m":15,"cached_price_per_m":1.5,"output_price_per_m":75},"gemini-2.5-pro":{"input_price_per_m":1.25,"cached_price_per_m":0.31,"output_price_per_m":5}}}`), 0644)
-	calc, err := calculator.New(pricingPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return calc
-}
-
 func TestScanAll_FullScan(t *testing.T) {
-	database, _ := db.New(filepath.Join(t.TempDir(), "test.db"))
-	defer database.Close()
-	calc := setupCalc(t)
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
 
 	// Create fake Claude log directory structure
 	logDir := t.TempDir()
@@ -59,9 +46,8 @@ func TestScanAll_FullScan(t *testing.T) {
 }
 
 func TestScanAll_IncrementalScan(t *testing.T) {
-	database, _ := db.New(filepath.Join(t.TempDir(), "test.db"))
-	defer database.Close()
-	calc := setupCalc(t)
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
 
 	logDir := t.TempDir()
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
@@ -98,9 +84,8 @@ func TestScanAll_IncrementalScan(t *testing.T) {
 }
 
 func TestScanAll_GeminiFormat(t *testing.T) {
-	database, _ := db.New(filepath.Join(t.TempDir(), "test.db"))
-	defer database.Close()
-	calc := setupCalc(t)
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
 
 	logDir := t.TempDir()
 	chatsDir := filepath.Join(logDir, "chats")
@@ -127,9 +112,8 @@ func TestScanAll_GeminiFormat(t *testing.T) {
 }
 
 func TestScanAll_SkipsNonUsageLines(t *testing.T) {
-	database, _ := db.New(filepath.Join(t.TempDir(), "test.db"))
-	defer database.Close()
-	calc := setupCalc(t)
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
 
 	logDir := t.TempDir()
 	logFile := filepath.Join(logDir, "session.jsonl")
@@ -148,9 +132,8 @@ func TestScanAll_SkipsNonUsageLines(t *testing.T) {
 }
 
 func TestScanAll_FileTruncation(t *testing.T) {
-	database, _ := db.New(filepath.Join(t.TempDir(), "test.db"))
-	defer database.Close()
-	calc := setupCalc(t)
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
 
 	logDir := t.TempDir()
 	ts := time.Now().UTC().Format(time.RFC3339Nano)

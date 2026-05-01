@@ -49,6 +49,7 @@ interface DashboardData {
   periods: PeriodStats[];
   sources: SourceStats[];
   devices: DeviceStats[];
+  is_paused?: boolean;
 }
 
 export default function App() {
@@ -78,6 +79,18 @@ export default function App() {
     const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, [selectedDevice]);
+
+  const togglePause = async () => {
+		try {
+			const res = await fetch("/api/pause", { method: "POST" });
+			if (res.ok) {
+				const json = await res.json();
+				setData(prev => prev ? { ...prev, is_paused: json.is_paused } : null);
+			}
+		} catch (e) {
+			console.error("Failed to toggle pause", e);
+		}
+	};
 
   // Detect if we are running inside the Wails desktop app
   const isDesktop = typeof window !== 'undefined' && (window as any).go !== undefined;
@@ -116,9 +129,13 @@ export default function App() {
             ))}
           </h1>
           <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-            <div className="border-[3px] border-[#008000] text-[#008000] px-3 py-1 font-sans text-xs font-semibold uppercase tracking-wider w-fit min-w-[100px] text-center">
-              {t('liveOperations')}
-            </div>
+            <button 
+              onClick={togglePause}
+              style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}
+              className={`border-[3px] px-3 py-1 font-sans text-xs font-semibold uppercase tracking-wider w-fit min-w-[100px] text-center cursor-pointer ${data?.is_paused ? 'border-[#FF0000] text-[#FF0000] hover:bg-[#FF0000] hover:text-[#FFFFFF]' : 'border-[#008000] text-[#008000] hover:bg-[#008000] hover:text-[#FFFFFF]'}`}
+            >
+              {data?.is_paused ? t('paused') : t('liveOperations')}
+            </button>
             {data && (
               <select 
                 value={selectedDevice} 
@@ -140,18 +157,18 @@ export default function App() {
             <button 
               onClick={() => setIsSettingsOpen(true)}
               style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}
-              className="text-[#0000FF] uppercase underline decoration-[3px] underline-offset-4 cursor-pointer bg-transparent border-none p-0 hover:text-[#000000]"
+              className="text-[#0000FF] uppercase underline decoration-[3px] underline-offset-4 cursor-pointer bg-transparent border-none p-0 hover:text-[#000000] whitespace-nowrap"
             >
               [ {t('settings')} ]
             </button>
             <button 
               onClick={() => i18n.changeLanguage(i18n.language === 'zh' ? 'en' : 'zh')}
               style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}
-              className="text-[#0000FF] uppercase underline decoration-[3px] underline-offset-4 cursor-pointer bg-transparent border-none p-0 hover:text-[#000000] w-12 text-center"
+              className="text-[#0000FF] uppercase underline decoration-[3px] underline-offset-4 cursor-pointer bg-transparent border-none p-0 hover:text-[#000000] whitespace-nowrap"
             >
               [ {i18n.language === 'zh' ? 'EN' : '中'} ]
             </button>
-            <div className="text-[#0000FF] uppercase underline decoration-[3px] underline-offset-4 cursor-pointer hover:text-[#000000]">
+            <div className="text-[#0000FF] uppercase underline decoration-[3px] underline-offset-4 cursor-pointer hover:text-[#000000] whitespace-nowrap">
               [ {t('systemLogs')} ]
             </div>
           </div>
@@ -170,13 +187,13 @@ export default function App() {
               <div className="mb-4">
                 <h3 className="font-display text-xl xl:text-2xl leading-[1.1] uppercase mb-2">{p.label}</h3>
                 <div className="flex flex-col gap-1 font-mono text-xs xl:text-sm">
-                  <span>IN: {fmt(Math.max(0, p.input_tokens - p.cached_tokens - (p.cache_creation_tokens || 0)))}</span>
-                  <span>CA_R: {fmt(p.cached_tokens)}</span>
-                  <span>CA_W: {fmt(p.cache_creation_tokens || 0)}</span>
-                  <span>OUT: {fmt(p.output_tokens)}</span>
+                  <span>{t('labelIn')}: {fmt(Math.max(0, p.input_tokens - p.cached_tokens - (p.cache_creation_tokens || 0)))}</span>
+                  <span>{t('cacheRead')}: {fmt(p.cached_tokens)}</span>
+                  <span>{t('cacheWrite')}: {fmt(p.cache_creation_tokens || 0)}</span>
+                  <span>{t('labelOut')}: {fmt(p.output_tokens)}</span>
                 </div>
               </div>
-              <div className="font-mono text-3xl xl:text-4xl leading-none mt-4 border-t-[3px] border-[#000000] pt-4 break-words">
+              <div className="font-mono text-2xl md:text-3xl leading-none mt-4 border-t-[3px] border-[#000000] pt-4 whitespace-nowrap overflow-hidden text-ellipsis">
                 {fmtCost(p.cost)}
               </div>
             </div>
@@ -214,7 +231,7 @@ export default function App() {
                   </h2>
                 </div>
                 <div className="text-left md:text-right shrink-0">
-                  <span className="font-display text-xs sm:text-sm uppercase mb-1 block">TOTAL SPEND</span>
+                  <span className="font-display text-xs sm:text-sm uppercase mb-1 block">{t('totalSpend')}</span>
                   <div className="font-mono text-3xl sm:text-4xl md:text-5xl leading-none">{fmtCost(src.total_cost)}</div>
                 </div>
               </div>
@@ -223,23 +240,23 @@ export default function App() {
                 {/* Token Distribution Grid */}
                 <div className="p-4 sm:p-6 border-b-[5px] lg:border-b-0 lg:border-r-[5px] border-[#000000] grid grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-6">
                   <div className="border-l-[5px] border-[#000000] pl-3">
-                    <span className="font-display text-xs sm:text-sm uppercase block mb-1">BASE IN</span>
+                    <span className="font-display text-xs sm:text-sm uppercase block mb-1">{t('baseInput')}</span>
                     <div className="font-mono text-xl sm:text-2xl">{fmt(baseInput)}</div>
                   </div>
                   <div className="border-l-[5px] border-[#000000] pl-3">
-                    <span className="font-display text-xs sm:text-sm uppercase block mb-1">CA_R</span>
+                    <span className="font-display text-xs sm:text-sm uppercase block mb-1">{t('cacheRead')}</span>
                     <div className="font-mono text-xl sm:text-2xl">{fmt(src.total_cached)}</div>
                   </div>
                   <div className="border-l-[5px] border-[#000000] pl-3">
-                    <span className="font-display text-xs sm:text-sm uppercase block mb-1">CA_W</span>
+                    <span className="font-display text-xs sm:text-sm uppercase block mb-1">{t('cacheWrite')}</span>
                     <div className="font-mono text-xl sm:text-2xl">{fmt(src.total_cache_creation || 0)}</div>
                   </div>
                   <div className="border-l-[5px] border-[#000000] pl-3">
-                    <span className="font-display text-xs sm:text-sm uppercase block mb-1">OUTPUT</span>
+                    <span className="font-display text-xs sm:text-sm uppercase block mb-1">{t('outputTokens')}</span>
                     <div className="font-mono text-xl sm:text-2xl">{fmt(src.total_output)}</div>
                   </div>
                   <div className="border-l-[5px] border-[#000000] pl-3">
-                    <span className="font-display text-xs sm:text-sm uppercase block mb-1">TOTAL</span>
+                    <span className="font-display text-xs sm:text-sm uppercase block mb-1">{t('totalTokens')}</span>
                     <div className="font-mono text-xl sm:text-2xl">{fmt(totalTokens)}</div>
                   </div>
                 </div>
@@ -254,16 +271,16 @@ export default function App() {
                   </div>
                   <div className="flex flex-col gap-2 font-mono text-xs sm:text-sm">
                     <div className="flex items-center gap-2">
-                      <span className="w-4 h-4 bg-[#000000] border-[3px] border-[#000000] shrink-0"></span> IN ({formatPct(inPct)})
+                      <span className="w-4 h-4 bg-[#000000] border-[3px] border-[#000000] shrink-0"></span> {t('labelIn')} ({formatPct(inPct)})
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="w-4 h-4 bg-[#CCCCCC] border-[3px] border-[#000000] shrink-0"></span> CA_R ({formatPct(cachedPct)})
+                      <span className="w-4 h-4 bg-[#CCCCCC] border-[3px] border-[#000000] shrink-0"></span> {t('cacheRead')} ({formatPct(cachedPct)})
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="w-4 h-4 bg-[#888888] border-[3px] border-[#000000] shrink-0"></span> CA_W ({formatPct(cacheCreationPct)})
+                      <span className="w-4 h-4 bg-[#888888] border-[3px] border-[#000000] shrink-0"></span> {t('cacheWrite')} ({formatPct(cacheCreationPct)})
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="w-4 h-4 bg-[#FFFFFF] border-[3px] border-[#000000] shrink-0"></span> OUT ({formatPct(outPct)})
+                      <span className="w-4 h-4 bg-[#FFFFFF] border-[3px] border-[#000000] shrink-0"></span> {t('labelOut')} ({formatPct(outPct)})
                     </div>
                   </div>
                 </div>
@@ -274,10 +291,10 @@ export default function App() {
                 <table className="w-full text-left font-mono text-xs sm:text-sm min-w-[600px]">
                   <thead>
                     <tr className="border-b-[5px] border-[#000000] bg-[#F0F0F0]">
-                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">Model Identifier</th>
-                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">Rates (1M)</th>
-                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">Events</th>
-                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase text-right">Subtotal</th>
+                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('modelIdentifier')}</th>
+                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('rates1M')}</th>
+                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('events')}</th>
+                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase text-right">{t('subtotal')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -285,7 +302,7 @@ export default function App() {
                       <tr key={mi} className="border-b-[3px] border-[#000000] last:border-b-0 hover:bg-[#000000] hover:text-[#FFFFFF] transition-none group">
                         <td className="px-3 py-3 sm:px-4 sm:py-4 font-bold group-hover:text-[#FFFFFF] max-w-[200px] truncate" title={m.model}>{m.model}</td>
                         <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
-                          IN: {fmtCost(m.input_price_per_m || 0)} / CA_R: {fmtCost(m.cached_price_per_m || 0)} / CA_W: {fmtCost(m.cache_creation_price_per_m || 0)} / OUT: {fmtCost(m.output_price_per_m || 0)}
+                          {t('labelIn')}: {fmtCost(m.input_price_per_m || 0)} / {t('cacheRead')}: {fmtCost(m.cached_price_per_m || 0)} / {t('cacheWrite')}: {fmtCost(m.cache_creation_price_per_m || 0)} / {t('labelOut')}: {fmtCost(m.output_price_per_m || 0)}
                         </td>
                         <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">{m.events}</td>
                         <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-bold group-hover:text-[#FFFFFF]">{fmtCost(m.total_cost)}</td>

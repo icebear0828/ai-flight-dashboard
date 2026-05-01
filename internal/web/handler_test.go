@@ -5,36 +5,20 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"ai-flight-dashboard/internal/calculator"
-	"ai-flight-dashboard/internal/db"
 	"ai-flight-dashboard/internal/model"
+	"ai-flight-dashboard/internal/testutil"
 	"ai-flight-dashboard/internal/web"
 )
 
 // emptyFS is a placeholder for tests that don't need dist-bin binaries
 var emptyFS embed.FS
 
-func setup(t *testing.T) (*db.DB, *calculator.Calculator) {
-	t.Helper()
-	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	pricingPath := filepath.Join(t.TempDir(), "p.json")
-	os.WriteFile(pricingPath, []byte(`{"models":{"claude-opus-4-7":{"input_price_per_m":15,"cached_price_per_m":1.5,"output_price_per_m":75},"gemini-2.5-pro":{"input_price_per_m":1.25,"cached_price_per_m":0.31,"output_price_per_m":5}}}`), 0644)
-	calc, _ := calculator.New(pricingPath)
-	return database, calc
-}
-
 func TestAPIStats(t *testing.T) {
-	database, calc := setup(t)
+	database, calc := testutil.NewTestDBAndCalc(t)
 	defer database.Close()
 
 	now := time.Now().UTC()
@@ -54,7 +38,7 @@ func TestAPIStats(t *testing.T) {
 		0.80, now.Add(-10*time.Minute), "/c.jsonl", "local",
 	)
 
-	handler := web.NewHandler(database, calc, "", emptyFS)
+	handler := web.NewHandler(database, calc, nil, nil, "", emptyFS)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
@@ -105,10 +89,10 @@ func TestAPIStats(t *testing.T) {
 }
 
 func TestStaticPage(t *testing.T) {
-	database, calc := setup(t)
+	database, calc := testutil.NewTestDBAndCalc(t)
 	defer database.Close()
 
-	handler := web.NewHandler(database, calc, "", emptyFS)
+	handler := web.NewHandler(database, calc, nil, nil, "", emptyFS)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
@@ -122,10 +106,10 @@ func TestStaticPage(t *testing.T) {
 }
 
 func TestAPITrack(t *testing.T) {
-	database, calc := setup(t)
+	database, calc := testutil.NewTestDBAndCalc(t)
 	defer database.Close()
 
-	handler := web.NewHandler(database, calc, "secret-token", emptyFS)
+	handler := web.NewHandler(database, calc, nil, nil, "secret-token", emptyFS)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
@@ -163,7 +147,7 @@ func TestAPITrack(t *testing.T) {
 }
 
 func TestAPICacheSavings(t *testing.T) {
-	database, calc := setup(t)
+	database, calc := testutil.NewTestDBAndCalc(t)
 	defer database.Close()
 
 	now := time.Now().UTC()
@@ -179,7 +163,7 @@ func TestAPICacheSavings(t *testing.T) {
 		0, now.Add(-5*time.Minute), "/b.jsonl", "local",
 	)
 
-	handler := web.NewHandler(database, calc, "", emptyFS)
+	handler := web.NewHandler(database, calc, nil, nil, "", emptyFS)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 

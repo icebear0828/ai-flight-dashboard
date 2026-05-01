@@ -21,6 +21,7 @@ dist-bin/*
 *.sqlite
 *.sqlite3
 test_db/
+stats/
 
 # Logs
 *.log

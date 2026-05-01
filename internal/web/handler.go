@@ -19,7 +19,7 @@ import (
 	"ai-flight-dashboard/internal/watcher"
 )
 
-func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Watcher, token string, distBinFS embed.FS) http.Handler {
+func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Watcher, lanInst *lan.LAN, token string, distBinFS embed.FS) http.Handler {
 	mux := http.NewServeMux()
 
 	authMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
@@ -36,7 +36,7 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 	}
 
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
-		handleStats(w, r, database, calc)
+		handleStats(w, r, database, calc, wInst)
 	})
 
 	mux.HandleFunc("/api/cache-savings", func(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +72,12 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+
+		if wInst != nil && wInst.IsPaused() {
+			w.WriteHeader(http.StatusOK) // Acknowledge but ignore
+			return
+		}
+
 		var payload model.TrackPayload
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			http.Error(w, "Bad request", http.StatusBadRequest)
@@ -114,7 +120,10 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		peers := lan.GetActivePeers()
+		var peers []string
+		if lanInst != nil {
+			peers = lanInst.GetActivePeers()
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"peers": peers,
@@ -128,6 +137,23 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 		}
 		// Acknowledge join
 		w.WriteHeader(http.StatusOK)
+	}))
+
+	mux.HandleFunc("/api/pause", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if wInst != nil {
+			wInst.SetPaused(!wInst.IsPaused())
+		}
+		
+		isPaused := false
+		if wInst != nil {
+			isPaused = wInst.IsPaused()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{"is_paused": isPaused})
 	}))
 
 	mux.HandleFunc("/download/", func(w http.ResponseWriter, r *http.Request) {
@@ -185,7 +211,7 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 	return mux
 }
 
-func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *calculator.Calculator) {
+func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *calculator.Calculator, wInst *watcher.Watcher) {
 	now := time.Now().UTC()
 	deviceID := r.URL.Query().Get("device")
 
@@ -265,12 +291,18 @@ func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *
 
 	projects, _ := database.QueryProjectStatsSince(time.Time{}, deviceID)
 
+	isPaused := false
+	if wInst != nil {
+		isPaused = wInst.IsPaused()
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(model.StatsResponse{
 		Periods:  periods,
 		Sources:  sources,
 		Devices:  deviceInfos,
 		Projects: projects,
+		IsPaused: isPaused,
 	})
 }
 

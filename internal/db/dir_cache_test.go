@@ -1,12 +1,14 @@
-package db
+package db_test
 
 import (
 	"path/filepath"
 	"testing"
+
+	"ai-flight-dashboard/internal/db"
 )
 
 func TestDirCache(t *testing.T) {
-	database, err := New(filepath.Join(t.TempDir(), "test.db"))
+	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

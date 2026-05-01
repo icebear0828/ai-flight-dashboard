@@ -13,18 +13,62 @@ import (
 const (
 	MulticastAddr   = "224.0.0.123:9101"
 	MaxDatagramSize = 8192
-	peerTTL         = 30 * time.Second
+	PeerTTL         = 30 * time.Second
 )
 
-var (
-	activePeers   = make(map[string]time.Time)
-	peerMutex     sync.RWMutex
-	localDeviceID string // set by StartListener, used to filter self from peers
-)
+// LAN manages LAN-based device discovery and usage broadcasting.
+// It replaces the former package-level global state with a testable struct.
+type LAN struct {
+	DeviceID string
+
+	mu          sync.RWMutex
+	activePeers map[string]time.Time
+}
+
+// New creates a new LAN instance for the given device.
+func New(deviceID string) *LAN {
+	return &LAN{
+		DeviceID:    deviceID,
+		activePeers: make(map[string]time.Time),
+	}
+}
+
+// GetActivePeers returns a list of recently seen remote device IDs.
+// Excludes the local device and evicts stale entries.
+func (l *LAN) GetActivePeers() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var peers []string
+	now := time.Now()
+	for id, lastSeen := range l.activePeers {
+		if now.Sub(lastSeen) >= PeerTTL {
+			delete(l.activePeers, id) // evict stale
+			continue
+		}
+		if id != l.DeviceID {
+			peers = append(peers, id)
+		}
+	}
+	return peers
+}
+
+// RecordPeer records a peer as active. Exposed for testing.
+func (l *LAN) RecordPeer(deviceID string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.activePeers[deviceID] = time.Now()
+}
+
+// RecordPeerAt records a peer with a specific timestamp. Exposed for testing.
+func (l *LAN) RecordPeerAt(deviceID string, at time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.activePeers[deviceID] = at
+}
 
 // StartPinger periodically sends ping packets to the LAN.
 // It reuses a single UDP connection across ticks.
-func StartPinger(deviceID string) {
+func (l *LAN) StartPinger() {
 	addr, err := net.ResolveUDPAddr("udp", MulticastAddr)
 	if err != nil {
 		log.Printf("LAN Pinger failed to resolve UDP addr: %v", err)
@@ -39,7 +83,7 @@ func StartPinger(deviceID string) {
 	defer conn.Close()
 
 	payload := model.TrackPayload{
-		DeviceID: deviceID,
+		DeviceID: l.DeviceID,
 		Type:     "ping",
 	}
 	data, _ := json.Marshal(payload)
@@ -54,7 +98,7 @@ func StartPinger(deviceID string) {
 }
 
 // Ping sends a single ping packet to announce presence (for ad-hoc use).
-func Ping(deviceID string) {
+func (l *LAN) Ping() {
 	addr, err := net.ResolveUDPAddr("udp", MulticastAddr)
 	if err != nil {
 		return
@@ -66,7 +110,7 @@ func Ping(deviceID string) {
 	defer conn.Close()
 
 	payload := model.TrackPayload{
-		DeviceID: deviceID,
+		DeviceID: l.DeviceID,
 		Type:     "ping",
 	}
 	data, err := json.Marshal(payload)
@@ -75,27 +119,8 @@ func Ping(deviceID string) {
 	}
 }
 
-// GetActivePeers returns a list of recently seen remote device IDs.
-// Excludes the local device and evicts stale entries.
-func GetActivePeers() []string {
-	peerMutex.Lock()
-	defer peerMutex.Unlock()
-	var peers []string
-	now := time.Now()
-	for id, lastSeen := range activePeers {
-		if now.Sub(lastSeen) >= peerTTL {
-			delete(activePeers, id) // evict stale
-			continue
-		}
-		if id != localDeviceID {
-			peers = append(peers, id)
-		}
-	}
-	return peers
-}
-
 // StartBroadcaster listens to a channel and multicasts token usage to the LAN
-func StartBroadcaster(usageChan <-chan model.TokenUsage, deviceID string) {
+func (l *LAN) StartBroadcaster(usageChan <-chan model.TokenUsage) {
 	addr, err := net.ResolveUDPAddr("udp", MulticastAddr)
 	if err != nil {
 		log.Printf("LAN Broadcaster failed to resolve UDP addr: %v", err)
@@ -110,7 +135,7 @@ func StartBroadcaster(usageChan <-chan model.TokenUsage, deviceID string) {
 
 	for usage := range usageChan {
 		payload := model.TrackPayload{
-			DeviceID: deviceID,
+			DeviceID: l.DeviceID,
 			Type:     "track",
 			Usage:    usage,
 		}
@@ -129,9 +154,7 @@ func StartBroadcaster(usageChan <-chan model.TokenUsage, deviceID string) {
 }
 
 // StartListener joins the multicast group and forwards received usages to outChan
-func StartListener(outChan chan<- model.TokenUsage, localID string) {
-	localDeviceID = localID // store for GetActivePeers filtering
-
+func (l *LAN) StartListener(outChan chan<- model.TokenUsage) {
 	addr, err := net.ResolveUDPAddr("udp", MulticastAddr)
 	if err != nil {
 		log.Printf("LAN Listener failed to resolve UDP addr: %v", err)
@@ -162,14 +185,12 @@ func StartListener(outChan chan<- model.TokenUsage, localID string) {
 		}
 
 		// Skip recording our own packets
-		if payload.DeviceID == localID {
+		if payload.DeviceID == l.DeviceID {
 			continue
 		}
 
 		// Update active peers (remote only)
-		peerMutex.Lock()
-		activePeers[payload.DeviceID] = time.Now()
-		peerMutex.Unlock()
+		l.RecordPeer(payload.DeviceID)
 
 		if payload.Type == "ping" {
 			continue // just a presence announce
