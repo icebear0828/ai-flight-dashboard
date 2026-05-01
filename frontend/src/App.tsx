@@ -11,9 +11,49 @@ const fmt = (n: number) => {
 };
 const fmtCost = (n: number) => '$' + n.toFixed(2);
 
+interface PeriodStats {
+  label: string;
+  input_tokens: number;
+  cached_tokens: number;
+  cache_creation_tokens?: number;
+  output_tokens: number;
+  cost: number;
+}
+
+interface SourceModelStats {
+  model: string;
+  input_price_per_m?: number;
+  cached_price_per_m?: number;
+  cache_creation_price_per_m?: number;
+  output_price_per_m?: number;
+  events: number;
+  total_cost: number;
+}
+
+interface SourceStats {
+  name: string;
+  total_input: number;
+  total_cached: number;
+  total_cache_creation?: number;
+  total_output: number;
+  total_cost: number;
+  models?: SourceModelStats[];
+}
+
+interface DeviceStats {
+  id: string;
+  display_name?: string;
+}
+
+interface DashboardData {
+  periods: PeriodStats[];
+  sources: SourceStats[];
+  devices: DeviceStats[];
+}
+
 export default function App() {
   const { t, i18n } = useTranslation();
-  const [data, setData] = useState<{periods: any[], sources: any[], devices: any[]} | null>(null);
+  const [data, setData] = useState<DashboardData | null>(null);
   const [selectedDevice, setSelectedDevice] = useState<string>("all");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string>("");
@@ -70,7 +110,10 @@ export default function App() {
       {/* Header Section */}
       <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 mb-16 border-b-[5px] border-[#000000] pb-6">
         <div>
-          <h1 className="font-display text-5xl sm:text-6xl md:text-7xl leading-[1.0] uppercase tracking-tighter mb-4 break-words" dangerouslySetInnerHTML={{ __html: t('aiFlightDashboard').replace(' ', '<br/>') }}>
+          <h1 className="font-display text-5xl sm:text-6xl md:text-7xl leading-[1.0] uppercase tracking-tighter mb-4 break-words">
+            {t('aiFlightDashboard').split(' ').map((word, i) => (
+              <React.Fragment key={i}>{i > 0 && <br/>}{word}</React.Fragment>
+            ))}
           </h1>
           <div className="flex flex-col sm:flex-row sm:items-center gap-4">
             <div className="border-[3px] border-[#008000] text-[#008000] px-3 py-1 font-sans text-xs font-semibold uppercase tracking-wider w-fit min-w-[100px] text-center">
@@ -84,8 +127,8 @@ export default function App() {
                 style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}
               >
                 <option value="all">{t('allDevices')}</option>
-                {data.devices?.map((d: any) => (
-                  <option key={d.id || d} value={d.id || d}>{(d.display_name || d.id || d).toUpperCase()}</option>
+                {data.devices?.map((d: DeviceStats) => (
+                  <option key={d.id || (d as any)} value={d.id || (d as any)}>{(d.display_name || d.id || (d as any)).toUpperCase()}</option>
                 ))}
               </select>
             )}
@@ -119,7 +162,7 @@ export default function App() {
 
       {/* PeriodCost Stats Row */}
       <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 md:gap-6 mb-12 md:mb-20">
-        {periods.map((p: any, i: number) => {
+        {periods.map((p: PeriodStats, i: number) => {
           const isElevated = p.label === 'ALL';
           const cardClass = `bg-[#FFFFFF] border-[#000000] rounded-none p-4 md:p-6 flex flex-col justify-between shadow-none ${isElevated ? 'border-[5px]' : 'border-[3px]'}`;
           return (
@@ -146,7 +189,7 @@ export default function App() {
 
       {/* Source Stats Grid */}
       <section className="grid grid-cols-1 2xl:grid-cols-2 gap-6 lg:gap-10">
-        {sources.map((src: any, si: number) => {
+        {sources.map((src: SourceStats, si: number) => {
            const baseInput = Math.max(0, src.total_input - src.total_cached - (src.total_cache_creation || 0));
            const totalTokens = baseInput + src.total_cached + (src.total_cache_creation || 0) + src.total_output;
            
@@ -160,7 +203,7 @@ export default function App() {
              return pct.toFixed(0) + '%';
            };
 
-           const sortedModels = [...(src.models || [])].sort((a: any, b: any) => b.total_cost - a.total_cost);
+           const sortedModels = [...(src.models || [])].sort((a: SourceModelStats, b: SourceModelStats) => b.total_cost - a.total_cost);
 
            return (
             <article key={si} className="bg-[#FFFFFF] border-[5px] border-[#000000] rounded-none shadow-none flex flex-col">
@@ -238,7 +281,7 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedModels.map((m: any, mi: number) => (
+                    {sortedModels.map((m: SourceModelStats, mi: number) => (
                       <tr key={mi} className="border-b-[3px] border-[#000000] last:border-b-0 hover:bg-[#000000] hover:text-[#FFFFFF] transition-none group">
                         <td className="px-3 py-3 sm:px-4 sm:py-4 font-bold group-hover:text-[#FFFFFF] max-w-[200px] truncate" title={m.model}>{m.model}</td>
                         <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
