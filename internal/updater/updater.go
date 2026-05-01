@@ -27,11 +27,15 @@ type Release struct {
 	Assets  []Asset `json:"assets"`
 }
 
-func CheckForUpdates(currentVersion string) (*Release, error) {
+func CheckForUpdates(currentVersion, token string) (*Release, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", GitHubRepo)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
