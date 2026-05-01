@@ -4,13 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 )
 
 type ModelPrice struct {
-	InputPricePerM          float64 `json:"input_price_per_m"`
-	CachedPricePerM         float64 `json:"cached_price_per_m"`
-	CacheCreationPricePerM  float64 `json:"cache_creation_price_per_m"`
-	OutputPricePerM         float64 `json:"output_price_per_m"`
+	InputPricePerM         float64 `json:"input_price_per_m"`
+	CachedPricePerM        float64 `json:"cached_price_per_m"`
+	CacheCreationPricePerM float64 `json:"cache_creation_price_per_m"`
+	OutputPricePerM        float64 `json:"output_price_per_m"`
 }
 
 type PricingTable struct {
@@ -18,6 +19,7 @@ type PricingTable struct {
 }
 
 type Calculator struct {
+	mu     sync.RWMutex
 	prices PricingTable
 }
 
@@ -26,6 +28,9 @@ func NewFromBytes(data []byte) (*Calculator, error) {
 	var pt PricingTable
 	if err := json.Unmarshal(data, &pt); err != nil {
 		return nil, fmt.Errorf("unmarshal pricing table: %w", err)
+	}
+	if pt.Models == nil {
+		pt.Models = make(map[string]ModelPrice)
 	}
 	return &Calculator{prices: pt}, nil
 }
@@ -39,9 +44,38 @@ func New(pricingFilePath string) (*Calculator, error) {
 	return NewFromBytes(data)
 }
 
+// UpdatePrices merges custom pricing into the calculator.
+func (c *Calculator) UpdatePrices(customPrices map[string]ModelPrice) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for k, v := range customPrices {
+		c.prices.Models[k] = v
+	}
+}
+
+// LoadCustomPrices reads a JSON file containing a map of ModelPrice and merges it.
+func (c *Calculator) LoadCustomPrices(filepath string) error {
+	data, err := os.ReadFile(filepath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // silently ignore if no custom pricing exists
+		}
+		return err
+	}
+	var custom map[string]ModelPrice
+	if err := json.Unmarshal(data, &custom); err != nil {
+		return err
+	}
+	c.UpdatePrices(custom)
+	return nil
+}
+
 // CalculateCost takes the specific token metrics and returns the estimated USD cost.
 func (c *Calculator) CalculateCost(model string, inputTokens, cachedTokens, cacheCreationTokens, outputTokens int) (float64, error) {
+	c.mu.RLock()
 	price, ok := c.prices.Models[model]
+	c.mu.RUnlock()
+	
 	if !ok {
 		return 0, nil // unknown model, skip silently
 	}
@@ -61,12 +95,16 @@ func (c *Calculator) CalculateCost(model string, inputTokens, cachedTokens, cach
 
 // GetModelPrice returns the price table for a specific model.
 func (c *Calculator) GetModelPrice(model string) (ModelPrice, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	price, ok := c.prices.Models[model]
 	return price, ok
 }
 
 // ListModels returns all model names in the pricing table.
 func (c *Calculator) ListModels() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	models := make([]string, 0, len(c.prices.Models))
 	for m := range c.prices.Models {
 		models = append(models, m)
@@ -77,7 +115,10 @@ func (c *Calculator) ListModels() []string {
 // CalculateCostNoCaching computes a hypothetical cost where cached tokens are
 // charged at the full input price instead of the discounted cached price.
 func (c *Calculator) CalculateCostNoCaching(model string, inputTokens, cachedTokens, cacheCreationTokens, outputTokens int) (float64, error) {
+	c.mu.RLock()
 	price, ok := c.prices.Models[model]
+	c.mu.RUnlock()
+	
 	if !ok {
 		return 0, nil
 	}
