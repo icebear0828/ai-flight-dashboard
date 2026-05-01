@@ -1,0 +1,31 @@
+# Binaries
+/dashboard
+/dashboard-gui
+/ai-flight-dashboard
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+dist-bin/
+
+# Database
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+test_db/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
