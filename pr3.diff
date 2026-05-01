@@ -1,0 +1,3818 @@
+diff --git a/.gitignore b/.gitignore
+index 8114cdd..ba5dc81 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,4 +1,4 @@
+-dashboard
++/dashboard
+ node_modules/
+ dist/
+ build/
+diff --git a/README.en.md b/README.en.md
+new file mode 100644
+index 0000000..d16b737
+--- /dev/null
++++ b/README.en.md
+@@ -0,0 +1,123 @@
++# ✈️ AI Flight Dashboard
++
++> Minimal, zero-dependency AI cost tracking terminal dashboard
++
++[中文](README.md)
++
++AI Flight Dashboard is a **TUI + Web dual-mode tool** built in Go. Using a **"passive radar"** approach, it non-invasively captures token usage from AI CLI tools (Claude Code, Gemini CLI) by watching their log files in real time, and presents live cost feedback with smooth terminal animations.
++
++## ✨ Features
++
++- 🎯 **Passive Radar**: Uses `fsnotify` to watch incremental file streams — the moment a tool writes logs to disk (`~/.claude/projects/`, `~/.gemini/tmp/`), the dashboard captures them instantly.
++- ⚡ **Blazing Fast**: Built with Go + [Bubble Tea](https://github.com/charmbracelet/bubbletea). Single binary, zero runtime dependencies, instant startup.
++- 💰 **Real-time Cost Calculation**: Built-in pricing engine converts raw token counts into USD costs per model.
++- 💾 **SQLite Persistence**: All captured usage is automatically upserted into `stats/usage.db` for long-term analysis.
++- 🌐 **Web Dashboard**: Start an HTTP server with `--web` to view a React-powered visual dashboard.
++- 📡 **Multi-device Aggregation**: Supports `--device-id` to identify machines and filter API queries.
++- 🛰️ **Remote Telemetry**: Use `--forward-to` to aggregate logs from multiple remote server probes into a single control panel.
++
++For complete configuration and cluster deployment guides, please refer to the [📚 Usage Guide (docs/usage.md)](docs/usage.md).
++
++## 🚀 Quick Start
++
++### One-Click Deployment
++
++For server or background environments, we provide a one-click deployment script that automatically compiles and registers a Systemd background service:
++
++```bash
++chmod +x ./scripts/deploy.sh
++sudo ./scripts/deploy.sh
++```
++
++> 💡 **Tip**: The script is interactive and allows you to choose between Receiver (Server) and Forwarder (Probe) modes.
++
++### Manual Build & Run
++
++```bash
++# Build
++go build -o dashboard ./cmd/dashboard
++
++# TUI mode — keep it in a terminal sidebar or Tmux split
++./dashboard
++
++# Web mode — open http://localhost:9100 in your browser
++./dashboard --web
++
++# Custom port + device ID
++./dashboard --web --port 8080 --device-id my-mac
++```
++
++### Simulate Radar Trigger
++
++While the dashboard is running, write a mock log line from another terminal:
++
++```bash
++echo '{"type":"assistant", "model": "claude-sonnet-4-6", "usage": {"input_tokens": 1000, "output_tokens": 500, "cache_read_input_tokens": 200}}' >> session.jsonl
++```
++
++> The HUD / Web dashboard will instantly pick up the new event and persist it to the database.
++
++## ⚙️ Pricing Configuration
++
++Model pricing is embedded into the binary via `cmd/dashboard/pricing_table.json` — no external files needed at runtime. To update prices, edit that file and rebuild:
++
++```json
++{
++  "models": {
++    "gemini-2.5-pro": {
++      "input_price_per_m": 1.25,
++      "cached_price_per_m": 0.31,
++      "output_price_per_m": 5.00
++    },
++    "claude-sonnet-4-6": {
++      "input_price_per_m": 3.00,
++      "cached_price_per_m": 0.30,
++      "output_price_per_m": 15.00
++    }
++  }
++}
++```
++
++## 🏗 Architecture
++
++```
++cmd/dashboard/        CLI entry + wiring + embedded pricing_table.json
++internal/
++├── model/            Shared data types (TokenUsage)
++├── watcher/          fsnotify live watcher + JSONL parser
++├── scanner/          Historical log bulk/incremental scanner
++├── calculator/       Token → USD pricing engine
++├── db/               SQLite persistence (WAL mode)
++└── web/              HTTP API + embedded React SPA (go:embed)
++```
++
++All modules are built with TDD and independently testable:
++
++| Module | Purpose | Tests |
++|---|---|:---:|
++| `model` | Shared `TokenUsage` struct | — |
++| `watcher` | fsnotify watcher + Claude/Gemini log parsing | ✅ |
++| `scanner` | Historical log scanning with incremental offsets + truncation detection | ✅ |
++| `calculator` | Per-model cost calculation, supports file and byte-stream init | ✅ |
++| `db` | SQLite persistence with time-window and device-filtered queries | ✅ |
++| `web` | REST API (`/api/stats`) + static file serving | ✅ |
++
++## 📡 API
++
++```
++GET /api/stats                # All stats
++GET /api/stats?device=my-mac  # Filter by device
++```
++
++Returns `{ periods, sources, devices }` — see [dashboard-api.md](dashboard-api.md) for details.
++
++## 🗺 Roadmap
++
++- [x] **Phase 1: HUD Layer** — Persistent Bubble Tea terminal panel with live flickering updates
++- [x] **Phase 2: Structured Persistence** — Real-time log interception + SQLite + incremental scanning
++- [x] **Phase 2.5: Web Dashboard** — React SPA + HTTP API + embedded distribution
++- [ ] **Phase 3: Full Terminal Dashboard** — `Tab` to switch, render ASCII charts and project cost leaderboards
++
++## 📜 License
++
++MIT
+diff --git a/README.md b/README.md
+index 5aa66d5..cc3b000 100644
+--- a/README.md
++++ b/README.md
+@@ -2,40 +2,64 @@
+ 
+ > 极简、零依赖的 AI 资产终端飞行仪表盘
+ 
+-AI Flight Dashboard 是一个基于 Go 语言构建的**命令行 UI (TUI) 工具**。利用**“被动雷达监听”**机制，它能在完全不侵入各类 AI CLI 工具（如 Claude Code, Gemini CLI, Aider, Cursor）源代码的前提下，实时捕获 Token 消耗并在你的终端底部以丝滑的动画刷新当前会话成本。
++[English](README.en.md)
++
++AI Flight Dashboard 是一个基于 Go 语言构建的 **命令行 UI (TUI) + Web 双模式工具**。利用 **"被动雷达监听"** 机制，它能在完全不侵入各类 AI CLI 工具（如 Claude Code, Gemini CLI）源代码的前提下，实时捕获 Token 消耗并以丝滑的动画反馈当前会话成本。
+ 
+ ## ✨ 核心特性
+ 
+ - 🎯 **被动雷达监听**: 采用 `fsnotify` 监听文件增量流，只要底层工具将日志写入磁盘（例如 `~/.claude/projects/` 或 `~/.gemini/tmp/`），系统瞬间就能捕获。
+-- ⚡ **极致性能**: 采用 Go 语言 + [Bubble Tea](https://github.com/charmbracelet/bubbletea) 构建，单文件可执行分发，不依赖 Python 或 Node 环境，极速启动。
+-- 💰 **实时成本折算**: 内置计费引擎，将枯燥的 Token 数字根据不同模型实时折算为美元 (USD) 成本。
+-- 💾 **SQLite 数据脱水**: 所有捕获的消耗流会自动 upsert 进入 `stats/usage.db`，为你沉淀长期的代码资产分析数据。
++- ⚡ **极致性能**: Go 语言 + [Bubble Tea](https://github.com/charmbracelet/bubbletea) 构建，单文件可执行分发，极速启动。
++- 💰 **实时成本折算**: 内置计费引擎，将 Token 数字根据不同模型实时折算为美元 (USD) 成本。
++- 💾 **SQLite 数据脱水**: 所有捕获的消耗流会自动 upsert 进入 `stats/usage.db`，沉淀长期分析数据。
++- 🌐 **Web 看板模式**: 通过 `--web` 启动 HTTP 服务，在浏览器中查看 React 驱动的可视化仪表盘。
++- 📡 **多设备聚合**: 支持 `--device-id` 标识不同机器，API 层支持按设备过滤查询。
++- 🛰️ **远程集群监控**: 通过 `--forward-to` 将多个服务器探针的日志汇聚到统一主控面板。
++
++## 🚀 快速体验
++
++完整的配置指南与集群部署，请参考 [📚 使用手册 (docs/usage.md)](docs/usage.md)。
++
++### 一键部署 (小白推荐)
+ 
+-## 🚀 快速体验 (E2E)
++对于服务器或后台运行环境，我们提供了一键部署脚本，自动完成编译并注册 Systemd 开机自启服务：
+ 
+-### 1. 构建与运行
+ ```bash
+-# 进入目录
+-cd /Users/c/wiki/token/ai-flight-dashboard
++chmod +x ./scripts/deploy.sh
++sudo ./scripts/deploy.sh
++```
++
++> 💡 **提示**：脚本支持交互式选择部署为主控端 (Server) 或 探针端 (Forwarder)，只需跟随提示输入 Token 等信息即可。
++
++### 手动构建与运行
+ 
+-# 编译为二进制文件
++```bash
++# 编译
+ go build -o dashboard ./cmd/dashboard
+ 
+-# 启动常驻仪表盘
++# TUI 模式 — 放在终端侧栏或 Tmux 分屏
+ ./dashboard
++
++# Web 模式 — 浏览器访问 http://localhost:9100
++./dashboard --web
++
++# 自定义端口 + 设备标识
++./dashboard --web --port 8080 --device-id my-mac
+ ```
+-> **提示**：建议将它作为一个常驻的分屏（如 Tmux）挂在终端底部或侧边栏。
+ 
+-### 2. 模拟触发雷达
+-在仪表盘运行的同时，开启另一个终端并执行以下命令，向当前目录写入一行模拟日志：
++### 模拟触发雷达
++
++在仪表盘运行的同时，开启另一个终端写入一行模拟日志：
++
+ ```bash
+-echo '{"type":"assistant", "model": "claude-3-7-sonnet-20250219", "usage": {"input_tokens": 1000, "output_tokens": 500, "cache_read_input_tokens": 0}}' >> session.jsonl
++echo '{"type":"assistant", "model": "claude-sonnet-4-6", "usage": {"input_tokens": 1000, "output_tokens": 500, "cache_read_input_tokens": 200}}' >> session.jsonl
+ ```
+-> **效果**：你的 HUD 仪表盘会立刻捕捉增量跳动，并将交互存入数据库！
++
++> HUD / Web 仪表盘会立刻捕捉增量跳动，并将交互存入数据库。
+ 
+ ## ⚙️ 费率配置
+ 
+-所有的模型单价配置保存在运行时生成的 `stats/pricing_table.json` 中，你可以根据厂商（Anthropic, Google 等）的价格变动自行调整：
++模型单价通过 `cmd/dashboard/pricing_table.json` 嵌入二进制文件，无需依赖外部文件即可运行。如需修改价格，编辑该文件后重新编译：
+ 
+ ```json
+ {
+@@ -45,7 +69,7 @@ echo '{"type":"assistant", "model": "claude-3-7-sonnet-20250219", "usage": {"inp
+       "cached_price_per_m": 0.31,
+       "output_price_per_m": 5.00
+     },
+-    "claude-3-7-sonnet-20250219": {
++    "claude-sonnet-4-6": {
+       "input_price_per_m": 3.00,
+       "cached_price_per_m": 0.30,
+       "output_price_per_m": 15.00
+@@ -55,14 +79,45 @@ echo '{"type":"assistant", "model": "claude-3-7-sonnet-20250219", "usage": {"inp
+ ```
+ 
+ ## 🏗 架构设计
+-本项目严格遵循 TDD (测试驱动开发) 规范构建，各个模块独立解耦：
+-- **`cmd/dashboard`**: CLI 入口主程序与打通全链路的装配层。
+-- **`internal/tui`**: 负责终端动画的 Bubble Tea 模型渲染。
+-- **`internal/watcher`**: fsnotify 核心监听模块，处理被动雷达的日志解析。
+-- **`internal/calculator`**: Token 与美元（USD）计费转化引擎。
+-- **`internal/db`**: SQLite 持久层接口与 Schema 自动初始化。
+-
+-## 🗺 路线图 (Roadmap)
+-- [x] **Phase 1: 极客 HUD 层** (终端多线程安全刷新，展现常驻底部的视觉效果)
+-- [x] **Phase 2: 结构化持久层** (实时日志拦截与 SQLite 入库)
+-- [ ] **Phase 3: 全键盘终端看板** (后续规划：通过 `Tab` 键一键切换，直接在终端内渲染图表热力图与项目耗资排行榜)
++
++```
++cmd/dashboard/        CLI 入口 + 装配层 + 嵌入的 pricing_table.json
++internal/
++├── model/            共享数据结构 (TokenUsage)
++├── watcher/          fsnotify 实时监听 + JSONL 解析
++├── scanner/          历史日志全量/增量扫描
++├── calculator/       Token → USD 计费引擎
++├── db/               SQLite 持久层 (WAL 模式)
++└── web/              HTTP API + 嵌入式 React SPA (go:embed)
++```
++
++本项目严格遵循 TDD 规范构建，各模块独立解耦：
++
++| 模块 | 职责 | 测试 |
++|---|---|:---:|
++| `model` | 定义 `TokenUsage` 共享结构体 | — |
++| `watcher` | fsnotify 监听 + Claude/Gemini 日志解析 | ✅ |
++| `scanner` | 历史日志批量扫描，支持增量 + 文件截断检测 | ✅ |
++| `calculator` | 按模型计费，支持文件加载和字节流初始化 | ✅ |
++| `db` | SQLite 持久化，按时间窗口/设备聚合查询 | ✅ |
++| `web` | REST API (`/api/stats`) + 静态文件服务 | ✅ |
++
++## 📡 API
++
++```
++GET /api/stats              # 全量统计
++GET /api/stats?device=my-mac  # 按设备过滤
++```
++
++返回 `{ periods, sources, devices }` — 详见 [dashboard-api.md](dashboard-api.md)。
++
++## 🗺 路线图
++
++- [x] **Phase 1: 极客 HUD 层** — 终端常驻 Bubble Tea 面板，实时闪烁更新
++- [x] **Phase 2: 结构化持久层** — 实时日志拦截 + SQLite 入库 + 增量扫描
++- [x] **Phase 2.5: Web 看板** — React SPA + HTTP API + 嵌入式分发
++- [ ] **Phase 3: 全键盘终端看板** — `Tab` 切换，终端内渲染 ASCII 图表与排行榜
++
++## 📜 License
++
++MIT
+diff --git a/cmd/dashboard/main.go b/cmd/dashboard/main.go
+new file mode 100644
+index 0000000..6a00703
+--- /dev/null
++++ b/cmd/dashboard/main.go
+@@ -0,0 +1,311 @@
++package main
++
++import (
++	"context"
++	_ "embed"
++	"flag"
++	"fmt"
++	"log"
++	"net/http"
++	"os"
++	"os/signal"
++	"path/filepath"
++	"syscall"
++	"time"
++
++	"ai-flight-dashboard/internal/alert"
++	"ai-flight-dashboard/internal/calculator"
++	"ai-flight-dashboard/internal/db"
++	"ai-flight-dashboard/internal/forwarder"
++	"ai-flight-dashboard/internal/model"
++	"ai-flight-dashboard/internal/scanner"
++	"ai-flight-dashboard/internal/tui"
++	"ai-flight-dashboard/internal/watcher"
++	"ai-flight-dashboard/internal/web"
++
++	tea "github.com/charmbracelet/bubbletea"
++)
++
++//go:embed pricing_table.json
++var embeddedPricing []byte
++
++func main() {
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++
++	// Parse CLI flags
++	webMode := flag.Bool("web", false, "Run in web dashboard mode")
++	port := flag.String("port", "9100", "HTTP port for web mode")
++	forwardTo := flag.String("forward-to", "", "Forward local usage to remote dashboard URL (e.g. http://server:9100/api/track)")
++	token := flag.String("token", "", "Authorization token for web mode or forwarder")
++	defaultDevice, _ := os.Hostname()
++	if defaultDevice == "" {
++		defaultDevice = "local"
++	}
++	deviceID := flag.String("device-id", defaultDevice, "Device identifier")
++	billingModeStr := flag.String("billing-mode", "auto", "Billing mode: auto, subscription, api")
++	plan := flag.String("plan", "", "Subscription plan: pro, max5, max20 (only for subscription mode)")
++	budgetDaily := flag.Float64("budget-daily", 0, "Daily budget limit in USD (only for api mode, 0=disabled)")
++	syncMode := flag.String("sync-mode", "poll", "Sync mode: poll (default), fsnotify, once")
++	flag.BoolVar(webMode, "w", false, "Run in web dashboard mode (shorthand)")
++	flag.StringVar(port, "p", "9100", "HTTP port for web mode (shorthand)")
++	flag.Parse()
++
++	// Read token from environment variable if not provided via flag
++	if *token == "" {
++		*token = os.Getenv("DASHBOARD_TOKEN")
++	}
++
++	// Validate billing mode
++	billingMode, err := model.ParseBillingMode(*billingModeStr)
++	if err != nil {
++		log.Fatalf("Invalid billing mode: %v", err)
++	}
++	if billingMode == model.BillingSubscription && *plan != "" {
++		if _, ok := model.PlanLimits[*plan]; !ok {
++			log.Fatalf("Unknown plan %q: must be pro, max5, or max20", *plan)
++		}
++	}
++
++	// Subcommand dispatch: export | import | dedup
++	if args := flag.Args(); len(args) > 0 {
++		switch args[0] {
++		case "export":
++			runExport(*deviceID)
++			return
++		case "import":
++			if len(args) < 2 {
++				fmt.Fprintln(os.Stderr, "Usage: dashboard import <file.csv>")
++				os.Exit(1)
++			}
++			runImport(args[1])
++			return
++		case "dedup":
++			runDedup()
++			return
++		}
++	}
++
++	// Forwarder Mode
++	if *forwardTo != "" {
++		fmt.Printf("🚀 Starting forwarder mode. Device: %s, Target: %s\n", *deviceID, *forwardTo)
++		
++		w, err := watcher.New(*deviceID)
++		if err != nil {
++			log.Fatalf("Failed to initialize watcher: %v", err)
++		}
++		defer w.Close()
++
++		home, _ := os.UserHomeDir()
++		claudeProjects := filepath.Join(home, ".claude", "projects")
++		if _, err := os.Stat(claudeProjects); err == nil {
++			w.WatchDirRecursive(claudeProjects)
++		}
++		geminiTmp := filepath.Join(home, ".gemini", "tmp")
++		if _, err := os.Stat(geminiTmp); err == nil {
++			w.WatchDirRecursive(geminiTmp)
++		}
++
++		fw := forwarder.New(*forwardTo, *token, *deviceID)
++		fw.Start(w.UsageChan) // Blocks forever
++		return
++	}
++
++	// Initialize Calculator from embedded pricing table
++	calc, err := calculator.NewFromBytes(embeddedPricing)
++	if err != nil {
++		log.Fatalf("Failed to initialize calculator: %v", err)
++	}
++
++	// Initialize Database
++	os.MkdirAll("stats", 0755)
++	database, err := db.New("stats/usage.db")
++	if err != nil {
++		log.Fatalf("Failed to initialize database: %v", err)
++	}
++	defer database.Close()
++
++	// Collect scan directories
++	home, _ := os.UserHomeDir()
++	var scanDirs []string
++
++	claudeProjects := filepath.Join(home, ".claude", "projects")
++	if _, err := os.Stat(claudeProjects); err == nil {
++		scanDirs = append(scanDirs, claudeProjects)
++	}
++
++	geminiTmp := filepath.Join(home, ".gemini", "tmp")
++	if _, err := os.Stat(geminiTmp); err == nil {
++		scanDirs = append(scanDirs, geminiTmp)
++	}
++
++	// Initialize Watcher immediately (instant, ~26µs)
++	w, err := watcher.New(*deviceID)
++	if err != nil {
++		log.Fatalf("Failed to initialize watcher: %v", err)
++	}
++	defer w.Close()
++
++	// Fast path: register cached known directories (~1ms vs 134ms recursive)
++	knownDirs, _ := database.ListKnownDirs()
++	if *syncMode == "fsnotify" && len(knownDirs) > 0 {
++		w.WatchKnownDirs(knownDirs)
++		// Also watch project roots for new session dirs
++		for _, dir := range scanDirs {
++			w.WatchDir(dir)
++		}
++	}
++
++	// Background: full scan + discover new directories
++	go func() {
++		s := scanner.New(database, calc, *deviceID)
++		s.ScanAll(scanDirs, w.UsageChan) // incremental; auto-caches new dirs to known_dirs
++
++		if *syncMode == "fsnotify" {
++			if len(knownDirs) == 0 {
++				// First run: no cache yet, do full recursive watch
++				for _, dir := range scanDirs {
++					w.WatchDirRecursive(dir)
++				}
++			} else {
++				// Subsequent runs: pick up any newly discovered dirs
++				newDirs, _ := database.ListKnownDirs()
++				w.WatchKnownDirs(newDirs)
++			}
++		} else if *syncMode == "poll" {
++			fastTicker := time.NewTicker(2 * time.Second)
++			slowTicker := time.NewTicker(60 * time.Second)
++			defer fastTicker.Stop()
++			defer slowTicker.Stop()
++			for {
++				select {
++				case <-ctx.Done():
++					return
++				case <-fastTicker.C:
++					s.ScanKnownFiles(w.UsageChan)
++				case <-slowTicker.C:
++					s.ScanAll(scanDirs, w.UsageChan)
++				}
++			}
++		}
++		// "once" mode does nothing more
++	}()
++
++	if *webMode {
++		// Background goroutine: drain watcher events and persist to DB
++		go func() {
++			for {
++				select {
++				case <-ctx.Done():
++					return
++				case u, ok := <-w.UsageChan:
++					if !ok {
++						return
++					}
++					if *syncMode == "fsnotify" {
++						cost, _ := calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens)
++						database.InsertUsage(u, cost, *deviceID)
++					}
++				}
++			}
++		}()
++
++		// Web dashboard mode with graceful shutdown
++		handler := web.NewHandler(database, calc, *token)
++		srv := &http.Server{Addr: "0.0.0.0:" + *port, Handler: handler}
++
++		go func() {
++			sigCh := make(chan os.Signal, 1)
++			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
++			<-sigCh
++			fmt.Println("\n🛬 Shutting down gracefully...")
++			srv.Shutdown(context.Background())
++		}()
++
++		fmt.Printf("🌐 Web dashboard: http://localhost:%s\n", *port)
++		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
++			log.Fatalf("Web server error: %v", err)
++		}
++		return
++	}
++
++	// TUI mode — starts instantly, data populates in background
++	f, err := tea.LogToFile("stats/debug.log", "debug")
++	if err != nil {
++		fmt.Println("fatal:", err)
++		os.Exit(1)
++	}
++	defer f.Close()
++
++	// Budget alert: active in api mode with a daily limit
++	var budgetAlert *alert.BudgetAlert
++	if billingMode == model.BillingAPI && *budgetDaily > 0 {
++		budgetAlert = alert.NewBudgetAlert(database, *budgetDaily)
++		fmt.Printf("💰 Budget mode: $%.2f/day limit\n", *budgetDaily)
++	}
++
++	skipDBWrite := (*syncMode != "fsnotify")
++	p := tea.NewProgram(tui.NewModel(calc, w, database, budgetAlert, skipDBWrite))
++	if _, err := p.Run(); err != nil {
++		fmt.Printf("Alas, there's been an error: %v", err)
++		os.Exit(1)
++	}
++}
++
++func openDB() *db.DB {
++	os.MkdirAll("stats", 0755)
++	database, err := db.New("stats/usage.db")
++	if err != nil {
++		log.Fatalf("Failed to open database: %v", err)
++	}
++	return database
++}
++
++func runExport(deviceID string) {
++	database := openDB()
++	defer database.Close()
++
++	filter := ""
++	if deviceID != "local" && deviceID != "" {
++		filter = deviceID
++	}
++
++	count, err := database.ExportCSV(os.Stdout, filter)
++	if err != nil {
++		log.Fatalf("Export failed: %v", err)
++	}
++	fmt.Fprintf(os.Stderr, "✅ Exported %d records", count)
++	if filter != "" {
++		fmt.Fprintf(os.Stderr, " (device=%s)", filter)
++	}
++	fmt.Fprintln(os.Stderr)
++}
++
++func runImport(filePath string) {
++	database := openDB()
++	defer database.Close()
++
++	file, err := os.Open(filePath)
++	if err != nil {
++		log.Fatalf("Failed to open %s: %v", filePath, err)
++	}
++	defer file.Close()
++
++	imported, skipped, err := database.ImportCSV(file)
++	if err != nil {
++		log.Fatalf("Import failed: %v", err)
++	}
++	fmt.Printf("✅ Import complete: %d imported, %d skipped (duplicates)\n", imported, skipped)
++}
++
++func runDedup() {
++	database := openDB()
++	defer database.Close()
++
++	removed, err := database.DeduplicateExisting()
++	if err != nil {
++		log.Fatalf("Dedup failed: %v", err)
++	}
++	fmt.Printf("✅ Removed %d duplicate records\n", removed)
++}
++
+diff --git a/stats/pricing_table.json b/cmd/dashboard/pricing_table.json
+similarity index 100%
+rename from stats/pricing_table.json
+rename to cmd/dashboard/pricing_table.json
+diff --git a/dashboard-ui/corporate/App.tsx b/dashboard-ui/corporate/App.tsx
+index b93ba64..d8d074a 100644
+--- a/dashboard-ui/corporate/App.tsx
++++ b/dashboard-ui/corporate/App.tsx
+@@ -27,74 +27,83 @@ export default function App() {
+     return () => clearInterval(interval);
+   }, [selectedDevice]);
+ 
+-  if (!data) return <div className="min-h-screen bg-[#0a0f12] text-[#dee3e8] p-8 flex items-center justify-center font-['Inter']">Connecting to flight recorder...</div>;
++  if (!data) return (
++    <div className="min-h-screen bg-[#FFFFFF] text-[#000000] p-[40px] flex items-center justify-center font-display text-[48px] uppercase border-[24px] border-[#000000] m-[24px]">
++      SYSTEM INITIALIZING...
++    </div>
++  );
+ 
+   const { periods, sources } = data;
+ 
+   return (
+-    <div className="bg-[#0a0f12] text-[#dee3e8] font-['Inter'] min-h-screen p-8 relative z-0">
+-      {/* Background Decoration Grid */}
+-      <div className="fixed inset-0 pointer-events-none opacity-[0.04] z-[-1]" style={{backgroundImage: "radial-gradient(#8ed5ff 1px, transparent 1px)", backgroundSize: "32px 32px"}}></div>
+-
++    <div className="bg-[#FFFFFF] text-[#000000] min-h-screen p-[24px] md:p-[40px] font-sans selection:bg-[#000000] selection:text-[#FFFFFF]">
++      
+       {/* Header Section */}
+-      <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8 bg-[#111820]/40 p-4 rounded-xl border border-[#475569]/20">
+-        <div className="flex items-center gap-4">
+-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+-            <span className="material-symbols-outlined text-[#8ed5ff] text-3xl">rocket_launch</span>
+-            AI Flight Dashboard
++      <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-[24px] mb-[64px] border-b-[5px] border-[#000000] pb-[24px]">
++        <div>
++          <h1 className="font-display text-[48px] md:text-[64px] leading-[1.0] uppercase tracking-tighter mb-[16px]">
++            AI Flight<br />Dashboard
+           </h1>
+-          
+-          {data && (
+-            <select 
+-              value={selectedDevice} 
+-              onChange={e => setSelectedDevice(e.target.value)}
+-              className="bg-[#111820] text-[#8ed5ff] border border-[#475569]/40 rounded-md px-3 py-1 font-mono text-sm outline-none focus:border-[#8ed5ff] ml-4"
+-            >
+-              <option value="all">All Devices</option>
+-              {data.devices?.map((d: string) => (
+-                <option key={d} value={d}>{d}</option>
+-              ))}
+-            </select>
+-          )}
+-
+-          <div className="flex items-center gap-2 bg-[#93000a]/10 px-3 py-1 border border-[#ffb4ab]/20 rounded-full ml-4">
+-            <span className="w-2 h-2 rounded-full bg-[#f87171] animate-pulse"></span>
+-            <span className="text-[#f87171] font-mono text-[11px] font-bold tracking-widest">LIVE_OPERATIONS</span>
++          <div className="flex flex-col md:flex-row md:items-center gap-[16px]">
++            <div className="border-[3px] border-[#008000] text-[#008000] px-[12px] py-[4px] font-sans text-[11px] font-semibold uppercase tracking-[1px] w-fit">
++              LIVE_OPERATIONS
++            </div>
++            {data && (
++              <select 
++                value={selectedDevice} 
++                onChange={e => setSelectedDevice(e.target.value)}
++                className="bg-[#F0F0F0] text-[#000000] border-[3px] border-[#000000] rounded-none px-[12px] py-[8px] font-mono text-[15px] outline-none focus:border-[5px] focus:m-[-2px]"
++              >
++                <option value="all">ALL DEVICES</option>
++                {data.devices?.map((d: string) => (
++                  <option key={d} value={d}>{d.toUpperCase()}</option>
++                ))}
++              </select>
++            )}
++          </div>
++        </div>
++        <div className="font-mono text-[15px] text-left md:text-right">
++          <div>DATA REFRESH RATE: 5000MS</div>
++          <div className="text-[#0000FF] uppercase underline decoration-[3px] underline-offset-4 cursor-pointer mt-[8px]">
++            SYSTEM LOGS
+           </div>
+         </div>
+       </header>
+ 
+       {/* PeriodCost Stats Row */}
+-      <section className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-12">
+-        {periods.map((p: any, i: number) => (
+-          <div key={i} className={`bg-[#111820] border rounded-xl p-5 shadow-sm transition-all flex flex-col justify-between ${p.label === 'ALL' ? 'border-[#8ed5ff]/40 ring-1 ring-[#8ed5ff]/20' : 'border-[#475569]/30 hover:border-[#8ed5ff]/50'}`}>
+-            <div className="flex justify-between items-center mb-1">
+-              <span className="text-[#94a3b8] text-[10px] uppercase tracking-widest">{p.label}</span>
+-              <div className="flex gap-2 text-[8px] uppercase tracking-widest font-mono">
+-                <span className="text-[#38bdf8]" title="Base In">IN:{fmt(Math.max(0, p.input_tokens - p.cached_tokens))}</span>
+-                <span className="text-[#ffc176]" title="Cached">CA:{fmt(p.cached_tokens)}</span>
+-                <span className="text-[#bcc7de]" title="Output">OUT:{fmt(p.output_tokens)}</span>
++      <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-[24px] mb-[80px]">
++        {periods.map((p: any, i: number) => {
++          const isElevated = p.label === 'ALL';
++          const cardClass = `bg-[#FFFFFF] border-[#000000] rounded-none p-[24px] flex flex-col justify-between shadow-none ${isElevated ? 'border-[5px]' : 'border-[3px]'}`;
++          return (
++            <div key={i} className={cardClass}>
++              <div className="mb-[16px]">
++                <h3 className="font-display text-[22px] leading-[1.1] uppercase mb-[8px]">{p.label}</h3>
++                <div className="flex flex-col gap-[4px] font-mono text-[15px]">
++                  <span>IN: {fmt(Math.max(0, p.input_tokens - p.cached_tokens - (p.cache_creation_tokens || 0)))}</span>
++                  <span>CA_R: {fmt(p.cached_tokens)}</span>
++                  <span>CA_W: {fmt(p.cache_creation_tokens || 0)}</span>
++                  <span>OUT: {fmt(p.output_tokens)}</span>
++                </div>
++              </div>
++              <div className="font-mono text-[32px] md:text-[40px] leading-none mt-[16px] border-t-[3px] border-[#000000] pt-[16px]">
++                {fmtCost(p.cost)}
+               </div>
+             </div>
+-            <div className={`text-3xl font-mono mt-1 ${p.label === 'ALL' ? 'text-[#8ed5ff]' : 'text-[#dee3e8]'}`}>{fmtCost(p.cost)}</div>
+-          </div>
+-        ))}
++          )
++        })}
+       </section>
+ 
+       {/* Source Stats Grid */}
+-      <section className="grid grid-cols-1 xl:grid-cols-2 gap-8">
++      <section className="grid grid-cols-1 xl:grid-cols-2 gap-[40px]">
+         {sources.map((src: any, si: number) => {
+-           const isClaude = src.name.includes('Claude') || src.name.includes('Anthropic');
+-           const accentColor = isClaude ? '#f1a02b' : '#38bdf8'; // Primary or tertiary
+-           const accentClass = isClaude ? 'text-[#f1a02b]' : 'text-[#38bdf8]';
+-           const bgClass = isClaude ? 'bg-[#f1a02b]/10' : 'bg-[#38bdf8]/10';
+-
+-           const baseInput = Math.max(0, src.total_input - src.total_cached);
+-           const totalTokens = baseInput + src.total_cached + src.total_output;
++           const baseInput = Math.max(0, src.total_input - src.total_cached - (src.total_cache_creation || 0));
++           const totalTokens = baseInput + src.total_cached + (src.total_cache_creation || 0) + src.total_output;
+            
+            const inPct = totalTokens > 0 ? (baseInput / totalTokens) * 100 : 0;
+-           const outPct = totalTokens > 0 ? (src.total_output / totalTokens) * 100 : 0;
+            const cachedPct = totalTokens > 0 ? (src.total_cached / totalTokens) * 100 : 0;
++           const cacheCreationPct = totalTokens > 0 ? ((src.total_cache_creation || 0) / totalTokens) * 100 : 0;
++           const outPct = totalTokens > 0 ? (src.total_output / totalTokens) * 100 : 0;
+ 
+            const formatPct = (pct: number) => {
+              if (pct > 0 && pct < 1) return '<1%';
+@@ -104,85 +113,89 @@ export default function App() {
+            const sortedModels = [...src.models].sort((a: any, b: any) => b.total_cost - a.total_cost);
+ 
+            return (
+-            <article key={si} className="bg-[#111820] border border-[#475569]/30 rounded-2xl overflow-hidden shadow-lg flex flex-col">
+-              <div className="p-6 bg-[#1b2024]/20 border-b border-[#475569]/30 flex justify-between items-center">
++            <article key={si} className="bg-[#FFFFFF] border-[5px] border-[#000000] rounded-none shadow-none flex flex-col">
++              <div className="p-[24px] border-b-[5px] border-[#000000] flex flex-col md:flex-row justify-between items-start md:items-end gap-[16px] bg-[#000000] text-[#FFFFFF]">
+                 <div>
+-                  <h2 className="text-xl font-bold text-[#dee3e8] flex items-center gap-3">
+-                    <span className={`material-symbols-outlined ${accentClass} ${bgClass} p-1.5 rounded-lg`}>{isClaude ? 'memory' : 'hub'}</span>
++                  <h2 className="font-display text-[32px] md:text-[48px] uppercase leading-[1.05]">
+                     {src.name}
+                   </h2>
+                 </div>
+-                <div className="text-right">
+-                  <span className="text-[10px] text-[#94a3b8] uppercase tracking-widest font-mono">Total Spend</span>
+-                  <div className={`text-3xl font-mono mt-0.5 ${accentClass}`}>{fmtCost(src.total_cost)}</div>
++                <div className="text-left md:text-right">
++                  <span className="font-display text-[14px] uppercase mb-[4px] block">TOTAL SPEND</span>
++                  <div className="font-mono text-[32px] md:text-[48px] leading-none">{fmtCost(src.total_cost)}</div>
+                 </div>
+               </div>
+ 
+-              <div className="grid grid-cols-1 md:grid-cols-2 gap-0 border-b border-[#475569]/20">
++              <div className="grid grid-cols-1 md:grid-cols-2 border-b-[5px] border-[#000000]">
+                 {/* Token Distribution Grid */}
+-                <div className="p-6 border-r border-[#475569]/20 grid grid-cols-2 gap-6 bg-[#111820]">
+-                  <div className="border-l-2 border-[#38bdf8] pl-4 py-1">
+-                    <span className="text-[9px] uppercase text-[#94a3b8] tracking-wider font-mono">Base In</span>
+-                    <div className="text-xl font-bold font-mono">{fmt(baseInput)}</div>
++                <div className="p-[24px] border-b-[5px] md:border-b-0 md:border-r-[5px] border-[#000000] grid grid-cols-2 md:grid-cols-3 gap-[24px]">
++                  <div className="border-l-[5px] border-[#000000] pl-[12px]">
++                    <span className="font-display text-[14px] uppercase block mb-[4px]">BASE IN</span>
++                    <div className="font-mono text-[24px]">{fmt(baseInput)}</div>
++                  </div>
++                  <div className="border-l-[5px] border-[#000000] pl-[12px]">
++                    <span className="font-display text-[14px] uppercase block mb-[4px]">CA_R</span>
++                    <div className="font-mono text-[24px]">{fmt(src.total_cached)}</div>
+                   </div>
+-                  <div className="border-l-2 border-[#ffc176] pl-4 py-1">
+-                    <span className="text-[9px] uppercase text-[#94a3b8] tracking-wider font-mono">Cached</span>
+-                    <div className="text-xl font-bold font-mono">{fmt(src.total_cached)}</div>
++                  <div className="border-l-[5px] border-[#000000] pl-[12px]">
++                    <span className="font-display text-[14px] uppercase block mb-[4px]">CA_W</span>
++                    <div className="font-mono text-[24px]">{fmt(src.total_cache_creation || 0)}</div>
+                   </div>
+-                  <div className="border-l-2 border-[#bcc7de] pl-4 py-1">
+-                    <span className="text-[9px] uppercase text-[#94a3b8] tracking-wider font-mono">Output</span>
+-                    <div className="text-xl font-bold font-mono">{fmt(src.total_output)}</div>
++                  <div className="border-l-[5px] border-[#000000] pl-[12px]">
++                    <span className="font-display text-[14px] uppercase block mb-[4px]">OUTPUT</span>
++                    <div className="font-mono text-[24px]">{fmt(src.total_output)}</div>
+                   </div>
+-                  <div className="border-l-2 border-[#8ed5ff] pl-4 py-1">
+-                    <span className="text-[9px] uppercase text-[#94a3b8] tracking-wider font-mono">Aggregate</span>
+-                    <div className="text-xl font-bold font-mono">{fmt(totalTokens)}</div>
++                  <div className="border-l-[5px] border-[#000000] pl-[12px]">
++                    <span className="font-display text-[14px] uppercase block mb-[4px]">TOTAL</span>
++                    <div className="font-mono text-[24px]">{fmt(totalTokens)}</div>
+                   </div>
+                 </div>
+ 
+-                {/* Donut Chart Area */}
+-                <div className="p-6 flex items-center justify-center gap-8 bg-[#111820]">
+-                  <div className="relative w-20 h-20">
+-                    <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+-                      <circle cx="18" cy="18" fill="none" r="16" stroke="#1e293b" strokeWidth="3"></circle>
+-                      <circle cx="18" cy="18" fill="none" r="16" stroke="#38bdf8" strokeDasharray={`${inPct} 100`} strokeWidth="3"></circle>
+-                      <circle cx="18" cy="18" fill="none" r="16" stroke="#ffc176" strokeDasharray={`${cachedPct} 100`} strokeDashoffset={`-${inPct}`} strokeWidth="3"></circle>
+-                      <circle cx="18" cy="18" fill="none" r="16" stroke="#bcc7de" strokeDasharray={`${outPct} 100`} strokeDashoffset={`-${inPct + cachedPct}`} strokeWidth="3"></circle>
+-                    </svg>
++                {/* Brutalist Progress Bar Area */}
++                <div className="p-[24px] flex flex-col justify-center">
++                  <div className="w-full h-[40px] border-[3px] border-[#000000] flex mb-[16px]">
++                    <div style={{width: `${inPct}%`}} className="bg-[#000000] h-full border-r-[3px] border-[#000000]"></div>
++                    <div style={{width: `${cachedPct}%`}} className="bg-[#CCCCCC] h-full border-r-[3px] border-[#000000]"></div>
++                    <div style={{width: `${cacheCreationPct}%`}} className="bg-[#888888] h-full border-r-[3px] border-[#000000]"></div>
++                    <div style={{width: `${outPct}%`}} className="bg-[#FFFFFF] h-full"></div>
+                   </div>
+-                  <div className="flex flex-col gap-1.5">
+-                    <div className="flex items-center gap-2 text-[9px] font-mono">
+-                      <span className="w-1.5 h-1.5 bg-[#38bdf8] rounded-sm"></span> IN ({formatPct(inPct)})
++                  <div className="flex flex-col gap-[8px] font-mono text-[15px]">
++                    <div className="flex items-center gap-[8px]">
++                      <span className="w-[16px] h-[16px] bg-[#000000] border-[3px] border-[#000000]"></span> IN ({formatPct(inPct)})
+                     </div>
+-                    <div className="flex items-center gap-2 text-[9px] font-mono">
+-                      <span className="w-1.5 h-1.5 bg-[#ffc176] rounded-sm"></span> CACHED ({formatPct(cachedPct)})
++                    <div className="flex items-center gap-[8px]">
++                      <span className="w-[16px] h-[16px] bg-[#CCCCCC] border-[3px] border-[#000000]"></span> CA_R ({formatPct(cachedPct)})
+                     </div>
+-                    <div className="flex items-center gap-2 text-[9px] font-mono">
+-                      <span className="w-1.5 h-1.5 bg-[#bcc7de] rounded-sm"></span> OUT ({formatPct(outPct)})
++                    <div className="flex items-center gap-[8px]">
++                      <span className="w-[16px] h-[16px] bg-[#888888] border-[3px] border-[#000000]"></span> CA_W ({formatPct(cacheCreationPct)})
++                    </div>
++                    <div className="flex items-center gap-[8px]">
++                      <span className="w-[16px] h-[16px] bg-[#FFFFFF] border-[3px] border-[#000000]"></span> OUT ({formatPct(outPct)})
+                     </div>
+                   </div>
+                 </div>
+               </div>
+ 
+               {/* Model Table */}
+-              <div className="overflow-x-auto bg-[#05070a]">
+-                <table className="w-full text-left font-mono">
++              <div className="overflow-x-auto">
++                <table className="w-full text-left font-mono text-[15px]">
+                   <thead>
+-                    <tr className="bg-[#1b2024]/40 border-b border-[#475569]/30">
+-                      <th className="px-6 py-3 text-[9px] uppercase tracking-widest text-[#94a3b8]">Model Identifier</th>
+-                      <th className="px-6 py-3 text-[9px] uppercase tracking-widest text-[#94a3b8]">Rates (Per 1M)</th>
+-                      <th className="px-6 py-3 text-[9px] uppercase tracking-widest text-[#94a3b8]">Events</th>
+-                      <th className="px-6 py-3 text-[9px] uppercase tracking-widest text-[#94a3b8] text-right">Subtotal</th>
++                    <tr className="border-b-[5px] border-[#000000] bg-[#F0F0F0]">
++                      <th className="px-[16px] py-[16px] font-display text-[14px] uppercase">Model Identifier</th>
++                      <th className="px-[16px] py-[16px] font-display text-[14px] uppercase">Rates (1M)</th>
++                      <th className="px-[16px] py-[16px] font-display text-[14px] uppercase">Events</th>
++                      <th className="px-[16px] py-[16px] font-display text-[14px] uppercase text-right">Subtotal</th>
+                     </tr>
+                   </thead>
+-                  <tbody className="divide-y divide-[#475569]/10">
++                  <tbody>
+                     {sortedModels.map((m: any, mi: number) => (
+-                      <tr key={mi} className="hover:bg-[#8ed5ff]/5 transition-colors">
+-                        <td className={`px-6 py-3.5 ${accentClass}`}>{m.model}</td>
+-                        <td className="px-6 py-3.5 text-[10px] text-[#94a3b8]">
+-                          In: {fmtCost(m.input_price_per_m || 0)} | Ca: {fmtCost(m.cached_price_per_m || 0)} | Out: {fmtCost(m.output_price_per_m || 0)}
++                      <tr key={mi} className="border-b-[3px] border-[#000000] last:border-b-0 hover:bg-[#000000] hover:text-[#FFFFFF] transition-none group">
++                        <td className="px-[16px] py-[16px] font-bold group-hover:text-[#FFFFFF]">{m.model}</td>
++                        <td className="px-[16px] py-[16px] group-hover:text-[#FFFFFF]">
++                          IN: {fmtCost(m.input_price_per_m || 0)} / CA_R: {fmtCost(m.cached_price_per_m || 0)} / CA_W: {fmtCost(m.cache_creation_price_per_m || 0)} / OUT: {fmtCost(m.output_price_per_m || 0)}
+                         </td>
+-                        <td className="px-6 py-3.5">{m.events}</td>
+-                        <td className="px-6 py-3.5 text-right font-bold">{fmtCost(m.total_cost)}</td>
++                        <td className="px-[16px] py-[16px] group-hover:text-[#FFFFFF]">{m.events}</td>
++                        <td className="px-[16px] py-[16px] text-right font-bold group-hover:text-[#FFFFFF]">{fmtCost(m.total_cost)}</td>
+                       </tr>
+                     ))}
+                   </tbody>
+@@ -195,3 +208,4 @@ export default function App() {
+     </div>
+   );
+ }
++
+diff --git a/dashboard-ui/corporate/index.css b/dashboard-ui/corporate/index.css
+index da4e222..2bc3d11 100644
+--- a/dashboard-ui/corporate/index.css
++++ b/dashboard-ui/corporate/index.css
+@@ -1,2 +1,17 @@
++@import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&family=Work+Sans:ital,wght@0,100..900;1,100..900&display=swap');
+ @import "tailwindcss";
+ @source "./*.tsx";
++
++@theme {
++  --font-sans: "Work Sans", sans-serif;
++  --font-mono: "Space Mono", monospace;
++  --font-display: "Archivo Black", sans-serif;
++}
++
++body {
++  font-family: "Work Sans", sans-serif;
++  background-color: #FFFFFF;
++  color: #000000;
++  margin: 0;
++  padding: 0;
++}
+diff --git a/dashboard-ui/corporate/vite.config.mjs b/dashboard-ui/corporate/vite.config.mjs
+index 0ce1839..14e052d 100644
+--- a/dashboard-ui/corporate/vite.config.mjs
++++ b/dashboard-ui/corporate/vite.config.mjs
+@@ -4,4 +4,9 @@ import tailwindcss from "@tailwindcss/vite";
+ 
+ export default defineConfig({
+   plugins: [react(), tailwindcss()],
++  server: {
++    proxy: {
++      "/api": "http://localhost:9100",
++    },
++  },
+ });
+diff --git a/PRD.md b/docs/PRD.md
+similarity index 100%
+rename from PRD.md
+rename to docs/PRD.md
+diff --git a/docs/ROADMAP.md b/docs/ROADMAP.md
+new file mode 100644
+index 0000000..7a68fc7
+--- /dev/null
++++ b/docs/ROADMAP.md
+@@ -0,0 +1,65 @@
++# AI Flight Dashboard 进阶特性路线图 (ROADMAP)
++
++为了在深度上对标并超越专门针对特定平台的风控探测工具（如 `Claude-Code-Usage-Monitor`），我们计划在 AI Flight Dashboard 中引入更深度的“**成本分析引擎**”与“**配额风控探测**”功能。
++
++以下是具体的跟进深度设计文档：
++
++## 1. 缓存命中率与实际花销估算 (Cache Hit & Cost Estimation)
++
++目前大语言模型工具（尤其是 Claude Code）高度依赖 **Prompt Caching** 来降低大型项目的上下文重组成本。为了准确提供成本大盘，我们需要在现有的 Token 计数之上，增加精细化的计费因子统计。
++
++### 核心功能点
++*   **细粒度 Token 拆解**：
++    将原本单一的 `Total Tokens` 拆解为四重维度：
++    *   `Input Tokens` (常规输入)
++    *   `Output Tokens` (模型输出)
++    *   `Cache Creation Tokens` (缓存写入，通常价格与常规输入不同或一致)
++    *   `Cache Read Tokens` (缓存命中读取，通常价格只有常规输入的 10%)
++*   **多模型动态计价卡 (Price Card)**：
++    系统内置常见模型的标准 API 定价表（如 Claude 3.5 Sonnet, GPT-4o, Gemini 1.5 Pro）。
++    支持根据解析到的各维度 Token，实时计算真实的法币花销（USD）。
++*   **UI/Web 仪表盘展现**：
++    在 Web 看板中新增「成本节省分析面板」，直观展示：**“如果没有命中缓存，你需要花多少钱 vs 命中缓存后你实际花了多少钱，共为你节省了多少。”**
++
++---
++
++## 2. 区分官方订阅制与第三方按量计费 (Subscription vs Pay-As-You-Go API)
++
++用户在使用终端 AI 工具时，通常有两类不同的额度账单模式。这两类模式的风控和限流逻辑完全不同，我们需要能够智能区分或允许用户手动声明。
++
++### 模式 A：官方订阅制 (Official Subscription - 如 Claude Pro, Max5, Max20)
++*   **特点**：按月交固定的订阅费，API 调用不产生额外金钱开销，但**受到极其严格的时间滚动窗口限制**。
++*   **监控重点（防限流探测器）**：
++    *   **5小时滚动窗口追踪**：引入 P90 算法或动态高水位线探测，评估用户在 5 小时内的峰值使用量。
++    *   **限流预警 (Burn Rate Alert)**：根据过去一小时的使用速率，预测当前可用配额何时耗尽。
++    *   **花销计算**：这种模式下，不显示具体的 API 成本（因为是免费额度），而是显示 **“额度消耗占比进度条”**。
++
++### 模式 B：第三方/官方直连 API (Third-Party / Direct API)
++*   **特点**：如使用 Anthropic 官方 API Key、OpenRouter 等中转 API，无严苛的 5 小时滚动窗口限制，但**每一笔调用都产生直接的账单费用**。
++*   **监控重点（财务防超支控制）**：
++    *   **精确计费计算**：深度结合前面提到的「缓存命中率」进行成本测算。
++    *   **每日/预算警告**：允许用户设置“单日最大花费阈值”，超过指定金额时在终端显示强烈的红色告警，防止脚本跑飞导致天价账单。
++
++### 架构实现思路
++1. **自动嗅探**：通过抓包探针分析工具发出的网络请求头或目标域名（例如直接请求 `api.anthropic.com` 大概率是 API 模式，而走网页逆向或其他特定端口可能是订阅模型）。
++2. **显式配置 (CLI Arguments)**：
++   允许在启动 Dashboard 时声明监听目标所属的计费类型：
++   ```bash
++   # 监听 API 消费模式，并应用按量计价卡
++   ./dashboard --billing-mode api --model claude-3-5-sonnet-20241022
++
++   # 监听官方订阅模式，启动 5 小时防封推测探测
++   ./dashboard --billing-mode subscription --plan pro
++   ```
++
++---
++
++## 3. 下一步开发计划 (Next Steps)
++
++1. ~~**[Schema Update]** 更新 SQLite 数据库表，增加 `cached_tokens` 和 `cost_usd` 字段。~~ ✅ 已有
++2. ~~**[Pricing Engine]** 编写计费计算模块 (`internal/calculator`)。~~ ✅ 已有
++3. ~~**[Cache Savings API]** 新增 `/api/cache-savings` 端点 + `CalculateCostNoCaching` 方法。~~ ✅ 已完成
++4. ~~**[Session Tracker]** 针对订阅模式，开发环形队列缓存以追踪近 5 小时 Token 消耗轨迹。~~ ✅ 已完成
++5. ~~**[Billing Mode CLI]** 新增 `--billing-mode` / `--plan` / `--budget-daily` CLI 参数。~~ ✅ 已完成
++6. ~~**[Budget Alert Engine]** `internal/alert` 包：预算阈值告警引擎 + TUI 集成。~~ ✅ 已完成
++7. **[Web UI Upgrade]** 前端面板增加缓存节省卡片与计费模式切换。
+diff --git a/docs/claude-hooks-article.md b/docs/claude-hooks-article.md
+new file mode 100644
+index 0000000..39aff01
+--- /dev/null
++++ b/docs/claude-hooks-article.md
+@@ -0,0 +1,530 @@
++# Claude Code Hooks 完全指南：让 AI 编程助手自动写日记、记住你的习惯
++
++Claude Code 有一套"钩子（Hooks）"机制，可以在特定事件发生时自动执行脚本。配置完成后，每次你关闭对话，它会自动用 LLM 生成一篇工作日志；每次 Claude 调用工具，它会把你的编码行为模式记录下来；所有数据每小时自动同步到私有 GitHub 仓库。本文从零开始，带你完整配置这三个功能。
++
++---
++
++## 一、Hooks 是什么
++
++Hooks 是 Claude Code 提供的事件触发机制。当指定事件发生时，Claude Code 会把事件数据（JSON 格式）通过标准输入传给你的脚本。
++
++四个可用事件：
++
++- **`PreToolUse`** — Claude 调用工具之前（执行命令、编辑文件等）
++- **`PostToolUse`** — Claude 调用工具之后
++- **`Notification`** — Claude 需要你审批操作时
++- **`SessionEnd`** — 你关闭一次对话时
++
++所有钩子配置写在 `~/.claude/settings.json` 文件中。
++
++[Claude Code 终端窗口，屏幕上滚动显示工作日志自动生成的过程]
++
++---
++
++## 二、功能一：关闭对话自动写日记
++
++### 工作原理
++
++```
++你关闭 Claude Code 对话
++       ↓
++SessionEnd 钩子触发
++       ↓
++diary-log.sh 脚本运行
++       ↓
++1. 读取本次对话的完整记录
++2. 提取项目名、Git 最近提交
++3. 发送给 LLM API
++4. LLM 返回 3-5 条高密度摘要
++5. 追加写入 ~/.claude/diary/YYYY-MM-DD.md
++```
++
++### 第 1 步：创建日记脚本
++
++```bash
++mkdir -p ~/.claude/hooks
++```
++
++创建文件 `~/.claude/hooks/diary-log.sh`：
++
++```bash
++#!/bin/bash
++# SessionEnd hook: 用 LLM 自动写日记
++set -euo pipefail
++
++DIARY_DIR="$HOME/.claude/diary"
++mkdir -p "$DIARY_DIR"
++
++# 读取 Claude Code 传入的 JSON
++INPUT=$(cat)
++CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
++TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty')
++
++PROJECT=$(basename "${CWD:-unknown}")
++TIMESTAMP=$(date '+%H:%M')
++DATE=$(date '+%Y-%m-%d')
++DIARY_FILE="$DIARY_DIR/$DATE.md"
++
++# LLM 配置 — 改成你自己的 API 地址和 Key
++LLM_URL="${DIARY_LLM_URL:-https://api.openai.com/v1/chat/completions}"
++LLM_KEY="${DIARY_LLM_KEY:-sk-你的key}"
++LLM_MODEL="${DIARY_LLM_MODEL:-gpt-4o-mini}"
++
++# 系统提示词：信息压缩引擎
++SYSTEM_PROMPT="你是一个高密度日志压缩器。将开发者-AI对话提炼为3-5条中文名词化要点。只记录已完成的工程成果。不使用第一人称。不输出任何开头结尾寒暄。"
++
++# 从记录中提取对话文本
++SUMMARY=""
++if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
++    CONTEXT=$(jq -r '
++      select(.type == "user" or .type == "assistant")
++      | (if .type == "user" then "User: " else "Assistant: " end)
++        + (if (.message.content | type) == "string" then .message.content
++           elif (.message.content | type) == "array" then
++             [.message.content[] | select(.type == "text") | .text] | join(" ")
++           else "" end)
++    ' "$TRANSCRIPT_PATH" 2>/dev/null | tail -c 500000)
++
++    if [ -n "$CONTEXT" ]; then
++        ESCAPED_SYSTEM=$(echo "$SYSTEM_PROMPT" | jq -Rs .)
++        USER_MSG="[项目]: $PROJECT
++[对话内容]:
++$CONTEXT"
++        ESCAPED_USER=$(echo "$USER_MSG" | jq -Rs .)
++
++        RESPONSE=$(curl -s --max-time 60 \
++            -H "Authorization: Bearer $LLM_KEY" \
++            -H "content-type: application/json" \
++            "$LLM_URL" \
++            -d "{
++                \"model\": \"$LLM_MODEL\",
++                \"max_tokens\": 500,
++                \"temperature\": 0.3,
++                \"messages\": [
++                    {\"role\": \"system\", \"content\": $ESCAPED_SYSTEM},
++                    {\"role\": \"user\", \"content\": $ESCAPED_USER}
++                ]
++            }" 2>/dev/null)
++
++        SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
++    fi
++fi
++
++# 写入日记
++{
++    echo ""
++    echo "### $TIMESTAMP — $PROJECT"
++    echo ""
++    echo "${SUMMARY:-(无法提取会话摘要)}"
++    echo ""
++} >> "$DIARY_FILE"
++
++exit 0
++```
++
++赋予执行权限：
++
++```bash
++chmod +x ~/.claude/hooks/diary-log.sh
++```
++
++### 第 2 步：注册到 settings.json
++
++编辑 `~/.claude/settings.json`，加入以下内容：
++
++```json
++{
++  "hooks": {
++    "SessionEnd": [
++      {
++        "matcher": "",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "~/.claude/hooks/diary-log.sh",
++            "timeout": 30,
++            "async": true
++          }
++        ]
++      }
++    ]
++  }
++}
++```
++
++三个关键参数：
++
++- `"matcher": ""` — 空字符串匹配所有 session
++- `"timeout": 30` — 最多等 30 秒（LLM API 可能较慢）
++- `"async": true` — 异步执行，不阻塞关闭流程
++
++### 第 3 步：配置你的 LLM API
++
++在 `~/.zshrc` 中添加环境变量：
++
++```bash
++# 使用 OpenAI
++export DIARY_LLM_URL="https://api.openai.com/v1/chat/completions"
++export DIARY_LLM_KEY="sk-你的key"
++export DIARY_LLM_MODEL="gpt-4o-mini"
++
++# 或者使用本地 Ollama（离线可用）
++# export DIARY_LLM_URL="http://localhost:11434/v1/chat/completions"
++# export DIARY_LLM_KEY="ollama"
++# export DIARY_LLM_MODEL="qwen2.5:7b"
++```
++
++### 第 4 步：验证
++
++关闭一次 Claude Code 对话，然后检查日记文件：
++
++```bash
++cat ~/.claude/diary/$(date +%Y-%m-%d).md
++```
++
++正常情况下会看到类似输出：
++
++```markdown
++### 17:30 — my-project
++
++- API 端点 `/api/cache-savings` 新增与测试覆盖
++- CLI 参数三级配置体系落地：`--billing-mode` / `--plan` / `--budget-daily`
++- 预算告警引擎阈值分级逻辑实现与 TUI 集成渲染
++```
++
++[开发者终端屏幕，按日期整理的工作日志文件列表，每个文件对应一天的 AI 编程工作记录]
++
++---
++
++## 三、功能二：自动记录行为模式
++
++### 工作原理
++
++每次 Claude 调用工具（运行命令、编辑文件、搜索代码），`observe.sh` 脚本会把工具名称、输入输出记录到本地文件。这些数据可以被后续的分析 Agent 处理，提炼出你的编码习惯（比如"总是先写测试"）。
++
++```
++Claude 调用任何工具
++       ↓
++PreToolUse / PostToolUse 钩子触发
++       ↓
++observe.sh 脚本运行
++       ↓
++1. 解析工具名、输入、输出
++2. 检测当前项目（通过 git root）
++3. 自动脱敏（API key、密码等替换为 [REDACTED]）
++4. 写入 ~/.claude/homunculus/projects/<id>/observations.jsonl
++```
++
++脚本内置 5 层防自循环保护，不会把 AI 子代理的工具调用递归记录进去。
++
++### 第 1 步：获取技能包
++
++```bash
++# 方法 A：如果你有现成的 skills 仓库
++git clone https://github.com/你的用户名/claude-skills-private.git ~/claude-skills-private
++
++# 方法 B：手动创建目录
++mkdir -p ~/claude-skills-private/continuous-learning-v2/hooks
++mkdir -p ~/claude-skills-private/continuous-learning-v2/scripts
++mkdir -p ~/claude-skills-private/continuous-learning-v2/agents
++```
++
++### 第 2 步：创建符号链接
++
++```bash
++mkdir -p ~/.claude/skills
++ln -s ~/claude-skills-private/continuous-learning-v2/ ~/.claude/skills/continuous-learning-v2
++```
++
++### 第 3 步：注册观察者钩子
++
++在 `~/.claude/settings.json` 的 `hooks` 中添加：
++
++```json
++{
++  "hooks": {
++    "PreToolUse": [
++      {
++        "matcher": "*",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "~/.claude/skills/continuous-learning-v2/hooks/observe.sh pre",
++            "timeout": 10,
++            "async": true
++          }
++        ]
++      }
++    ],
++    "PostToolUse": [
++      {
++        "matcher": "*",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "~/.claude/skills/continuous-learning-v2/hooks/observe.sh post",
++            "timeout": 10,
++            "async": true
++          }
++        ]
++      }
++    ]
++  }
++}
++```
++
++### 第 4 步：验证
++
++用 Claude Code 做几次操作后：
++
++```bash
++# 查看观察数据目录
++ls ~/.claude/homunculus/projects/
++
++# 查看某个项目的观察记录（前 3 条）
++cat ~/.claude/homunculus/projects/*/observations.jsonl | head -3 | jq .
++```
++
++如果不想记录某个项目：
++
++```bash
++export ECC_OBSERVE_SKIP_PATHS="secret-project,company-internal"
++```
++
++完全禁用观察：
++
++```bash
++touch ~/.claude/homunculus/disabled
++```
++
++[服务器日志界面，实时滚动显示工具调用记录，每一行代表一次 AI 编程操作被捕获]
++
++---
++
++## 四、功能三：技能包自动同步到私有仓库
++
++### 工作原理
++
++`~/claude-skills-private/` 是一个普通 Git 仓库。通过 cron job 定期 commit + push，把你积累的技能包和行为数据备份到 GitHub 私有仓库。
++
++### 第 1 步：初始化私有仓库
++
++在 GitHub 创建一个 **Private** 仓库，然后：
++
++```bash
++cd ~/claude-skills-private
++git init
++git remote add origin https://github.com/你的用户名/claude-skills-private.git
++```
++
++### 第 2 步：创建同步脚本
++
++创建 `~/claude-skills-private/sync.sh`：
++
++```bash
++#!/bin/bash
++cd ~/claude-skills-private || exit 1
++
++# 同步 homunculus 记忆数据（可选）
++rsync -a --delete ~/.claude/homunculus/ ./homunculus/ 2>/dev/null
++
++git add -A
++CHANGES=$(git status --porcelain)
++if [ -n "$CHANGES" ]; then
++    git commit -m "auto: sync skills $(date +%Y-%m-%d_%H:%M)"
++    git push origin HEAD 2>/dev/null || true
++fi
++```
++
++```bash
++chmod +x ~/claude-skills-private/sync.sh
++```
++
++### 第 3 步：添加 cron 任务
++
++```bash
++crontab -e
++```
++
++添加一行，每小时自动同步：
++
++```
++0 * * * * ~/claude-skills-private/sync.sh >> /tmp/skills-sync.log 2>&1
++```
++
++### 第 4 步：验证
++
++```bash
++# 手动运行一次
++~/claude-skills-private/sync.sh
++
++# 检查最近 commit
++cd ~/claude-skills-private && git log --oneline -3
++```
++
++---
++
++## 五、完整配置文件
++
++以下是包含所有三个功能的 `~/.claude/settings.json` 最小配置：
++
++```json
++{
++  "cleanupPeriodDays": 99999,
++  "hooks": {
++    "SessionEnd": [
++      {
++        "matcher": "",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "~/.claude/hooks/diary-log.sh",
++            "timeout": 30,
++            "async": true
++          }
++        ]
++      }
++    ],
++    "PreToolUse": [
++      {
++        "matcher": "*",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "~/.claude/skills/continuous-learning-v2/hooks/observe.sh pre",
++            "timeout": 10,
++            "async": true
++          }
++        ]
++      }
++    ],
++    "PostToolUse": [
++      {
++        "matcher": "*",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "~/.claude/skills/continuous-learning-v2/hooks/observe.sh post",
++            "timeout": 10,
++            "async": true
++          }
++        ]
++      }
++    ]
++  }
++}
++```
++
++> `cleanupPeriodDays: 99999` 让 Claude Code 保留尽可能长时间的对话记录，方便日记脚本读取完整内容。
++
++---
++
++## 六、数据流全景
++
++```
++你使用 Claude Code
++    │
++    ├─ [每次工具调用]
++    │       ↓
++    │   observe.sh
++    │       ↓
++    │   ~/.claude/homunculus/projects/xxx/observations.jsonl
++    │   （自动脱敏 + 按项目隔离存储）
++    │
++    ├─ [关闭对话时]
++    │       ↓
++    │   diary-log.sh → LLM API
++    │       ↓
++    │   ~/.claude/diary/2026-04-29.md
++    │   （3-5 条高密度中文摘要）
++    │
++    └─ [每小时 cron]
++            ↓
++        sync.sh → git commit + push
++            ↓
++        GitHub 私有仓库
++        ├─ ~/claude-skills-private/（技能包源码）
++        └─ ~/claude-skills-private/homunculus/（记忆数据）
++```
++
++[数据流向图，从开发者电脑到云端 GitHub 仓库，三条路径分别标注日记、行为观察、自动同步]
++
++---
++
++## 七、常见问题
++
++**Q: 日记没有生成？**
++
++按顺序检查：
++
++1. `jq` 是否安装：`brew install jq`
++2. LLM API 是否可达：`curl -s $DIARY_LLM_URL`
++3. 手动测试脚本：`echo '{"cwd":"/tmp","transcript_path":""}' | ~/.claude/hooks/diary-log.sh`
++
++**Q: 观察数据为空？**
++
++1. Python 是否可用：`python3 --version`
++2. 符号链接是否正确：`ls -la ~/.claude/skills/continuous-learning-v2`
++
++**Q: 不同项目使用不同 LLM？**
++
++在 `~/.zshrc` 中单独设置 `DIARY_LLM_URL` 和 `DIARY_LLM_KEY` 环境变量，日记脚本会优先读取当前 shell 环境中的值。
++
++**Q: 观察数据文件会无限增长吗？**
++
++`observe.sh` 内置自动归档：单个文件超过 10MB 时自动归档；30 天前的旧文件自动删除。
++
++---
++
++## 八、进阶：PostToolUse 触发自动重启
++
++PostToolUse 钩子还可以做更多事情。以下是一个实战案例：`npm run build` 成功后自动重启 dashboard 服务。
++
++```bash
++#!/bin/bash
++# 自动重启 dashboard + scheduler
++INPUT=$(cat)
++CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
++EXIT_CODE=$(echo "$INPUT" | jq -r '.tool_response.exitCode // 1')
++
++# 只在 dashboard 构建成功时触发
++[ "$EXIT_CODE" -ne 0 ] && exit 0
++[[ "$CMD" != *"dashboard"* ]] && exit 0
++[[ "$CMD" != *"npm run build"* ]] && exit 0
++
++# 释放端口并重启服务
++lsof -ti:3200 | xargs kill -9 2>/dev/null
++sleep 1
++tmux respawn-pane -k -t dashboard 'cd ~/pi-mono/packages/dashboard && node dist/server/index.js' 2>/dev/null
++tmux respawn-pane -k -t pi-scheduler 'cd ~/pi-mono && npx tsx .pi/extensions/shared/scheduling/scheduler-main.ts' 2>/dev/null
++
++echo '{"hookSpecificOutput":{"additionalContext":"Dashboard + scheduler auto-restarted"}}'
++exit 0
++```
++
++这个脚本只会在构建命令成功后触发，对其他工具调用无影响。
++
++[开发者工作区，多个终端窗口同时运行，左侧显示代码编辑，右侧显示服务自动重启的日志输出]
++
++---
++
++## 总结
++
++三个功能对应三个独立脚本，互不干扰，可以按需选择：
++
++**自动日记**
++- 脚本：`diary-log.sh`
++- 触发事件：`SessionEnd`
++- 数据位置：`~/.claude/diary/`
++
++**行为观察**
++- 脚本：`observe.sh`
++- 触发事件：`Pre/PostToolUse`
++- 数据位置：`~/.claude/homunculus/`
++
++**自动同步**
++- 脚本：`sync.sh`
++- 触发：cron（每小时）
++- 数据位置：GitHub 私有仓库
++
++配置完成后，Claude Code 从一个对话工具变成一个有记忆、会学习的工作伙伴。每天的工作不再只停留在聊天记录里，而是以结构化数据的形式沉淀下来。
+diff --git a/docs/claude-hooks-tutorial.md b/docs/claude-hooks-tutorial.md
+new file mode 100644
+index 0000000..09b3f7e
+--- /dev/null
++++ b/docs/claude-hooks-tutorial.md
+@@ -0,0 +1,467 @@
++# Claude Code Hooks 教程：自动日记 + 技能记忆上云
++
++> 面向零基础用户的完整配置指南。读完后你将拥有：
++> 1. 每次关闭 Claude Code 对话时，**自动用 LLM 写一篇中文工作日志**
++> 2. 每次使用工具时，**自动记录行为模式到本地记忆库**
++> 3. 技能包和记忆数据**自动同步到你的私有 GitHub 仓库**
++
++---
++
++## 前置知识：什么是 Hook？
++
++Claude Code 提供了一套"钩子（Hook）"机制，让你可以在特定事件发生时，**自动执行自定义脚本**。
++
++可用的钩子事件：
++
++| 事件名 | 触发时机 |
++|--------|---------|
++| `PreToolUse` | Claude 调用工具**之前**（如执行命令、编辑文件） |
++| `PostToolUse` | Claude 调用工具**之后** |
++| `Notification` | Claude 需要你注意时（如等待审批） |
++| `SessionEnd` | 你**关闭一次对话**时 |
++
++钩子配置在 `~/.claude/settings.json` 文件中。
++
++---
++
++## 第一部分：关闭对话自动写日记
++
++### 原理
++
++```
++你关闭 Claude Code 对话
++       │
++       ▼
++  SessionEnd 钩子触发
++       │
++       ▼
++  diary-log.sh 脚本运行
++       │
++       ├─ 1. 读取本次对话的完整 transcript (JSONL)
++       ├─ 2. 提取项目名、Git 最近提交
++       ├─ 3. 将 transcript 发送给一个 LLM API
++       │     (使用"信息压缩引擎"系统提示词)
++       ├─ 4. LLM 返回 3-5 条高密度中文摘要
++       └─ 5. 追加写入 ~/.claude/diary/YYYY-MM-DD.md
++```
++
++### 配置步骤
++
++#### 第 1 步：创建日记脚本
++
++```bash
++mkdir -p ~/.claude/hooks
++```
++
++创建文件 `~/.claude/hooks/diary-log.sh`，内容如下（精简版）：
++
++```bash
++#!/bin/bash
++# SessionEnd hook: 用 LLM 自动写日记
++set -euo pipefail
++
++DIARY_DIR="$HOME/.claude/diary"
++mkdir -p "$DIARY_DIR"
++
++# 读取 Claude Code 传入的 JSON（包含 session_id, cwd, transcript_path）
++INPUT=$(cat)
++CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
++TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty')
++
++PROJECT=$(basename "${CWD:-unknown}")
++TIMESTAMP=$(date '+%H:%M')
++DATE=$(date '+%Y-%m-%d')
++DIARY_FILE="$DIARY_DIR/$DATE.md"
++
++# ========================================
++# LLM 配置 — 改成你自己的 API 地址和 Key
++# ========================================
++LLM_URL="${DIARY_LLM_URL:-https://api.openai.com/v1/chat/completions}"
++LLM_KEY="${DIARY_LLM_KEY:-sk-你的key}"
++LLM_MODEL="${DIARY_LLM_MODEL:-gpt-4o-mini}"
++
++# 系统提示词：信息压缩引擎
++SYSTEM_PROMPT="你是一个高密度日志压缩器。将开发者-AI对话提炼为3-5条中文名词化要点。只记录已完成的工程成果。不使用第一人称。不输出任何开头结尾寒暄。"
++
++# 从 transcript 提取对话文本
++SUMMARY=""
++if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
++    # 提取对话（最后 500K 字符）
++    CONTEXT=$(jq -r '
++      select(.type == "user" or .type == "assistant")
++      | (if .type == "user" then "User: " else "Assistant: " end)
++        + (if (.message.content | type) == "string" then .message.content
++           elif (.message.content | type) == "array" then
++             [.message.content[] | select(.type == "text") | .text] | join(" ")
++           else "" end)
++    ' "$TRANSCRIPT_PATH" 2>/dev/null | tail -c 500000)
++
++    if [ -n "$CONTEXT" ]; then
++        ESCAPED_SYSTEM=$(echo "$SYSTEM_PROMPT" | jq -Rs .)
++        USER_MSG="[项目]: $PROJECT
++[对话内容]:
++$CONTEXT"
++        ESCAPED_USER=$(echo "$USER_MSG" | jq -Rs .)
++
++        RESPONSE=$(curl -s --max-time 60 \
++            -H "Authorization: Bearer $LLM_KEY" \
++            -H "content-type: application/json" \
++            "$LLM_URL" \
++            -d "{
++                \"model\": \"$LLM_MODEL\",
++                \"max_tokens\": 500,
++                \"temperature\": 0.3,
++                \"messages\": [
++                    {\"role\": \"system\", \"content\": $ESCAPED_SYSTEM},
++                    {\"role\": \"user\", \"content\": $ESCAPED_USER}
++                ]
++            }" 2>/dev/null)
++
++        SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
++    fi
++fi
++
++# 写入日记
++{
++    echo ""
++    echo "### $TIMESTAMP — $PROJECT"
++    echo ""
++    echo "${SUMMARY:-(无法提取会话摘要)}"
++    echo ""
++} >> "$DIARY_FILE"
++
++exit 0
++```
++
++给脚本添加可执行权限：
++
++```bash
++chmod +x ~/.claude/hooks/diary-log.sh
++```
++
++#### 第 2 步：注册到 settings.json
++
++编辑 `~/.claude/settings.json`，在顶层 `hooks` 对象中加入：
++
++```json
++{
++  "hooks": {
++    "SessionEnd": [
++      {
++        "matcher": "",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "~/.claude/hooks/diary-log.sh",
++            "timeout": 30,
++            "async": true
++          }
++        ]
++      }
++    ]
++  }
++}
++```
++
++> **关键参数说明**：
++> - `"matcher": ""` → 匹配所有 session（空字符串 = 通配）
++> - `"timeout": 30` → 最多等 30 秒（LLM API 可能较慢）
++> - `"async": true` → 异步执行，不阻塞关闭流程
++
++#### 第 3 步：配置你的 LLM API
++
++日记脚本支持通过环境变量自定义 LLM 后端。在 `~/.zshrc` 中添加：
++
++```bash
++# 使用 OpenAI
++export DIARY_LLM_URL="https://api.openai.com/v1/chat/completions"
++export DIARY_LLM_KEY="sk-你的key"
++export DIARY_LLM_MODEL="gpt-4o-mini"
++
++# 或者使用本地 Ollama
++# export DIARY_LLM_URL="http://localhost:11434/v1/chat/completions"
++# export DIARY_LLM_KEY="ollama"
++# export DIARY_LLM_MODEL="qwen2.5:7b"
++```
++
++#### 第 4 步：验证
++
++关闭一次 Claude Code 对话后，检查日记文件：
++
++```bash
++cat ~/.claude/diary/$(date +%Y-%m-%d).md
++```
++
++你应该能看到类似这样的输出：
++
++```markdown
++### 17:30 — my-project
++
++- AI Flight Dashboard 缓存节省分析 API 端点 (`/api/cache-savings`) 新增与测试覆盖
++- 计费模式 CLI 参数扩展：`--billing-mode` / `--plan` / `--budget-daily` 三级配置体系落地
++- 预算告警引擎 (`internal/alert`) 阈值分级逻辑实现与 TUI 集成渲染
++```
++
++---
++
++## 第二部分：自动记录行为模式（Continuous Learning）
++
++### 原理
++
++```
++你在 Claude Code 中使用任何工具
++       │
++       ▼
++  PreToolUse / PostToolUse 钩子触发
++       │
++       ▼
++  observe.sh 脚本运行
++       │
++       ├─ 1. 解析工具名、输入、输出
++       ├─ 2. 检测当前项目（通过 git root）
++       ├─ 3. 脱敏（自动删除 API key、密码等）
++       └─ 4. 追加写入 ~/.claude/homunculus/projects/<id>/observations.jsonl
++```
++
++这些观察数据可以被后续的"观察者 Agent"分析，自动提炼出你的编码习惯（如"总是先写测试"），生成"直觉（instinct）"规则。
++
++### 配置步骤
++
++#### 第 1 步：获取技能包
++
++将 `continuous-learning-v2` 放到你的技能目录中：
++
++```bash
++# 方法 A：如果你有现成的 skills 仓库
++git clone https://github.com/你的用户名/claude-skills-private.git ~/claude-skills-private
++
++# 方法 B：手动创建目录
++mkdir -p ~/claude-skills-private/continuous-learning-v2/hooks
++mkdir -p ~/claude-skills-private/continuous-learning-v2/scripts
++mkdir -p ~/claude-skills-private/continuous-learning-v2/agents
++```
++
++#### 第 2 步：创建符号链接
++
++```bash
++mkdir -p ~/.claude/skills
++ln -s ~/claude-skills-private/continuous-learning-v2/ ~/.claude/skills/continuous-learning-v2
++```
++
++#### 第 3 步：注册观察者钩子
++
++在 `~/.claude/settings.json` 的 `hooks` 中添加：
++
++```json
++{
++  "hooks": {
++    "PreToolUse": [
++      {
++        "matcher": "*",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "~/.claude/skills/continuous-learning-v2/hooks/observe.sh pre",
++            "timeout": 10,
++            "async": true
++          }
++        ]
++      }
++    ],
++    "PostToolUse": [
++      {
++        "matcher": "*",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "~/.claude/skills/continuous-learning-v2/hooks/observe.sh post",
++            "timeout": 10,
++            "async": true
++          }
++        ]
++      }
++    ]
++  }
++}
++```
++
++> **关键设计**：
++> - `"matcher": "*"` → 匹配所有工具调用
++> - `"async": true` → 异步，不影响 Claude 正常响应速度
++> - 脚本内置 5 层防自循环保护（防止 AI 子代理的工具调用被递归记录）
++
++#### 第 4 步：验证
++
++使用 Claude Code 做几次操作后：
++
++```bash
++# 查看观察数据
++ls ~/.claude/homunculus/projects/
++
++# 查看某个项目的观察记录
++cat ~/.claude/homunculus/projects/*/observations.jsonl | head -3 | jq .
++```
++
++---
++
++## 第三部分：技能包自动同步到私有仓库
++
++### 原理
++
++你的 `~/claude-skills-private/` 目录是一个普通 Git 仓库。你只需要设置一个 cron job 定期 commit + push。
++
++### 配置步骤
++
++#### 第 1 步：初始化私有仓库
++
++```bash
++cd ~/claude-skills-private
++
++# 如果还没有 Git
++git init
++git remote add origin https://github.com/你的用户名/claude-skills-private.git
++```
++
++> 在 GitHub 上创建一个 **Private** 仓库。
++
++#### 第 2 步：设置自动同步 cron
++
++创建同步脚本 `~/claude-skills-private/sync.sh`：
++
++```bash
++#!/bin/bash
++cd ~/claude-skills-private || exit 1
++
++# 也同步 homunculus 记忆数据（可选）
++rsync -a --delete ~/.claude/homunculus/ ./homunculus/ 2>/dev/null
++
++git add -A
++CHANGES=$(git status --porcelain)
++if [ -n "$CHANGES" ]; then
++    git commit -m "auto: sync skills $(date +%Y-%m-%d_%H:%M)"
++    git push origin HEAD 2>/dev/null || true
++fi
++```
++
++```bash
++chmod +x ~/claude-skills-private/sync.sh
++```
++
++#### 第 3 步：添加 cron 任务
++
++```bash
++crontab -e
++```
++
++添加一行（每小时自动同步一次）：
++
++```
++0 * * * * ~/claude-skills-private/sync.sh >> /tmp/skills-sync.log 2>&1
++```
++
++#### 第 4 步：验证
++
++```bash
++# 手动运行一次
++~/claude-skills-private/sync.sh
++
++# 检查 GitHub 仓库是否有新 commit
++cd ~/claude-skills-private && git log --oneline -3
++```
++
++---
++
++## 完整的 settings.json 示例
++
++以下是一个包含所有三个功能的最小配置：
++
++```json
++{
++  "cleanupPeriodDays": 99999,
++  "hooks": {
++    "SessionEnd": [
++      {
++        "matcher": "",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "~/.claude/hooks/diary-log.sh",
++            "timeout": 30,
++            "async": true
++          }
++        ]
++      }
++    ],
++    "PreToolUse": [
++      {
++        "matcher": "*",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "~/.claude/skills/continuous-learning-v2/hooks/observe.sh pre",
++            "timeout": 10,
++            "async": true
++          }
++        ]
++      }
++    ],
++    "PostToolUse": [
++      {
++        "matcher": "*",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "~/.claude/skills/continuous-learning-v2/hooks/observe.sh post",
++            "timeout": 10,
++            "async": true
++          }
++        ]
++      }
++    ]
++  }
++}
++```
++
++---
++
++## 数据流全景图
++
++```
++你使用 Claude Code
++    │
++    ├─ [每次工具调用] ──► observe.sh ──► ~/.claude/homunculus/projects/xxx/observations.jsonl
++    │                                          │
++    │                                          ├─ 自动脱敏 (API key → [REDACTED])
++    │                                          └─ 按项目隔离存储
++    │
++    ├─ [关闭对话时] ──► diary-log.sh ──► curl → LLM API ──► ~/.claude/diary/2026-04-29.md
++    │                                                         │
++    │                                                         └─ 3-5 条高密度中文摘要
++    │
++    └─ [每小时 cron] ──► sync.sh ──► git commit + push ──► GitHub 私有仓库
++                                       │
++                                       ├─ ~/claude-skills-private/  (技能包源码)
++                                       └─ ~/claude-skills-private/homunculus/  (记忆数据)
++```
++
++## 常见问题
++
++### Q: 日记没生成？
++1. 检查 `jq` 是否安装：`brew install jq`
++2. 检查 LLM API 是否可达：`curl -s $DIARY_LLM_URL`
++3. 手动测试脚本：`echo '{"cwd":"/tmp","transcript_path":""}' | ~/.claude/hooks/diary-log.sh`
++
++### Q: 观察数据为空？
++1. 检查 Python 是否可用：`python3 --version`
++2. 检查符号链接是否正确：`ls -la ~/.claude/skills/continuous-learning-v2`
++
++### Q: 不想记录某个项目的行为？
++在 `~/.zshrc` 中设置排除路径：
++```bash
++export ECC_OBSERVE_SKIP_PATHS="secret-project,company-internal"
++```
++
++### Q: 想完全禁用观察？
++```bash
++touch ~/.claude/homunculus/disabled
++```
+diff --git a/docs/hooks-reference/clv2-config.json b/docs/hooks-reference/clv2-config.json
+new file mode 100644
+index 0000000..84f6220
+--- /dev/null
++++ b/docs/hooks-reference/clv2-config.json
+@@ -0,0 +1,8 @@
++{
++  "version": "2.1",
++  "observer": {
++    "enabled": false,
++    "run_interval_minutes": 5,
++    "min_observations_to_analyze": 20
++  }
++}
+diff --git a/docs/hooks-reference/diary-log.sh b/docs/hooks-reference/diary-log.sh
+new file mode 100755
+index 0000000..a0195ae
+--- /dev/null
++++ b/docs/hooks-reference/diary-log.sh
+@@ -0,0 +1,138 @@
++#!/bin/bash
++# SessionEnd hook: log a diary entry summarizing the session.
++# Reads JSON from stdin with: session_id, cwd, transcript_path
++# Appends a Markdown entry to ~/.claude/diary/YYYY-MM-DD.md
++#
++# Uses codex-proxy (OpenAI-compatible) with High-Entropy Log Synthesizer prompt.
++# Override: DIARY_LLM_URL, DIARY_LLM_KEY, DIARY_LLM_MODEL, DIARY_MAX_CHARS
++
++set -euo pipefail
++
++DIARY_DIR="$HOME/.claude/diary"
++mkdir -p "$DIARY_DIR"
++
++# Read hook input
++INPUT=$(cat)
++SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
++CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
++TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty')
++
++# Derive project name
++PROJECT=$(basename "${CWD:-unknown}")
++TIMESTAMP=$(date '+%H:%M')
++DATE=$(date '+%Y-%m-%d')
++DIARY_FILE="$DIARY_DIR/$DATE.md"
++
++# LLM config
++LLM_URL="${DIARY_LLM_URL:-http://192.168.10.6:8080/v1/chat/completions}"
++LLM_KEY="${DIARY_LLM_KEY:-pwd}"
++LLM_MODEL="${DIARY_LLM_MODEL:-codex}"
++MAX_CHARS="${DIARY_MAX_CHARS:-800000}"  # ~800K chars, well within 1M token context
++
++# --- jq helper: extract text from .message.content ---
++JQ_EXTRACT_TEXT='
++  if (.message.content | type) == "string" then .message.content
++  elif (.message.content | type) == "array" then
++    [.message.content[] | select(.type == "text") | .text] | join(" ")
++  else "" end
++'
++
++# --- Git stats (if in a git repo) ---
++GIT_STAT=""
++if [ -n "$CWD" ] && [ -d "$CWD/.git" ]; then
++    GIT_STAT=$(git -C "$CWD" log --oneline --since="1 hour ago" 2>/dev/null | head -10)
++    if [ -z "$GIT_STAT" ]; then
++        GIT_STAT=$(git -C "$CWD" diff --stat 2>/dev/null | tail -1)
++    fi
++fi
++
++# --- System prompt: High-Entropy Log Synthesizer ---
++read -r -d '' SYSTEM_PROMPT << 'SYSPROMPT' || true
++# Role: High-Entropy Log Synthesizer
++
++You are a highly specialized Information Compression Engine and Security Auditor designed for elite software engineers. Your core function is to ingest massive, noisy developer-LLM conversation transcripts, cross-reference them with Git commit statistics and project contexts (CWD), and distill the absolute essence of the engineering work into ultra-dense, high-information-entropy Chinese summaries. You act as a perfect bridge between sprawling machine dialogue and concise human technical journaling, guarded by a strict zero-leakage firewall.
++
++## Goals
++1. **Signal Extraction**: Sift through tens to hundreds of thousands of characters of conversation to isolate the actual, finalized engineering achievements, ignoring all debugging dead-ends, syntax errors, and AI pleasantries.
++2. **Contextual Fusion**: Synthesize the `[Project Name]` (domain context) and `[Git Stats]` (scale of change) with the conversation's structural intent.
++3. **Entropy Compression**: Translate verbose, narrative actions into exactly 3-5 high-entropy Chinese noun phrases.
++4. **Absolute Sanitization**: Guarantee zero leakage of sensitive corporate, personal, or infrastructural data.
++
++## Constraints
++- **Formatting**: Output EXACTLY 3-5 bullet points using Markdown (`-`). Do NOT output any introductory greetings, explanations, formatting wrappers, or concluding remarks.
++- **Language**: The output MUST be in highly professional, academic-level Chinese (简体中文).
++- **Anti-Hallucination**: Only log the finalized, successful implementations explicitly confirmed in the transcript. Do NOT invent features, guess unwritten code, or include unadopted suggestions.
++- **Security Redaction (Zero-Tolerance)**:
++  - ABSOLUTELY NO API keys, internal IP addresses, real customer names/PII, database connection strings, passwords, or highly confidential internal repository/project names.
++  - You MUST generalize sensitive entities (e.g., replace specific IPs with `[内网节点]`, replace keys with `[认证凭据]`, replace internal project names with `[内部核心业务系统]`).
++- **Linguistic Entropy Rules**:
++  - **MUST NOT** use first-person pronouns (我, 我们), conversational verbs (尝试了, 修复了, 讨论了), or chronological narratives (一开始, 然后, 最后).
++  - **MUST** use **Nominalization (名词化/动名词)**. Construct phrases using `[Domain/Module] + [Action/State Change as a Noun]`.
++SYSPROMPT
++
++# --- Extract summary from transcript ---
++SUMMARY=""
++if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
++    # Extract full conversation text (up to MAX_CHARS)
++    CONTEXT=$(jq -r "
++        select(.type == \"user\" or .type == \"assistant\")
++        | (if .type == \"user\" then \"User: \" else \"Assistant: \" end)
++          + ($JQ_EXTRACT_TEXT)
++    " "$TRANSCRIPT_PATH" 2>/dev/null | tail -c "$MAX_CHARS")
++
++    if [ -n "$CONTEXT" ]; then
++        ESCAPED_SYSTEM=$(echo "$SYSTEM_PROMPT" | jq -Rs .)
++        # Build user message with project context + git stats + transcript
++        USER_MSG="[Project Name/CWD]: $PROJECT
++[Git Stats]: ${GIT_STAT:-N/A}
++[Transcript]:
++$CONTEXT"
++        ESCAPED_USER=$(echo "$USER_MSG" | jq -Rs .)
++
++        RESPONSE=$(curl -s --max-time 60 \
++            -H "Authorization: Bearer $LLM_KEY" \
++            -H "content-type: application/json" \
++            "$LLM_URL" \
++            -d "{
++                \"model\": \"$LLM_MODEL\",
++                \"max_tokens\": 500,
++                \"temperature\": 0.3,
++                \"messages\": [
++                    {\"role\": \"system\", \"content\": $ESCAPED_SYSTEM},
++                    {\"role\": \"user\", \"content\": $ESCAPED_USER}
++                ]
++            }" 2>/dev/null)
++
++        SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
++    fi
++
++    # Fallback: extract from transcript without LLM
++    if [ -z "$SUMMARY" ]; then
++        MSG_COUNT=$(jq -s '[.[] | select(.type == "user")] | length' "$TRANSCRIPT_PATH" 2>/dev/null)
++        TOOLS_USED=$(jq -r 'select(.type == "assistant") | .message.content[]? | select(.type == "tool_use") | .name' "$TRANSCRIPT_PATH" 2>/dev/null | sort -u | head -10 | tr '\n' ', ' | sed 's/,$//')
++        FIRST_MSG=$(jq -r "select(.type == \"user\") | $JQ_EXTRACT_TEXT" "$TRANSCRIPT_PATH" 2>/dev/null | head -1 | cut -c1-100)
++
++        SUMMARY="- 会话轮数: ${MSG_COUNT:-0}"
++        [ -n "$TOOLS_USED" ] && SUMMARY="$SUMMARY\n- 使用工具: $TOOLS_USED"
++        [ -n "$FIRST_MSG" ] && SUMMARY="$SUMMARY\n- 起始话题: $FIRST_MSG"
++    fi
++fi
++
++# --- Write diary entry ---
++{
++    echo ""
++    echo "### $TIMESTAMP — $PROJECT"
++    echo ""
++    if [ -n "$SUMMARY" ]; then
++        echo -e "$SUMMARY"
++    else
++        echo "- (无法提取会话摘要)"
++    fi
++    if [ -n "$GIT_STAT" ]; then
++        echo ""
++        echo "> $GIT_STAT"
++    fi
++    echo ""
++} >> "$DIARY_FILE"
++
++exit 0
+diff --git a/docs/hooks-reference/observe.sh b/docs/hooks-reference/observe.sh
+new file mode 100755
+index 0000000..727eb47
+--- /dev/null
++++ b/docs/hooks-reference/observe.sh
+@@ -0,0 +1,412 @@
++#!/bin/bash
++# Continuous Learning v2 - Observation Hook
++#
++# Captures tool use events for pattern analysis.
++# Claude Code passes hook data via stdin as JSON.
++#
++# v2.1: Project-scoped observations — detects current project context
++#       and writes observations to project-specific directory.
++#
++# Registered via plugin hooks/hooks.json (auto-loaded when plugin is enabled).
++# Can also be registered manually in ~/.claude/settings.json.
++
++set -e
++
++# Hook phase from CLI argument: "pre" (PreToolUse) or "post" (PostToolUse)
++HOOK_PHASE="${1:-post}"
++
++# ─────────────────────────────────────────────
++# Read stdin first (before project detection)
++# ─────────────────────────────────────────────
++
++# Read JSON from stdin (Claude Code hook format)
++INPUT_JSON=$(cat)
++
++# Exit if no input
++if [ -z "$INPUT_JSON" ]; then
++  exit 0
++fi
++
++resolve_python_cmd() {
++  if [ -n "${CLV2_PYTHON_CMD:-}" ] && command -v "$CLV2_PYTHON_CMD" >/dev/null 2>&1; then
++    printf '%s\n' "$CLV2_PYTHON_CMD"
++    return 0
++  fi
++
++  if command -v python3 >/dev/null 2>&1; then
++    printf '%s\n' python3
++    return 0
++  fi
++
++  if command -v python >/dev/null 2>&1; then
++    printf '%s\n' python
++    return 0
++  fi
++
++  return 1
++}
++
++PYTHON_CMD="$(resolve_python_cmd 2>/dev/null || true)"
++if [ -z "$PYTHON_CMD" ]; then
++  echo "[observe] No python interpreter found, skipping observation" >&2
++  exit 0
++fi
++
++# ─────────────────────────────────────────────
++# Extract cwd from stdin for project detection
++# ─────────────────────────────────────────────
++
++# Extract cwd from the hook JSON to use for project detection.
++# This avoids spawning a separate git subprocess when cwd is available.
++STDIN_CWD=$(echo "$INPUT_JSON" | "$PYTHON_CMD" -c '
++import json, sys
++try:
++    data = json.load(sys.stdin)
++    cwd = data.get("cwd", "")
++    print(cwd)
++except(KeyError, TypeError, ValueError):
++    print("")
++' 2>/dev/null || echo "")
++
++# If cwd was provided in stdin, use it for project detection
++if [ -n "$STDIN_CWD" ] && [ -d "$STDIN_CWD" ]; then
++  export CLAUDE_PROJECT_DIR="$STDIN_CWD"
++fi
++
++# ─────────────────────────────────────────────
++# Lightweight config and automated session guards
++# ─────────────────────────────────────────────
++#
++# IMPORTANT: keep these guards above detect-project.sh.
++# Sourcing detect-project.sh creates project-scoped directories and updates
++# projects.json, so automated sessions must return before that point.
++
++CONFIG_DIR="${HOME}/.claude/homunculus"
++
++# Skip if disabled (check both default and CLV2_CONFIG-derived locations)
++if [ -f "$CONFIG_DIR/disabled" ]; then
++  exit 0
++fi
++if [ -n "${CLV2_CONFIG:-}" ] && [ -f "$(dirname "$CLV2_CONFIG")/disabled" ]; then
++  exit 0
++fi
++
++# Prevent observe.sh from firing on non-human sessions to avoid:
++#   - ECC observing its own Haiku observer sessions (self-loop)
++#   - ECC observing other tools' automated sessions
++#   - automated sessions creating project-scoped homunculus metadata
++
++# Layer 1: entrypoint. Only interactive terminal sessions should continue.
++# sdk-ts: Agent SDK sessions can be human-interactive (e.g. via Happy).
++# Non-interactive SDK automation is still filtered by Layers 2-5 below
++# (ECC_HOOK_PROFILE=minimal, ECC_SKIP_OBSERVE=1, agent_id, path exclusions).
++case "${CLAUDE_CODE_ENTRYPOINT:-cli}" in
++  cli|sdk-ts) ;;
++  *) exit 0 ;;
++esac
++
++# Layer 2: minimal hook profile suppresses non-essential hooks.
++[ "${ECC_HOOK_PROFILE:-standard}" = "minimal" ] && exit 0
++
++# Layer 3: cooperative skip env var for automated sessions.
++[ "${ECC_SKIP_OBSERVE:-0}" = "1" ] && exit 0
++
++# Layer 4: subagent sessions are automated by definition.
++_ECC_AGENT_ID=$(echo "$INPUT_JSON" | "$PYTHON_CMD" -c "import json,sys; print(json.load(sys.stdin).get('agent_id',''))" 2>/dev/null || true)
++[ -n "$_ECC_AGENT_ID" ] && exit 0
++
++# Layer 5: known observer-session path exclusions.
++_ECC_SKIP_PATHS="${ECC_OBSERVE_SKIP_PATHS:-observer-sessions,.claude-mem}"
++if [ -n "$STDIN_CWD" ]; then
++  IFS=',' read -ra _ECC_SKIP_ARRAY <<< "$_ECC_SKIP_PATHS"
++  for _pattern in "${_ECC_SKIP_ARRAY[@]}"; do
++    _pattern="${_pattern#"${_pattern%%[![:space:]]*}"}"
++    _pattern="${_pattern%"${_pattern##*[![:space:]]}"}"
++    [ -z "$_pattern" ] && continue
++    case "$STDIN_CWD" in *"$_pattern"*) exit 0 ;; esac
++  done
++fi
++
++# ─────────────────────────────────────────────
++# Project detection
++# ─────────────────────────────────────────────
++
++SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
++SKILL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
++
++# Source shared project detection helper
++# This sets: PROJECT_ID, PROJECT_NAME, PROJECT_ROOT, PROJECT_DIR
++source "${SKILL_ROOT}/scripts/detect-project.sh"
++PYTHON_CMD="${CLV2_PYTHON_CMD:-$PYTHON_CMD}"
++
++# ─────────────────────────────────────────────
++# Configuration
++# ─────────────────────────────────────────────
++
++OBSERVATIONS_FILE="${PROJECT_DIR}/observations.jsonl"
++MAX_FILE_SIZE_MB=10
++
++# Auto-purge observation files older than 30 days (runs once per session)
++PURGE_MARKER="${PROJECT_DIR}/.last-purge"
++if [ ! -f "$PURGE_MARKER" ] || [ "$(find "$PURGE_MARKER" -mtime +1 2>/dev/null)" ]; then
++  find "${PROJECT_DIR}" -name "observations-*.jsonl" -mtime +30 -delete 2>/dev/null || true
++  touch "$PURGE_MARKER" 2>/dev/null || true
++fi
++
++# Parse using Python via stdin pipe (safe for all JSON payloads)
++# Pass HOOK_PHASE via env var since Claude Code does not include hook type in stdin JSON
++PARSED=$(echo "$INPUT_JSON" | HOOK_PHASE="$HOOK_PHASE" "$PYTHON_CMD" -c '
++import json
++import sys
++import os
++
++try:
++    data = json.load(sys.stdin)
++
++    # Determine event type from CLI argument passed via env var.
++    # Claude Code does NOT include a "hook_type" field in the stdin JSON,
++    # so we rely on the shell argument ("pre" or "post") instead.
++    hook_phase = os.environ.get("HOOK_PHASE", "post")
++    event = "tool_start" if hook_phase == "pre" else "tool_complete"
++
++    # Extract fields - Claude Code hook format
++    tool_name = data.get("tool_name", data.get("tool", "unknown"))
++    tool_input = data.get("tool_input", data.get("input", {}))
++    tool_output = data.get("tool_response")
++    if tool_output is None:
++        tool_output = data.get("tool_output", data.get("output", ""))
++    session_id = data.get("session_id", "unknown")
++    tool_use_id = data.get("tool_use_id", "")
++    cwd = data.get("cwd", "")
++
++    # Truncate large inputs/outputs
++    if isinstance(tool_input, dict):
++        tool_input_str = json.dumps(tool_input)[:5000]
++    else:
++        tool_input_str = str(tool_input)[:5000]
++
++    if isinstance(tool_output, dict):
++        tool_response_str = json.dumps(tool_output)[:5000]
++    else:
++        tool_response_str = str(tool_output)[:5000]
++
++    print(json.dumps({
++        "parsed": True,
++        "event": event,
++        "tool": tool_name,
++        "input": tool_input_str if event == "tool_start" else None,
++        "output": tool_response_str if event == "tool_complete" else None,
++        "session": session_id,
++        "tool_use_id": tool_use_id,
++        "cwd": cwd
++    }))
++except Exception as e:
++    print(json.dumps({"parsed": False, "error": str(e)}))
++')
++
++# Check if parsing succeeded
++PARSED_OK=$(echo "$PARSED" | "$PYTHON_CMD" -c "import json,sys; print(json.load(sys.stdin).get('parsed', False))" 2>/dev/null || echo "False")
++
++if [ "$PARSED_OK" != "True" ]; then
++  # Fallback: log raw input for debugging (scrub secrets before persisting)
++  timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
++  export TIMESTAMP="$timestamp"
++  echo "$INPUT_JSON" | "$PYTHON_CMD" -c '
++import json, sys, os, re
++
++_SECRET_RE = re.compile(
++    r"(?i)(api[_-]?key|token|secret|password|authorization|credentials?|auth)"
++    r"""(["'"'"'\s:=]+)"""
++    r"([A-Za-z]+\s+)?"
++    r"([A-Za-z0-9_\-/.+=]{8,})"
++)
++
++raw = sys.stdin.read()[:2000]
++raw = _SECRET_RE.sub(lambda m: m.group(1) + m.group(2) + (m.group(3) or "") + "[REDACTED]", raw)
++print(json.dumps({"timestamp": os.environ["TIMESTAMP"], "event": "parse_error", "raw": raw}))
++' >> "$OBSERVATIONS_FILE"
++  exit 0
++fi
++
++# Archive if file too large (atomic: rename with unique suffix to avoid race)
++if [ -f "$OBSERVATIONS_FILE" ]; then
++  file_size_mb=$(du -m "$OBSERVATIONS_FILE" 2>/dev/null | cut -f1)
++  if [ "${file_size_mb:-0}" -ge "$MAX_FILE_SIZE_MB" ]; then
++    archive_dir="${PROJECT_DIR}/observations.archive"
++    mkdir -p "$archive_dir"
++    mv "$OBSERVATIONS_FILE" "$archive_dir/observations-$(date +%Y%m%d-%H%M%S)-$$.jsonl" 2>/dev/null || true
++  fi
++fi
++
++# Build and write observation (now includes project context)
++# Scrub common secret patterns from tool I/O before persisting
++timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
++
++export PROJECT_ID_ENV="$PROJECT_ID"
++export PROJECT_NAME_ENV="$PROJECT_NAME"
++export TIMESTAMP="$timestamp"
++
++echo "$PARSED" | "$PYTHON_CMD" -c '
++import json, sys, os, re
++
++parsed = json.load(sys.stdin)
++observation = {
++    "timestamp": os.environ["TIMESTAMP"],
++    "event": parsed["event"],
++    "tool": parsed["tool"],
++    "session": parsed["session"],
++    "project_id": os.environ.get("PROJECT_ID_ENV", "global"),
++    "project_name": os.environ.get("PROJECT_NAME_ENV", "global")
++}
++
++# Scrub secrets: match common key=value, key: value, and key"value patterns
++# Includes optional auth scheme (e.g., "Bearer", "Basic") before token
++_SECRET_RE = re.compile(
++    r"(?i)(api[_-]?key|token|secret|password|authorization|credentials?|auth)"
++    r"""(["'"'"'\s:=]+)"""
++    r"([A-Za-z]+\s+)?"
++    r"([A-Za-z0-9_\-/.+=]{8,})"
++)
++
++def scrub(val):
++    if val is None:
++        return None
++    return _SECRET_RE.sub(lambda m: m.group(1) + m.group(2) + (m.group(3) or "") + "[REDACTED]", str(val))
++
++if parsed["input"]:
++    observation["input"] = scrub(parsed["input"])
++if parsed["output"] is not None:
++    observation["output"] = scrub(parsed["output"])
++
++print(json.dumps(observation))
++' >> "$OBSERVATIONS_FILE"
++
++# Lazy-start observer if enabled but not running (first-time setup)
++# Use flock for atomic check-then-act to prevent race conditions
++# Fallback for macOS (no flock): use lockfile or skip
++LAZY_START_LOCK="${PROJECT_DIR}/.observer-start.lock"
++_CHECK_OBSERVER_RUNNING() {
++  local pid_file="$1"
++  if [ -f "$pid_file" ]; then
++    local pid
++    pid=$(cat "$pid_file" 2>/dev/null)
++    # Validate PID is a positive integer (>1) to prevent signaling invalid targets
++    case "$pid" in
++      ''|*[!0-9]*|0|1)
++        rm -f "$pid_file" 2>/dev/null || true
++        return 1
++        ;;
++    esac
++    if kill -0 "$pid" 2>/dev/null; then
++      return 0  # Process is alive
++    fi
++    # Stale PID file - remove it
++    rm -f "$pid_file" 2>/dev/null || true
++  fi
++  return 1  # No PID file or process dead
++}
++
++if [ -f "${CONFIG_DIR}/disabled" ]; then
++  OBSERVER_ENABLED=false
++else
++  OBSERVER_ENABLED=false
++  CONFIG_FILE="${SKILL_ROOT}/config.json"
++  # Allow CLV2_CONFIG override
++  if [ -n "${CLV2_CONFIG:-}" ]; then
++    CONFIG_FILE="$CLV2_CONFIG"
++  fi
++  # Use effective config path for both existence check and reading
++  EFFECTIVE_CONFIG="$CONFIG_FILE"
++  if [ -f "$EFFECTIVE_CONFIG" ] && [ -n "$PYTHON_CMD" ]; then
++    _enabled=$(CLV2_CONFIG_PATH="$EFFECTIVE_CONFIG" "$PYTHON_CMD" -c "
++import json, os
++with open(os.environ['CLV2_CONFIG_PATH']) as f:
++    cfg = json.load(f)
++print(str(cfg.get('observer', {}).get('enabled', False)).lower())
++" 2>/dev/null || echo "false")
++    if [ "$_enabled" = "true" ]; then
++      OBSERVER_ENABLED=true
++    fi
++  fi
++fi
++
++# Check both project-scoped AND global PID files (with stale PID recovery)
++if [ "$OBSERVER_ENABLED" = "true" ]; then
++  # Clean up stale PID files first
++  _CHECK_OBSERVER_RUNNING "${PROJECT_DIR}/.observer.pid" || true
++  _CHECK_OBSERVER_RUNNING "${CONFIG_DIR}/.observer.pid" || true
++
++  # Check if observer is now running after cleanup
++  if [ ! -f "${PROJECT_DIR}/.observer.pid" ] && [ ! -f "${CONFIG_DIR}/.observer.pid" ]; then
++    # Use flock if available (Linux), fallback for macOS
++    if command -v flock >/dev/null 2>&1; then
++      (
++        flock -n 9 || exit 0
++        # Double-check PID files after acquiring lock
++        _CHECK_OBSERVER_RUNNING "${PROJECT_DIR}/.observer.pid" || true
++        _CHECK_OBSERVER_RUNNING "${CONFIG_DIR}/.observer.pid" || true
++        if [ ! -f "${PROJECT_DIR}/.observer.pid" ] && [ ! -f "${CONFIG_DIR}/.observer.pid" ]; then
++          nohup "${SKILL_ROOT}/agents/start-observer.sh" start >/dev/null 2>&1 &
++        fi
++      ) 9>"$LAZY_START_LOCK"
++    else
++      # macOS fallback: use lockfile if available, otherwise skip
++      if command -v lockfile >/dev/null 2>&1; then
++        # Use subshell to isolate exit and add trap for cleanup
++        (
++          trap 'rm -f "$LAZY_START_LOCK" 2>/dev/null || true' EXIT
++          lockfile -r 1 -l 30 "$LAZY_START_LOCK" 2>/dev/null || exit 0
++          _CHECK_OBSERVER_RUNNING "${PROJECT_DIR}/.observer.pid" || true
++          _CHECK_OBSERVER_RUNNING "${CONFIG_DIR}/.observer.pid" || true
++          if [ ! -f "${PROJECT_DIR}/.observer.pid" ] && [ ! -f "${CONFIG_DIR}/.observer.pid" ]; then
++            nohup "${SKILL_ROOT}/agents/start-observer.sh" start >/dev/null 2>&1 &
++          fi
++          rm -f "$LAZY_START_LOCK" 2>/dev/null || true
++        )
++      fi
++    fi
++  fi
++fi
++
++# Throttle SIGUSR1: only signal observer every N observations (#521)
++# This prevents rapid signaling when tool calls fire every second,
++# which caused runaway parallel Claude analysis processes.
++SIGNAL_EVERY_N="${ECC_OBSERVER_SIGNAL_EVERY_N:-20}"
++SIGNAL_COUNTER_FILE="${PROJECT_DIR}/.observer-signal-counter"
++
++should_signal=0
++if [ -f "$SIGNAL_COUNTER_FILE" ]; then
++  counter=$(cat "$SIGNAL_COUNTER_FILE" 2>/dev/null || echo 0)
++  counter=$((counter + 1))
++  if [ "$counter" -ge "$SIGNAL_EVERY_N" ]; then
++    should_signal=1
++    counter=0
++  fi
++  echo "$counter" > "$SIGNAL_COUNTER_FILE"
++else
++  echo "1" > "$SIGNAL_COUNTER_FILE"
++fi
++
++# Signal observer if running and throttle allows (check both project-scoped and global observer, deduplicate)
++if [ "$should_signal" -eq 1 ]; then
++  signaled_pids=" "
++  for pid_file in "${PROJECT_DIR}/.observer.pid" "${CONFIG_DIR}/.observer.pid"; do
++    if [ -f "$pid_file" ]; then
++      observer_pid=$(cat "$pid_file" 2>/dev/null || true)
++      # Validate PID is a positive integer (>1)
++      case "$observer_pid" in
++        ''|*[!0-9]*|0|1) rm -f "$pid_file" 2>/dev/null || true; continue ;;
++      esac
++      # Deduplicate: skip if already signaled this pass
++      case "$signaled_pids" in
++        *" $observer_pid "*) continue ;;
++      esac
++      if kill -0 "$observer_pid" 2>/dev/null; then
++        kill -USR1 "$observer_pid" 2>/dev/null || true
++        signaled_pids="${signaled_pids}${observer_pid} "
++      fi
++    fi
++  done
++fi
++
++exit 0
+diff --git a/docs/hooks-reference/restart-dashboard.sh b/docs/hooks-reference/restart-dashboard.sh
+new file mode 100755
+index 0000000..c043ffd
+--- /dev/null
++++ b/docs/hooks-reference/restart-dashboard.sh
+@@ -0,0 +1,19 @@
++#!/bin/bash
++# Auto-restart dashboard + scheduler after successful dashboard build
++INPUT=$(cat)
++CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
++EXIT_CODE=$(echo "$INPUT" | jq -r '.tool_response.exitCode // 1')
++
++# Only trigger on successful dashboard builds
++[ "$EXIT_CODE" -ne 0 ] && exit 0
++[[ "$CMD" != *"dashboard"* ]] && exit 0
++[[ "$CMD" != *"npm run build"* ]] && exit 0
++
++# Kill old process if port is occupied, then restart
++lsof -ti:3200 | xargs kill -9 2>/dev/null
++sleep 1
++tmux respawn-pane -k -t dashboard 'cd ~/pi-mono/packages/dashboard && node dist/server/index.js' 2>/dev/null
++tmux respawn-pane -k -t pi-scheduler 'cd ~/pi-mono && npx tsx .pi/extensions/shared/scheduling/scheduler-main.ts' 2>/dev/null
++
++echo '{"hookSpecificOutput":{"additionalContext":"Dashboard + scheduler auto-restarted"}}'
++exit 0
+diff --git a/docs/usage.md b/docs/usage.md
+new file mode 100644
+index 0000000..9e28194
+--- /dev/null
++++ b/docs/usage.md
+@@ -0,0 +1,108 @@
++# AI Flight Dashboard 使用手册
++
++AI Flight Dashboard 是一个极简、零依赖的 AI 资产终端飞行仪表盘。它通过被动雷达技术无侵入式监听你本地或服务器上的 AI CLI 工具消耗。
++
++## 基础使用
++
++### 1. 终端 TUI 模式 (极客 HUD)
++在你的开发终端侧边栏或 Tmux 的一个小分屏中运行：
++```bash
++./dashboard
++```
++即可实时看到 Token 消耗跳动。它会在本地 `stats/usage.db` 保存所有的消耗记录。
++
++### 2. Web 看板模式
++以 Web 模式运行，你可以通过浏览器访问丰富的数据报表：
++```bash
++./dashboard --web --port 9100
++```
++访问 `http://localhost:9100` 查看。
++
++---
++
++## 高级特性：远程集群监控 (Remote Telemetry)
++
++如果你有多台服务器或多台开发机，你可以让其中一台运行 Web 面板作为主控，其他机器作为 Forwarder 探针将日志实时推送上来，免去本地数据库的同步麻烦。
++
++### 一键部署集群 (小白推荐)
++
++为简化配置步骤，项目提供了 `scripts/deploy.sh` 交互式部署脚本：
++
++```bash
++chmod +x ./scripts/deploy.sh
++sudo ./scripts/deploy.sh
++```
++
++运行后，脚本会提问你是配置为**主控端 (Receiver)** 还是 **探针端 (Forwarder)**，只需要输入通信密钥 (Token) 和对应地址，脚本将自动编译并把它配置为开机自启的 Systemd 后台服务。
++
++### 手动部署集群
++
++#### 第一步：启动主控服务端 (Receiver)
++
++在作为中心看板的机器（或你的主 Mac）上启动带 Token 校验的 Web 模式：
++```bash
++# --token 设置一个通信密钥，防止接口被恶意访问
++./dashboard --web --port 9100 --token "your-secret-key"
++```
++
++### 第二步：在其他机器启动探针 (Forwarder)
++
++将 `dashboard` 二进制文件复制到你的其他服务器上。
++使用 `--forward-to` 参数指向主控机器的 `/api/track` 接口：
++
++```bash
++# --device-id 标识该服务器的名称
++# --forward-to 填写主控板的接口地址
++./dashboard \
++  --device-id "ubuntu-server-1" \
++  --forward-to "http://YOUR_MAIN_IP:9100/api/track" \
++  --token "your-secret-key"
++```
++
++启动后，该节点将**不会**生成本地数据库，而是将监听到的 Claude Code / Gemini CLI 的所有 Token 消耗**实时转发**到主控看板。你可以在主控板 Web 界面上选择设备过滤，查看集群总览或单台服务器的开销。
++
++---
++
++## 数据管理：导出、导入与去重
++
++### 导出 (Export)
++将本地数据库导出为 CSV 格式，默认只导出当前设备的数据：
++```bash
++# 导出当前设备数据到文件
++./dashboard export > usage.csv
++
++# 导出所有设备数据
++./dashboard --device-id all export > all_usage.csv
++
++# 导出指定设备
++./dashboard --device-id "ubuntu-server-1" export > server1.csv
++```
++
++### 导入 (Import)
++从 CSV 文件导入数据到本地数据库，自动去重（已有的记录会被跳过）：
++```bash
++./dashboard import server1.csv
++# ✅ Import complete: 1234 imported, 56 skipped (duplicates)
++```
++
++### 去重 (Dedup)
++清理数据库中的重复记录（保留最早的那条）：
++```bash
++./dashboard dedup
++# ✅ Removed 23493 duplicate records
++```
++
++### 典型场景：离线同步多台设备
++
++如果你的设备之间没有网络连接（无法使用 Forwarder），可以用导出/导入实现数据合并：
++```bash
++# 在设备 A 上导出
++./dashboard export > device_a.csv
++
++# 将 CSV 拷贝到主控机（U盘、scp 等任意方式）
++scp device_a.csv user@main-server:~/
++
++# 在主控机上导入（自动去重，可重复执行）
++./dashboard import device_a.csv
++```
++
+diff --git a/internal/alert/budget.go b/internal/alert/budget.go
+index 5ae9776..cc0383d 100644
+--- a/internal/alert/budget.go
++++ b/internal/alert/budget.go
+@@ -1,6 +1,7 @@
+ package alert
+ 
+ import (
++	"log"
+ 	"time"
+ 
+ 	"ai-flight-dashboard/internal/db"
+@@ -43,8 +44,11 @@ func (b *BudgetAlert) Check() BudgetStatus {
+ 	}
+ 
+ 	now := time.Now().UTC()
+-	since := now.Add(-24 * time.Hour)
+-	spent, _, _, _, _ := b.db.QueryPeriodStatsSince(since, "")
++	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
++	spent, _, _, _, _, err := b.db.QueryPeriodStatsSince(startOfDay, "all")
++	if err != nil {
++		log.Printf("Budget check failed to query DB: %v", err)
++	}
+ 
+ 	remaining := b.dailyLimit - spent
+ 	if remaining < 0 {
+diff --git a/internal/calculator/calculator.go b/internal/calculator/calculator.go
+index da9db43..6d46326 100644
+--- a/internal/calculator/calculator.go
++++ b/internal/calculator/calculator.go
+@@ -7,9 +7,10 @@ import (
+ )
+ 
+ type ModelPrice struct {
+-	InputPricePerM  float64 `json:"input_price_per_m"`
+-	CachedPricePerM float64 `json:"cached_price_per_m"`
+-	OutputPricePerM float64 `json:"output_price_per_m"`
++	InputPricePerM          float64 `json:"input_price_per_m"`
++	CachedPricePerM         float64 `json:"cached_price_per_m"`
++	CacheCreationPricePerM  float64 `json:"cache_creation_price_per_m"`
++	OutputPricePerM         float64 `json:"output_price_per_m"`
+ }
+ 
+ type PricingTable struct {
+@@ -39,22 +40,23 @@ func New(pricingFilePath string) (*Calculator, error) {
+ }
+ 
+ // CalculateCost takes the specific token metrics and returns the estimated USD cost.
+-func (c *Calculator) CalculateCost(model string, inputTokens, cachedTokens, outputTokens int) (float64, error) {
++func (c *Calculator) CalculateCost(model string, inputTokens, cachedTokens, cacheCreationTokens, outputTokens int) (float64, error) {
+ 	price, ok := c.prices.Models[model]
+ 	if !ok {
+ 		return 0, nil // unknown model, skip silently
+ 	}
+ 	
+-	baseInput := inputTokens - cachedTokens
++	baseInput := inputTokens - cachedTokens - cacheCreationTokens
+ 	if baseInput < 0 {
+ 		baseInput = 0
+ 	}
+ 	
+ 	inputCost := (float64(baseInput) / 1_000_000.0) * price.InputPricePerM
+ 	cachedCost := (float64(cachedTokens) / 1_000_000.0) * price.CachedPricePerM
++	cacheCreationCost := (float64(cacheCreationTokens) / 1_000_000.0) * price.CacheCreationPricePerM
+ 	outputCost := (float64(outputTokens) / 1_000_000.0) * price.OutputPricePerM
+ 	
+-	return inputCost + cachedCost + outputCost, nil
++	return inputCost + cachedCost + cacheCreationCost + outputCost, nil
+ }
+ 
+ // GetModelPrice returns the price table for a specific model.
+@@ -65,12 +67,12 @@ func (c *Calculator) GetModelPrice(model string) (ModelPrice, bool) {
+ 
+ // CalculateCostNoCaching computes a hypothetical cost where cached tokens are
+ // charged at the full input price instead of the discounted cached price.
+-func (c *Calculator) CalculateCostNoCaching(model string, inputTokens, cachedTokens, outputTokens int) (float64, error) {
++func (c *Calculator) CalculateCostNoCaching(model string, inputTokens, cachedTokens, cacheCreationTokens, outputTokens int) (float64, error) {
+ 	price, ok := c.prices.Models[model]
+ 	if !ok {
+ 		return 0, nil
+ 	}
+-	// Treat ALL input tokens (including cached) at full input price
++	// Treat ALL input tokens (including cached and cache_creation) at full input price
+ 	inputCost := (float64(inputTokens) / 1_000_000.0) * price.InputPricePerM
+ 	outputCost := (float64(outputTokens) / 1_000_000.0) * price.OutputPricePerM
+ 	return inputCost + outputCost, nil
+diff --git a/internal/calculator/calculator_test.go b/internal/calculator/calculator_test.go
+index ebc3b65..694915d 100644
+--- a/internal/calculator/calculator_test.go
++++ b/internal/calculator/calculator_test.go
+@@ -16,6 +16,7 @@ func TestCalculateCost(t *testing.T) {
+ 			"test-model": {
+ 				"input_price_per_m": 2.00,
+ 				"cached_price_per_m": 0.50,
++				"cache_creation_price_per_m": 3.00,
+ 				"output_price_per_m": 10.00
+ 			}
+ 		}
+@@ -32,7 +33,7 @@ func TestCalculateCost(t *testing.T) {
+ 
+ 	// 1,000,000 input tokens = $2.00
+ 	// 1,000,000 output tokens = $10.00
+-	cost, err := calc.CalculateCost("test-model", 1000000, 0, 1000000)
++	cost, err := calc.CalculateCost("test-model", 1000000, 0, 0, 1000000)
+ 	if err != nil {
+ 		t.Errorf("Unexpected error: %v", err)
+ 	}
+@@ -42,12 +43,12 @@ func TestCalculateCost(t *testing.T) {
+ 	}
+ 
+ 	// Test cached tokens
+-	// 500,000 input, 500,000 cached, 1,000,000 output
+-	// baseInput: max(500000 - 500000, 0) = 0 → inputCost = $0.00
++	// 500,000 input, 500,000 cached, 0 cache_creation, 1,000,000 output
++	// baseInput: max(500000 - 500000 - 0, 0) = 0 → inputCost = $0.00
+ 	// cached: 500,000 * 0.5 / 1000000 = $0.25
+ 	// output: 1000000 * 10.0 / 1000000 = $10.00
+ 	// total = 10.25
+-	cost, err = calc.CalculateCost("test-model", 500000, 500000, 1000000)
++	cost, err = calc.CalculateCost("test-model", 500000, 500000, 0, 1000000)
+ 	if err != nil {
+ 		t.Errorf("Unexpected error: %v", err)
+ 	}
+@@ -56,8 +57,24 @@ func TestCalculateCost(t *testing.T) {
+ 		t.Errorf("Expected cost %f, got %f", expected, cost)
+ 	}
+ 
++	// Test cache creation tokens
++	// 600,000 input, 400,000 cached, 100,000 cache creation, 1,000,000 output
++	// baseInput: max(600000 - 400000 - 100000, 0) = 100,000 → inputCost = $0.20
++	// cached: 400,000 * 0.5 / 1000000 = $0.20
++	// cache_creation: 100,000 * 3.0 / 1000000 = $0.30
++	// output: 1000000 * 10.0 / 1000000 = $10.00
++	// total = 10.70
++	cost, err = calc.CalculateCost("test-model", 600000, 400000, 100000, 1000000)
++	if err != nil {
++		t.Errorf("Unexpected error: %v", err)
++	}
++	expected = 10.70
++	if cost != expected {
++		t.Errorf("Expected cost %f, got %f", expected, cost)
++	}
++
+ 	// Unknown model → returns 0 cost, no error (graceful fallback)
+-	cost, err = calc.CalculateCost("unknown", 100, 0, 100)
++	cost, err = calc.CalculateCost("unknown", 100, 0, 0, 100)
+ 	if err != nil {
+ 		t.Errorf("Unexpected error for unknown model: %v", err)
+ 	}
+diff --git a/internal/db/export_test.go b/internal/db/export_test.go
+index 1fce6b7..66f65b0 100644
+--- a/internal/db/export_test.go
++++ b/internal/db/export_test.go
+@@ -110,7 +110,7 @@ func TestImportCSV(t *testing.T) {
+ 	}
+ 
+ 	// Verify data in DB
+-	cost, _, _, _, _ := database.QueryPeriodStatsAll("remote-mac")
++	cost, _, _, _, _, _ := database.QueryPeriodStatsAll("remote-mac")
+ 	if cost < 2.09 || cost > 2.11 {
+ 		t.Errorf("expected ~2.10 cost, got %f", cost)
+ 	}
+@@ -143,7 +143,7 @@ func TestImportCSV_Dedup(t *testing.T) {
+ 		t.Errorf("expected 1 skipped (dedup), got %d", skipped)
+ 	}
+ 
+-	cost, _, _, _, _ := database.QueryPeriodStatsAll("")
++	cost, _, _, _, _, _ := database.QueryPeriodStatsAll("")
+ 	if cost < 1.49 || cost > 1.51 {
+ 		t.Errorf("expected ~1.50 (no dup), got %f", cost)
+ 	}
+@@ -181,8 +181,8 @@ func TestExportImportRoundTrip(t *testing.T) {
+ 	}
+ 
+ 	// Verify totals match
+-	srcCost, _, _, _, _ := srcDB.QueryPeriodStatsAll("")
+-	dstCost, _, _, _, _ := dstDB.QueryPeriodStatsAll("")
++	srcCost, _, _, _, _, _ := srcDB.QueryPeriodStatsAll("")
++	dstCost, _, _, _, _, _ := dstDB.QueryPeriodStatsAll("")
+ 	if srcCost < dstCost-0.01 || srcCost > dstCost+0.01 {
+ 		t.Errorf("round-trip cost mismatch: src=%f dst=%f", srcCost, dstCost)
+ 	}
+diff --git a/internal/db/sqlite.go b/internal/db/sqlite.go
+index fafc6e5..9d6abea 100644
+--- a/internal/db/sqlite.go
++++ b/internal/db/sqlite.go
+@@ -16,9 +16,10 @@ type ModelStat struct {
+ 	Model      string
+ 	Source     string
+ 	Events     int
+-	InputTokens  int
+-	CachedTokens int
+-	OutputTokens int
++	InputTokens         int
++	CachedTokens        int
++	CacheCreationTokens int
++	OutputTokens        int
+ 	TotalCost  float64
+ }
+ 
+@@ -28,6 +29,9 @@ func New(dsn string) (*DB, error) {
+ 		return nil, err
+ 	}
+ 
++	// Enforce single connection pool to prevent concurrent write locks in WAL mode
++	conn.SetMaxOpenConns(1)
++
+ 	// WAL mode for concurrent read/write
+ 	conn.Exec("PRAGMA journal_mode=WAL")
+ 	conn.Exec("PRAGMA busy_timeout=5000")
+@@ -49,13 +53,16 @@ func initSchema(conn *sql.DB) error {
+ 		model TEXT NOT NULL,
+ 		input_tokens INTEGER NOT NULL,
+ 		cached_tokens INTEGER NOT NULL,
++		cache_creation_tokens INTEGER DEFAULT 0,
+ 		output_tokens INTEGER NOT NULL,
+ 		cost_usd REAL NOT NULL,
+ 		file_path TEXT DEFAULT '',
+-		device_id TEXT DEFAULT 'local'
++		device_id TEXT DEFAULT 'local',
++		uuid TEXT
+ 	);
+ 	CREATE INDEX IF NOT EXISTS idx_usage_log_ts ON usage_records(log_timestamp);
+ 	CREATE INDEX IF NOT EXISTS idx_usage_device ON usage_records(device_id);
++	CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_uuid ON usage_records(uuid) WHERE uuid IS NOT NULL AND uuid != '';
+ 
+ 	CREATE TABLE IF NOT EXISTS scan_offsets (
+ 		file_path TEXT PRIMARY KEY,
+@@ -74,7 +81,10 @@ func initSchema(conn *sql.DB) error {
+ 
+ 	// Lightweight migrations for existing tables
+ 	conn.Exec("ALTER TABLE usage_records ADD COLUMN device_id TEXT DEFAULT 'local'")
+-	conn.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_dedup ON usage_records(log_timestamp, file_path, model, input_tokens, cached_tokens, output_tokens, device_id)")
++	conn.Exec("ALTER TABLE usage_records ADD COLUMN cache_creation_tokens INTEGER DEFAULT 0")
++	conn.Exec("ALTER TABLE usage_records ADD COLUMN uuid TEXT")
++	conn.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_uuid ON usage_records(uuid) WHERE uuid IS NOT NULL AND uuid != ''")
++	conn.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_dedup ON usage_records(log_timestamp, file_path, model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, device_id)")
+ 
+ 	return nil
+ }
+@@ -89,13 +99,30 @@ func (d *DB) InsertUsage(u model.TokenUsage, cost float64, deviceID string) erro
+ }
+ 
+ // InsertUsageWithTime inserts a usage record with an explicit log timestamp.
+-// Duplicate records (same timestamp, file, model, tokens, device) are silently ignored.
++// If UUID is present, it will UPSERT (overwrite older states of the same generation).
++// If UUID is empty, duplicate records are silently ignored.
+ func (d *DB) InsertUsageWithTime(u model.TokenUsage, cost float64, logTS time.Time, filePath string, deviceID string) error {
++	if u.UUID != "" {
++		query := `
++		INSERT INTO usage_records (uuid, log_timestamp, source, model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd, file_path, device_id)
++		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
++		ON CONFLICT(uuid) WHERE uuid IS NOT NULL AND uuid != '' DO UPDATE SET
++			log_timestamp = excluded.log_timestamp,
++			input_tokens = excluded.input_tokens,
++			cached_tokens = excluded.cached_tokens,
++			cache_creation_tokens = excluded.cache_creation_tokens,
++			output_tokens = excluded.output_tokens,
++			cost_usd = excluded.cost_usd
++		`
++		_, err := d.conn.Exec(query, u.UUID, logTS.Format(time.RFC3339), u.Source, u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens, cost, filePath, deviceID)
++		return err
++	}
++
+ 	query := `
+-	INSERT OR IGNORE INTO usage_records (log_timestamp, source, model, input_tokens, cached_tokens, output_tokens, cost_usd, file_path, device_id)
+-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
++	INSERT OR IGNORE INTO usage_records (log_timestamp, source, model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd, file_path, device_id)
++	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ 	`
+-	_, err := d.conn.Exec(query, logTS.Format(time.RFC3339), u.Source, u.Model, u.InputTokens, u.CachedTokens, u.OutputTokens, cost, filePath, deviceID)
++	_, err := d.conn.Exec(query, logTS.Format(time.RFC3339), u.Source, u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens, cost, filePath, deviceID)
+ 	return err
+ }
+ 
+@@ -118,10 +145,10 @@ func (d *DB) SetOffset(filePath string, offset int64) error {
+ }
+ 
+ // QueryPeriodStatsSince returns total cost and token breakdown since the given time.
+-func (d *DB) QueryPeriodStatsSince(since time.Time, deviceID string) (float64, int, int, int, error) {
++func (d *DB) QueryPeriodStatsSince(since time.Time, deviceID string) (float64, int, int, int, int, error) {
+ 	var cost sql.NullFloat64
+-	var inTok, cacheTok, outTok sql.NullInt64
+-	query := "SELECT COALESCE(SUM(cost_usd), 0), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(output_tokens), 0) FROM usage_records WHERE log_timestamp >= ?"
++	var inTok, cacheTok, cacheCreationTok, outTok sql.NullInt64
++	query := "SELECT COALESCE(SUM(cost_usd), 0), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(cache_creation_tokens), 0), COALESCE(SUM(output_tokens), 0) FROM usage_records WHERE log_timestamp >= ?"
+ 	args := []interface{}{since.Format(time.RFC3339)}
+ 	
+ 	if deviceID != "" && deviceID != "all" {
+@@ -129,18 +156,18 @@ func (d *DB) QueryPeriodStatsSince(since time.Time, deviceID string) (float64, i
+ 		args = append(args, deviceID)
+ 	}
+ 
+-	err := d.conn.QueryRow(query, args...).Scan(&cost, &inTok, &cacheTok, &outTok)
++	err := d.conn.QueryRow(query, args...).Scan(&cost, &inTok, &cacheTok, &cacheCreationTok, &outTok)
+ 	if err != nil {
+-		return 0, 0, 0, 0, err
++		return 0, 0, 0, 0, 0, err
+ 	}
+-	return cost.Float64, int(inTok.Int64), int(cacheTok.Int64), int(outTok.Int64), nil
++	return cost.Float64, int(inTok.Int64), int(cacheTok.Int64), int(cacheCreationTok.Int64), int(outTok.Int64), nil
+ }
+ 
+ // QueryPeriodStatsAll returns total cumulative cost and token breakdown.
+-func (d *DB) QueryPeriodStatsAll(deviceID string) (float64, int, int, int, error) {
++func (d *DB) QueryPeriodStatsAll(deviceID string) (float64, int, int, int, int, error) {
+ 	var cost sql.NullFloat64
+-	var inTok, cacheTok, outTok sql.NullInt64
+-	query := "SELECT COALESCE(SUM(cost_usd), 0), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(output_tokens), 0) FROM usage_records WHERE 1=1"
++	var inTok, cacheTok, cacheCreationTok, outTok sql.NullInt64
++	query := "SELECT COALESCE(SUM(cost_usd), 0), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(cache_creation_tokens), 0), COALESCE(SUM(output_tokens), 0) FROM usage_records WHERE 1=1"
+ 	var args []interface{}
+ 
+ 	if deviceID != "" && deviceID != "all" {
+@@ -148,18 +175,18 @@ func (d *DB) QueryPeriodStatsAll(deviceID string) (float64, int, int, int, error
+ 		args = append(args, deviceID)
+ 	}
+ 
+-	err := d.conn.QueryRow(query, args...).Scan(&cost, &inTok, &cacheTok, &outTok)
++	err := d.conn.QueryRow(query, args...).Scan(&cost, &inTok, &cacheTok, &cacheCreationTok, &outTok)
+ 	if err != nil {
+-		return 0, 0, 0, 0, err
++		return 0, 0, 0, 0, 0, err
+ 	}
+-	return cost.Float64, int(inTok.Int64), int(cacheTok.Int64), int(outTok.Int64), nil
++	return cost.Float64, int(inTok.Int64), int(cacheTok.Int64), int(cacheCreationTok.Int64), int(outTok.Int64), nil
+ }
+ 
+ // QueryStatsSince returns per-model stats since the given time, sorted by cost descending.
+ func (d *DB) QueryStatsSince(since time.Time, deviceID string) ([]ModelStat, error) {
+ 	query := `
+ 		SELECT source, model, COUNT(*) as events,
+-			SUM(input_tokens), SUM(cached_tokens), SUM(output_tokens),
++			SUM(input_tokens), SUM(cached_tokens), SUM(cache_creation_tokens), SUM(output_tokens),
+ 			SUM(cost_usd)
+ 		FROM usage_records
+ 		WHERE log_timestamp >= ?
+@@ -186,7 +213,7 @@ func (d *DB) QueryStatsSince(since time.Time, deviceID string) ([]ModelStat, err
+ 	for rows.Next() {
+ 		var s ModelStat
+ 		if err := rows.Scan(&s.Source, &s.Model, &s.Events,
+-			&s.InputTokens, &s.CachedTokens, &s.OutputTokens, &s.TotalCost); err != nil {
++			&s.InputTokens, &s.CachedTokens, &s.CacheCreationTokens, &s.OutputTokens, &s.TotalCost); err != nil {
+ 			return nil, err
+ 		}
+ 		stats = append(stats, s)
+@@ -215,16 +242,17 @@ func (d *DB) QueryDevices() ([]string, error) {
+ 
+ // UsageRecord represents a single stored usage record for per-row analysis.
+ type UsageRecord struct {
+-	Model        string
+-	InputTokens  int
+-	CachedTokens int
+-	OutputTokens int
+-	CostUSD      float64
++	Model               string
++	InputTokens         int
++	CachedTokens        int
++	CacheCreationTokens int
++	OutputTokens        int
++	CostUSD             float64
+ }
+ 
+ // QueryUsageRecords returns individual usage records since the given time.
+ func (d *DB) QueryUsageRecords(since time.Time, deviceID string) ([]UsageRecord, error) {
+-	query := `SELECT model, input_tokens, cached_tokens, output_tokens, cost_usd
++	query := `SELECT model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd
+ 		FROM usage_records WHERE log_timestamp >= ?`
+ 	args := []interface{}{since.Format(time.RFC3339)}
+ 
+@@ -242,7 +270,7 @@ func (d *DB) QueryUsageRecords(since time.Time, deviceID string) ([]UsageRecord,
+ 	var records []UsageRecord
+ 	for rows.Next() {
+ 		var r UsageRecord
+-		if err := rows.Scan(&r.Model, &r.InputTokens, &r.CachedTokens, &r.OutputTokens, &r.CostUSD); err != nil {
++		if err := rows.Scan(&r.Model, &r.InputTokens, &r.CachedTokens, &r.CacheCreationTokens, &r.OutputTokens, &r.CostUSD); err != nil {
+ 			return nil, err
+ 		}
+ 		records = append(records, r)
+@@ -281,14 +309,33 @@ func (d *DB) ListKnownDirs() ([]string, error) {
+ 	return dirs, rows.Err()
+ }
+ 
++// ListKnownFiles returns all file paths cached in scan_offsets.
++func (d *DB) ListKnownFiles() ([]string, error) {
++	rows, err := d.conn.Query("SELECT file_path FROM scan_offsets ORDER BY file_path")
++	if err != nil {
++		return nil, err
++	}
++	defer rows.Close()
++
++	var files []string
++	for rows.Next() {
++		var p string
++		if err := rows.Scan(&p); err != nil {
++			return nil, err
++		}
++		files = append(files, p)
++	}
++	return files, rows.Err()
++}
++
+ // DeduplicateExisting removes duplicate usage records, keeping the one with the lowest rowid.
+ // Returns the number of rows removed.
+ func (d *DB) DeduplicateExisting() (int64, error) {
+ 	query := `
+ 	DELETE FROM usage_records WHERE id NOT IN (
+ 		SELECT MIN(id) FROM usage_records
+-		GROUP BY log_timestamp, file_path, model, input_tokens, cached_tokens, output_tokens, device_id
+-	)`
++		GROUP BY log_timestamp, file_path, model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, device_id
++	) AND (uuid IS NULL OR uuid = '')`
+ 	result, err := d.conn.Exec(query)
+ 	if err != nil {
+ 		return 0, err
+diff --git a/internal/db/sqlite_test.go b/internal/db/sqlite_test.go
+index 28a33b8..1547418 100644
+--- a/internal/db/sqlite_test.go
++++ b/internal/db/sqlite_test.go
+@@ -95,7 +95,7 @@ func TestInsertUsageWithTime(t *testing.T) {
+ 	}
+ 
+ 	// Verify it's queryable
+-	cost, _, _, _, err := database.QueryPeriodStatsAll("")
++	cost, _, _, _, _, err := database.QueryPeriodStatsAll("")
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+@@ -126,25 +126,25 @@ func TestQueryCostSince(t *testing.T) {
+ 	database.InsertUsageWithTime(veryRecent, 3.00, now.Add(-5*time.Minute), "/c.jsonl", "dev2")
+ 
+ 	// Last 1 hour, all devices = 5.00
+-	cost, _, _, _, _ := database.QueryPeriodStatsSince(now.Add(-1*time.Hour), "")
++	cost, _, _, _, _, _ := database.QueryPeriodStatsSince(now.Add(-1*time.Hour), "")
+ 	if cost < 4.99 || cost > 5.01 {
+ 		t.Errorf("last 1h all: expected ~5.00, got %f", cost)
+ 	}
+ 
+ 	// Last 1 hour, dev1 only = 2.00
+-	cost, _, _, _, _ = database.QueryPeriodStatsSince(now.Add(-1*time.Hour), "dev1")
++	cost, _, _, _, _, _ = database.QueryPeriodStatsSince(now.Add(-1*time.Hour), "dev1")
+ 	if cost < 1.99 || cost > 2.01 {
+ 		t.Errorf("last 1h dev1: expected ~2.00, got %f", cost)
+ 	}
+ 
+ 	// Cumulative all = 6.00
+-	cost, _, _, _, _ = database.QueryPeriodStatsAll("")
++	cost, _, _, _, _, _ = database.QueryPeriodStatsAll("")
+ 	if cost < 5.99 || cost > 6.01 {
+ 		t.Errorf("cumulative: expected ~6.00, got %f", cost)
+ 	}
+ 
+ 	// Cumulative dev2 = 3.00
+-	cost, _, _, _, _ = database.QueryPeriodStatsAll("dev2")
++	cost, _, _, _, _, _ = database.QueryPeriodStatsAll("dev2")
+ 	if cost < 2.99 || cost > 3.01 {
+ 		t.Errorf("cumulative dev2: expected ~3.00, got %f", cost)
+ 	}
+@@ -227,22 +227,25 @@ func TestInsertDedup(t *testing.T) {
+ 	defer database.Close()
+ 
+ 	now := time.Now().UTC()
+-	u := model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, CachedTokens: 500, OutputTokens: 200}
++	u := model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, CachedTokens: 500, OutputTokens: 200, UUID: "test-uuid-123"}
+ 
+-	// Insert same record twice — second should be silently ignored
++	// Insert same record twice — second should UPSERT by UUID
+ 	err = database.InsertUsageWithTime(u, 1.50, now, "/a.jsonl", "local")
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+-	err = database.InsertUsageWithTime(u, 1.50, now, "/a.jsonl", "local")
++	// Simulate streaming update: output tokens increased, but same UUID
++	u2 := u
++	u2.OutputTokens = 300
++	err = database.InsertUsageWithTime(u2, 2.00, now, "/a.jsonl", "local")
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+ 
+ 	// Should only have 1 record, not 2
+-	cost, _, _, _, _ := database.QueryPeriodStatsAll("")
+-	if cost < 1.49 || cost > 1.51 {
+-		t.Errorf("expected ~1.50 (1 record), got %f (dedup failed)", cost)
++	cost, _, _, _, _, _ := database.QueryPeriodStatsAll("")
++	if cost < 1.99 || cost > 2.01 {
++		t.Errorf("expected ~2.00 (upserted record), got %f (dedup failed)", cost)
+ 	}
+ }
+ 
+@@ -260,7 +263,7 @@ func TestInsertDedup_DifferentDevices(t *testing.T) {
+ 	database.InsertUsageWithTime(u, 1.00, now, "/a.jsonl", "mac")
+ 	database.InsertUsageWithTime(u, 1.00, now, "/a.jsonl", "linux")
+ 
+-	cost, _, _, _, _ := database.QueryPeriodStatsAll("")
++	cost, _, _, _, _, _ := database.QueryPeriodStatsAll("")
+ 	if cost < 1.99 || cost > 2.01 {
+ 		t.Errorf("expected ~2.00 (2 different devices), got %f", cost)
+ 	}
+@@ -323,13 +326,13 @@ func TestDeduplicateExisting(t *testing.T) {
+ 	database.RawExec("DROP INDEX IF EXISTS idx_usage_dedup")
+ 	for i := 0; i < 3; i++ {
+ 		database.RawExec(
+-			"INSERT INTO usage_records (log_timestamp, source, model, input_tokens, cached_tokens, output_tokens, cost_usd, file_path, device_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+-			now.Format(time.RFC3339), u.Source, u.Model, u.InputTokens, u.CachedTokens, u.OutputTokens, 1.00, "/a.jsonl", "local",
++			"INSERT INTO usage_records (log_timestamp, source, model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd, file_path, device_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
++			now.Format(time.RFC3339), u.Source, u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens, 1.00, "/a.jsonl", "local",
+ 		)
+ 	}
+ 
+ 	// Verify we have 3 records before dedup
+-	cost, _, _, _, _ := database.QueryPeriodStatsAll("")
++	cost, _, _, _, _, _ := database.QueryPeriodStatsAll("")
+ 	if cost < 2.99 {
+ 		t.Fatalf("setup: expected ~3.00 before dedup, got %f", cost)
+ 	}
+@@ -344,7 +347,7 @@ func TestDeduplicateExisting(t *testing.T) {
+ 	}
+ 
+ 	// After dedup, should be exactly 1 record
+-	cost, _, _, _, _ = database.QueryPeriodStatsAll("")
++	cost, _, _, _, _, _ = database.QueryPeriodStatsAll("")
+ 	if cost < 0.99 || cost > 1.01 {
+ 		t.Errorf("expected ~1.00 after dedup, got %f", cost)
+ 	}
+diff --git a/internal/forwarder/forwarder.go b/internal/forwarder/forwarder.go
+index 217ee8d..e67a9e4 100644
+--- a/internal/forwarder/forwarder.go
++++ b/internal/forwarder/forwarder.go
+@@ -71,12 +71,13 @@ func (f *Forwarder) send(usage model.TokenUsage) error {
+ 			time.Sleep(1 * time.Second)
+ 			continue
+ 		}
+-		defer resp.Body.Close()
+ 
+ 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
++			resp.Body.Close()
+ 			return nil
+ 		}
+ 		lastErr = fmt.Errorf("unexpected status code: %d", resp.StatusCode)
++		resp.Body.Close()
+ 		time.Sleep(1 * time.Second)
+ 	}
+ 	return lastErr
+diff --git a/internal/model/usage.go b/internal/model/usage.go
+index de77f0e..0909c3f 100644
+--- a/internal/model/usage.go
++++ b/internal/model/usage.go
+@@ -7,12 +7,13 @@ import "time"
+ type TokenUsage struct {
+ 	Source       string    `json:"source"`
+ 	Model        string    `json:"model"`
+-	InputTokens  int       `json:"input_tokens"`
+-	CachedTokens int       `json:"cached_tokens"`
+-	OutputTokens int       `json:"output_tokens"`
+-	Thoughts     int       `json:"thoughts"`
+-	Timestamp    time.Time `json:"timestamp"`
+-	UUID         string    `json:"uuid"` // for dedup: Claude writes snapshots with same uuid
++	InputTokens         int       `json:"input_tokens"`
++	CachedTokens        int       `json:"cached_tokens"`
++	CacheCreationTokens int       `json:"cache_creation_tokens"`
++	OutputTokens        int       `json:"output_tokens"`
++	Thoughts            int       `json:"thoughts"`
++	Timestamp           time.Time `json:"timestamp"`
++	UUID                string    `json:"uuid"` // for dedup: Claude writes snapshots with same uuid
+ }
+ 
+ // TrackPayload is the JSON payload for sending telemetry data to the remote server.
+diff --git a/internal/scanner/scanner.go b/internal/scanner/scanner.go
+index e6dead8..fdb0e0b 100644
+--- a/internal/scanner/scanner.go
++++ b/internal/scanner/scanner.go
+@@ -24,7 +24,7 @@ func New(database *db.DB, calc *calculator.Calculator, deviceID string) *Scanner
+ 
+ // ScanAll walks all dirs, finds .jsonl files, reads from last offset, parses usage, inserts into DB.
+ // Returns the number of new usage records inserted.
+-func (s *Scanner) ScanAll(dirs []string) (int, error) {
++func (s *Scanner) ScanAll(dirs []string, usageChan chan<- watcher.TokenUsage) (int, error) {
+ 	total := 0
+ 	for _, dir := range dirs {
+ 		err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+@@ -34,7 +34,7 @@ func (s *Scanner) ScanAll(dirs []string) (int, error) {
+ 			if d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
+ 				return nil
+ 			}
+-			n, err := s.scanFile(path)
++			n, err := s.scanFile(path, usageChan)
+ 			if err != nil {
+ 				return nil // skip broken files, don't abort scan
+ 			}
+@@ -48,7 +48,38 @@ func (s *Scanner) ScanAll(dirs []string) (int, error) {
+ 	return total, nil
+ }
+ 
+-func (s *Scanner) scanFile(path string) (int, error) {
++// ScanKnownFiles reads all known file paths from the database and directly stats them.
++// This is extremely fast (<1ms) compared to ScanAll, avoiding directory traversal overhead.
++func (s *Scanner) ScanKnownFiles(usageChan chan<- watcher.TokenUsage) (int, error) {
++	files, err := s.db.ListKnownFiles()
++	if err != nil {
++		return 0, err
++	}
++	
++	total := 0
++	for _, path := range files {
++		// Only check if it exists and hasn't shrunk/disappeared
++		info, err := os.Stat(path)
++		if err != nil {
++			continue // skip broken files
++		}
++		
++		// Optimization: Check offset here to avoid opening file if no new data
++		offset, err := s.db.GetOffset(path)
++		if err != nil {
++			continue
++		}
++		if info.Size() == offset {
++			continue
++		}
++		
++		n, _ := s.scanFile(path, usageChan)
++		total += n
++	}
++	return total, nil
++}
++
++func (s *Scanner) scanFile(path string, usageChan chan<- watcher.TokenUsage) (int, error) {
+ 	offset, err := s.db.GetOffset(path)
+ 	if err != nil {
+ 		return 0, err
+@@ -93,7 +124,7 @@ func (s *Scanner) scanFile(path string) (int, error) {
+ 		if !ok {
+ 			continue
+ 		}
+-		cost, _ := s.calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.OutputTokens)
++		cost, _ := s.calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens)
+ 		ts := u.Timestamp
+ 		if ts.IsZero() {
+ 			ts = info.ModTime()
+@@ -112,12 +143,18 @@ func (s *Scanner) scanFile(path string) (int, error) {
+ 		if err := s.db.InsertUsageWithTime(e.u, e.cost, e.ts, path, s.DeviceID); err != nil {
+ 			continue
+ 		}
++		if usageChan != nil {
++			usageChan <- e.u
++		}
+ 		count++
+ 	}
+ 	for _, e := range noUUID {
+ 		if err := s.db.InsertUsageWithTime(e.u, e.cost, e.ts, path, s.DeviceID); err != nil {
+ 			continue
+ 		}
++		if usageChan != nil {
++			usageChan <- e.u
++		}
+ 		count++
+ 	}
+ 
+diff --git a/internal/scanner/scanner_test.go b/internal/scanner/scanner_test.go
+index 03314aa..f83b5fc 100644
+--- a/internal/scanner/scanner_test.go
++++ b/internal/scanner/scanner_test.go
+@@ -43,7 +43,7 @@ func TestScanAll_FullScan(t *testing.T) {
+ 	os.WriteFile(logFile, []byte(content+content+content), 0644)
+ 
+ 	s := scanner.New(database, calc, "test-device")
+-	count, err := s.ScanAll([]string{logDir})
++	count, err := s.ScanAll([]string{logDir}, nil)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+@@ -52,7 +52,7 @@ func TestScanAll_FullScan(t *testing.T) {
+ 	}
+ 
+ 	// Verify DB has data
+-	total, _, _, _, _ := database.QueryPeriodStatsAll("")
++	total, _, _, _, _, _ := database.QueryPeriodStatsAll("")
+ 	if total < 0.01 {
+ 		t.Errorf("expected non-zero cost, got %f", total)
+ 	}
+@@ -74,13 +74,13 @@ func TestScanAll_IncrementalScan(t *testing.T) {
+ 	// First scan: 2 lines
+ 	os.WriteFile(logFile, []byte(line+line), 0644)
+ 	s := scanner.New(database, calc, "local")
+-	count1, _ := s.ScanAll([]string{logDir})
++	count1, _ := s.ScanAll([]string{logDir}, nil)
+ 	if count1 != 2 {
+ 		t.Errorf("first scan: expected 2, got %d", count1)
+ 	}
+ 
+ 	// Second scan without changes: should be 0
+-	count2, _ := s.ScanAll([]string{logDir})
++	count2, _ := s.ScanAll([]string{logDir}, nil)
+ 	if count2 != 0 {
+ 		t.Errorf("second scan: expected 0 (no new data), got %d", count2)
+ 	}
+@@ -91,7 +91,7 @@ func TestScanAll_IncrementalScan(t *testing.T) {
+ 	f.Close()
+ 
+ 	// Third scan: only the new line
+-	count3, _ := s.ScanAll([]string{logDir})
++	count3, _ := s.ScanAll([]string{logDir}, nil)
+ 	if count3 != 1 {
+ 		t.Errorf("third scan: expected 1 (incremental), got %d", count3)
+ 	}
+@@ -115,12 +115,12 @@ func TestScanAll_GeminiFormat(t *testing.T) {
+ 	os.WriteFile(logFile, []byte(content), 0644)
+ 
+ 	s := scanner.New(database, calc, "local")
+-	count, _ := s.ScanAll([]string{logDir})
++	count, _ := s.ScanAll([]string{logDir}, nil)
+ 	if count != 1 {
+ 		t.Errorf("expected 1, got %d", count)
+ 	}
+ 
+-	total, _, _, _, _ := database.QueryPeriodStatsAll("")
++	total, _, _, _, _, _ := database.QueryPeriodStatsAll("")
+ 	if total < 0.01 {
+ 		t.Errorf("expected non-zero Gemini cost, got %f", total)
+ 	}
+@@ -141,7 +141,7 @@ func TestScanAll_SkipsNonUsageLines(t *testing.T) {
+ 	os.WriteFile(logFile, []byte(content), 0644)
+ 
+ 	s := scanner.New(database, calc, "local")
+-	count, _ := s.ScanAll([]string{logDir})
++	count, _ := s.ScanAll([]string{logDir}, nil)
+ 	if count != 1 {
+ 		t.Errorf("expected 1 usage line only, got %d", count)
+ 	}
+@@ -164,7 +164,7 @@ func TestScanAll_FileTruncation(t *testing.T) {
+ 	os.WriteFile(logFile, []byte(line+line+line), 0644)
+ 
+ 	s := scanner.New(database, calc, "local")
+-	count1, _ := s.ScanAll([]string{logDir})
++	count1, _ := s.ScanAll([]string{logDir}, nil)
+ 	if count1 != 3 {
+ 		t.Errorf("first scan: expected 3, got %d", count1)
+ 	}
+@@ -172,7 +172,7 @@ func TestScanAll_FileTruncation(t *testing.T) {
+ 	// Truncate and write 1 shorter line (simulates log rotation)
+ 	os.WriteFile(logFile, []byte(line), 0644)
+ 
+-	count2, _ := s.ScanAll([]string{logDir})
++	count2, _ := s.ScanAll([]string{logDir}, nil)
+ 	if count2 != 1 {
+ 		t.Errorf("after truncation: expected 1 (re-read from start), got %d", count2)
+ 	}
+diff --git a/internal/session/tracker.go b/internal/session/tracker.go
+index 5b3f996..79e4521 100644
+--- a/internal/session/tracker.go
++++ b/internal/session/tracker.go
+@@ -37,6 +37,7 @@ func (t *Tracker) Record(tokens int, cost float64, ts time.Time) {
+ 	t.mu.Lock()
+ 	defer t.mu.Unlock()
+ 	t.entries = append(t.entries, entry{tokens: tokens, cost: cost, ts: ts})
++	t.evict()
+ }
+ 
+ // evict removes entries older than the window. Must be called with lock held.
+diff --git a/internal/tui/hud.go b/internal/tui/hud.go
+index 425ad7c..65c8f31 100644
+--- a/internal/tui/hud.go
++++ b/internal/tui/hud.go
+@@ -16,10 +16,11 @@ import (
+ 
+ type periodCost struct {
+ 	Label        string
+-	Cost         float64
+-	InputTokens  int
+-	CachedTokens int
+-	OutputTokens int
++	Cost                float64
++	InputTokens         int
++	CachedTokens        int
++	CacheCreationTokens int
++	OutputTokens        int
+ }
+ 
+ type Model struct {
+@@ -33,16 +34,18 @@ type Model struct {
+ 	budgetStatus *alert.BudgetStatus
+ 	quitting   bool
+ 	eventCount int // total events seen (usages slice is capped)
++	skipDBWrite bool
+ }
+ 
+ const maxLiveEvents = 50 // keep last N events in memory for display
+ 
+-func NewModel(c *calculator.Calculator, w *watcher.Watcher, d *db.DB, ba *alert.BudgetAlert) Model {
++func NewModel(c *calculator.Calculator, w *watcher.Watcher, d *db.DB, ba *alert.BudgetAlert, skipDBWrite bool) Model {
+ 	return Model{
+ 		calc:     c,
+ 		watch:    w,
+ 		database: d,
+ 		budget:   ba,
++		skipDBWrite: skipDBWrite,
+ 	}
+ }
+ 
+@@ -79,11 +82,11 @@ func (m Model) refreshPeriods() tea.Cmd {
+ 
+ 		var periods []periodCost
+ 		for _, w := range windows {
+-			cost, in, ca, out, _ := m.database.QueryPeriodStatsSince(now.Add(-w.dur), m.watch.DeviceID)
+-			periods = append(periods, periodCost{Label: w.label, Cost: cost, InputTokens: in, CachedTokens: ca, OutputTokens: out})
++			cost, in, ca, caw, out, _ := m.database.QueryPeriodStatsSince(now.Add(-w.dur), m.watch.DeviceID)
++			periods = append(periods, periodCost{Label: w.label, Cost: cost, InputTokens: in, CachedTokens: ca, CacheCreationTokens: caw, OutputTokens: out})
+ 		}
+-		total, tIn, tCa, tOut, _ := m.database.QueryPeriodStatsAll(m.watch.DeviceID)
+-		periods = append(periods, periodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, OutputTokens: tOut})
++		total, tIn, tCa, tCaw, tOut, _ := m.database.QueryPeriodStatsAll(m.watch.DeviceID)
++		periods = append(periods, periodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, CacheCreationTokens: tCaw, OutputTokens: tOut})
+ 
+ 		return periodsMsg(periods)
+ 	}
+@@ -110,11 +113,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+ 			m.usages = m.usages[len(m.usages)-maxLiveEvents:]
+ 		}
+ 		m.eventCount++
+-		cost, _ := m.calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.OutputTokens)
++		cost, _ := m.calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens)
+ 		m.totalCost += cost
+ 
+ 		// Async DB write — don't block the render path
+-		if m.database != nil {
++		if m.database != nil && !m.skipDBWrite {
+ 			go m.database.InsertUsage(u, cost, m.watch.DeviceID)
+ 		}
+ 
+@@ -162,8 +165,8 @@ func (m Model) View() string {
+ 	b.WriteString(fmt.Sprintf(" Live Events: %d", m.eventCount))
+ 	if len(m.usages) > 0 {
+ 		last := m.usages[len(m.usages)-1]
+-		b.WriteString(dimStyle.Render(fmt.Sprintf(" │ %s %s │ In:%d Ca:%d Out:%d",
+-			last.Source, last.Model, last.InputTokens, last.CachedTokens, last.OutputTokens)))
++		b.WriteString(dimStyle.Render(fmt.Sprintf(" │ %s %s │ In:%d CaR:%d CaW:%d Out:%d",
++			last.Source, last.Model, last.InputTokens, last.CachedTokens, last.CacheCreationTokens, last.OutputTokens)))
+ 	}
+ 	b.WriteString("\n")
+ 
+diff --git a/internal/watcher/watcher.go b/internal/watcher/watcher.go
+index 79e3293..cd24dad 100644
+--- a/internal/watcher/watcher.go
++++ b/internal/watcher/watcher.go
+@@ -248,12 +248,14 @@ func parseClaudeUsage(container map[string]interface{}, usage map[string]interfa
+ 	// We store InputTokens = input + cache_read so that Calculator's formula
+ 	// (baseInput = InputTokens - CachedTokens) yields the correct new-input cost.
+ 	cached := toInt(usage["cache_read_input_tokens"])
++	cacheCreation := toInt(usage["cache_creation_input_tokens"])
+ 	return TokenUsage{
+-		Source:       source,
+-		Model:        model,
+-		InputTokens:  toInt(usage["input_tokens"]) + cached,
+-		OutputTokens: toInt(usage["output_tokens"]),
+-		CachedTokens: cached,
++		Source:              source,
++		Model:               model,
++		InputTokens:         toInt(usage["input_tokens"]) + cached + cacheCreation,
++		OutputTokens:        toInt(usage["output_tokens"]),
++		CachedTokens:        cached,
++		CacheCreationTokens: cacheCreation,
+ 	}
+ }
+ 
+@@ -262,7 +264,7 @@ func isNoiseRecord(u TokenUsage) bool {
+ 	if strings.HasPrefix(u.Model, "<") {
+ 		return true // <synthetic> etc
+ 	}
+-	if u.InputTokens == 0 && u.OutputTokens == 0 && u.CachedTokens == 0 {
++	if u.InputTokens == 0 && u.OutputTokens == 0 && u.CachedTokens == 0 && u.CacheCreationTokens == 0 {
+ 		return true
+ 	}
+ 	return false
+diff --git a/internal/watcher/watcher_test.go b/internal/watcher/watcher_test.go
+index 7810fbd..8a43bb2 100644
+--- a/internal/watcher/watcher_test.go
++++ b/internal/watcher/watcher_test.go
+@@ -95,13 +95,16 @@ func TestRealClaudeCodeFormat(t *testing.T) {
+ 		if usage.Model != "claude-sonnet-4-6" {
+ 			t.Errorf("Expected model claude-sonnet-4-6, got %s", usage.Model)
+ 		}
+-		// Claude: input_tokens=5000 + cache_read=10000 => InputTokens=15000
+-		if usage.InputTokens != 15000 {
+-			t.Errorf("Expected input 15000 (5000+10000), got %d", usage.InputTokens)
++		// Claude: input_tokens=5000 + cache_read=10000 + cache_creation=200 => InputTokens=15200
++		if usage.InputTokens != 15200 {
++			t.Errorf("Expected input 15200 (5000+10000+200), got %d", usage.InputTokens)
+ 		}
+ 		if usage.CachedTokens != 10000 {
+ 			t.Errorf("Expected cached 10000, got %d", usage.CachedTokens)
+ 		}
++		if usage.CacheCreationTokens != 200 {
++			t.Errorf("Expected cache creation 200, got %d", usage.CacheCreationTokens)
++		}
+ 		if usage.OutputTokens != 1500 {
+ 			t.Errorf("Expected output 1500, got %d", usage.OutputTokens)
+ 		}
+diff --git a/internal/web/handler.go b/internal/web/handler.go
+index 49614cd..7419aec 100644
+--- a/internal/web/handler.go
++++ b/internal/web/handler.go
+@@ -13,33 +13,36 @@ import (
+ )
+ 
+ type ModelStats struct {
+-	Model       string  `json:"model"`
+-	Events      int     `json:"events"`
+-	InputTokens int     `json:"input_tokens"`
+-	CachedTokens int   `json:"cached_tokens"`
+-	OutputTokens int    `json:"output_tokens"`
+-	TotalCost   float64 `json:"total_cost"`
+-	InputPricePerM  float64 `json:"input_price_per_m"`
+-	CachedPricePerM float64 `json:"cached_price_per_m"`
+-	OutputPricePerM float64 `json:"output_price_per_m"`
++	Model               string  `json:"model"`
++	Events              int     `json:"events"`
++	InputTokens         int     `json:"input_tokens"`
++	CachedTokens        int     `json:"cached_tokens"`
++	CacheCreationTokens int     `json:"cache_creation_tokens"`
++	OutputTokens        int     `json:"output_tokens"`
++	TotalCost           float64 `json:"total_cost"`
++	InputPricePerM      float64 `json:"input_price_per_m"`
++	CachedPricePerM     float64 `json:"cached_price_per_m"`
++	OutputPricePerM     float64 `json:"output_price_per_m"`
+ }
+ 
+ type SourceStats struct {
+-	Name         string       `json:"name"`
+-	TotalInput   int          `json:"total_input"`
+-	TotalCached  int          `json:"total_cached"`
+-	TotalOutput  int          `json:"total_output"`
+-	TotalCost    float64      `json:"total_cost"`
+-	TotalEvents  int          `json:"total_events"`
+-	Models       []ModelStats `json:"models"`
++	Name               string       `json:"name"`
++	TotalInput         int          `json:"total_input"`
++	TotalCached        int          `json:"total_cached"`
++	TotalCacheCreation int          `json:"total_cache_creation"`
++	TotalOutput        int          `json:"total_output"`
++	TotalCost          float64      `json:"total_cost"`
++	TotalEvents        int          `json:"total_events"`
++	Models             []ModelStats `json:"models"`
+ }
+ 
+ type PeriodCost struct {
+-	Label        string  `json:"label"`
+-	Cost         float64 `json:"cost"`
+-	InputTokens  int     `json:"input_tokens"`
+-	CachedTokens int     `json:"cached_tokens"`
+-	OutputTokens int     `json:"output_tokens"`
++	Label               string  `json:"label"`
++	Cost                float64 `json:"cost"`
++	InputTokens         int     `json:"input_tokens"`
++	CachedTokens        int     `json:"cached_tokens"`
++	CacheCreationTokens int     `json:"cache_creation_tokens"`
++	OutputTokens        int     `json:"output_tokens"`
+ }
+ 
+ type StatsResponse struct {
+@@ -90,8 +93,15 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, token string) http
+ 			http.Error(w, "Bad request", http.StatusBadRequest)
+ 			return
+ 		}
+-		cost, _ := calc.CalculateCost(payload.Usage.Model, payload.Usage.InputTokens, payload.Usage.CachedTokens, payload.Usage.OutputTokens)
+-		database.InsertUsage(payload.Usage, cost, payload.DeviceID)
++		cost, err := calc.CalculateCost(payload.Usage.Model, payload.Usage.InputTokens, payload.Usage.CachedTokens, payload.Usage.CacheCreationTokens, payload.Usage.OutputTokens)
++		if err != nil {
++			// Ignore cost calculation errors (e.g. unknown model) but proceed with inserting usage with 0 cost
++			cost = 0
++		}
++		if err := database.InsertUsage(payload.Usage, cost, payload.DeviceID); err != nil {
++			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
++			return
++		}
+ 		w.WriteHeader(http.StatusCreated)
+ 	}))
+ 
+@@ -124,11 +134,11 @@ func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *
+ 
+ 	var periods []PeriodCost
+ 	for _, win := range windows {
+-		cost, inTok, caTok, outTok, _ := database.QueryPeriodStatsSince(now.Add(-win.dur), deviceID)
+-		periods = append(periods, PeriodCost{Label: win.label, Cost: cost, InputTokens: inTok, CachedTokens: caTok, OutputTokens: outTok})
++		cost, inTok, caTok, caWTok, outTok, _ := database.QueryPeriodStatsSince(now.Add(-win.dur), deviceID)
++		periods = append(periods, PeriodCost{Label: win.label, Cost: cost, InputTokens: inTok, CachedTokens: caTok, CacheCreationTokens: caWTok, OutputTokens: outTok})
+ 	}
+-	total, tIn, tCa, tOut, _ := database.QueryPeriodStatsAll(deviceID)
+-	periods = append(periods, PeriodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, OutputTokens: tOut})
++	total, tIn, tCa, tCaW, tOut, _ := database.QueryPeriodStatsAll(deviceID)
++	periods = append(periods, PeriodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, CacheCreationTokens: tCaW, OutputTokens: tOut})
+ 
+ 	// Get all-time stats grouped by model
+ 	stats, _ := database.QueryStatsSince(time.Time{}, deviceID)
+@@ -143,18 +153,20 @@ func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *
+ 		}
+ 		price, _ := calc.GetModelPrice(s.Model)
+ 		src.Models = append(src.Models, ModelStats{
+-			Model:           s.Model,
+-			Events:          s.Events,
+-			InputTokens:     s.InputTokens,
+-			CachedTokens:    s.CachedTokens,
+-			OutputTokens:    s.OutputTokens,
+-			TotalCost:       s.TotalCost,
+-			InputPricePerM:  price.InputPricePerM,
+-			CachedPricePerM: price.CachedPricePerM,
+-			OutputPricePerM: price.OutputPricePerM,
++			Model:               s.Model,
++			Events:              s.Events,
++			InputTokens:         s.InputTokens,
++			CachedTokens:        s.CachedTokens,
++			CacheCreationTokens: s.CacheCreationTokens,
++			OutputTokens:        s.OutputTokens,
++			TotalCost:           s.TotalCost,
++			InputPricePerM:      price.InputPricePerM,
++			CachedPricePerM:     price.CachedPricePerM,
++			OutputPricePerM:     price.OutputPricePerM,
+ 		})
+ 		src.TotalInput += s.InputTokens
+ 		src.TotalCached += s.CachedTokens
++		src.TotalCacheCreation += s.CacheCreationTokens
+ 		src.TotalOutput += s.OutputTokens
+ 		src.TotalCost += s.TotalCost
+ 		src.TotalEvents += s.Events
+@@ -193,8 +205,8 @@ func handleCacheSavings(w http.ResponseWriter, r *http.Request, database *db.DB,
+ 	var totalInput, totalCached int
+ 
+ 	for _, rec := range records {
+-		actual, _ := calc.CalculateCost(rec.Model, rec.InputTokens, rec.CachedTokens, rec.OutputTokens)
+-		hypo, _ := calc.CalculateCostNoCaching(rec.Model, rec.InputTokens, rec.CachedTokens, rec.OutputTokens)
++		actual, _ := calc.CalculateCost(rec.Model, rec.InputTokens, rec.CachedTokens, rec.CacheCreationTokens, rec.OutputTokens)
++		hypo, _ := calc.CalculateCostNoCaching(rec.Model, rec.InputTokens, rec.CachedTokens, rec.CacheCreationTokens, rec.OutputTokens)
+ 		actualTotal += actual
+ 		hypoTotal += hypo
+ 		totalInput += rec.InputTokens
+diff --git a/internal/web/handler_test.go b/internal/web/handler_test.go
+index 324091f..89ffcd6 100644
+--- a/internal/web/handler_test.go
++++ b/internal/web/handler_test.go
+@@ -152,8 +152,8 @@ func TestAPITrack(t *testing.T) {
+ 	resp.Body.Close()
+ 
+ 	// Verify it was inserted
+-	total, _, _, _, _ := database.QueryPeriodStatsAll("remote-test")
+-	if total == 0 {
++	cost, _, _, _, _, _ := database.QueryPeriodStatsAll("remote-test")
++	if cost == 0 {
+ 		t.Fatal("expected cost to be calculated and inserted")
+ 	}
+ }
+diff --git a/scripts/deploy.sh b/scripts/deploy.sh
+index 02e0061..0b9fa88 100755
+--- a/scripts/deploy.sh
++++ b/scripts/deploy.sh
+@@ -43,7 +43,7 @@ fi
+ if [ "$MODE" == "1" ]; then
+     read -p "请输入 Web 服务监听端口 [默认 9100]: " PORT
+     PORT=${PORT:-9100}
+-    EXEC_START="/usr/local/bin/ai-flight-dashboard --web --port ${PORT} --token \"${TOKEN}\""
++    EXEC_START="/usr/local/bin/ai-flight-dashboard --web --port ${PORT}"
+     echo -e "${GREEN}配置为: 主控服务端 (端口: ${PORT})${NC}"
+ else
+     HOSTNAME=$(hostname)
+@@ -54,12 +54,17 @@ else
+         echo -e "${RED}上报地址不能为空。${NC}"
+         exit 1
+     fi
+-    EXEC_START="/usr/local/bin/ai-flight-dashboard --device-id \"${DEVICE_ID}\" --forward-to \"${FORWARD_URL}\" --token \"${TOKEN}\""
++    EXEC_START="/usr/local/bin/ai-flight-dashboard --device-id \"${DEVICE_ID}\" --forward-to \"${FORWARD_URL}\""
+     echo -e "${GREEN}配置为: 探针端 (设备名: ${DEVICE_ID}, 上报至: ${FORWARD_URL})${NC}"
+ fi
+ 
+-# 准备 Systemd 服务
++# 准备 Systemd 服务和环境文件
+ echo -e "${YELLOW}3. 配置 Systemd 服务...${NC}"
++
++# 安全地写入 Token 到环境文件
++echo "DASHBOARD_TOKEN=\"${TOKEN}\"" > /etc/ai-flight-dashboard.env
++chmod 600 /etc/ai-flight-dashboard.env
++
+ cat <<EOF > /etc/systemd/system/ai-flight-dashboard.service
+ [Unit]
+ Description=AI Flight Dashboard
+@@ -69,6 +74,7 @@ After=network.target
+ Type=simple
+ User=root
+ WorkingDirectory=/var/lib/ai-flight-dashboard
++EnvironmentFile=/etc/ai-flight-dashboard.env
+ ExecStart=${EXEC_START}
+ Restart=on-failure
+ RestartSec=5
