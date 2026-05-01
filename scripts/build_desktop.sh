@@ -39,6 +39,9 @@ if [[ "$(uname)" == "Darwin" ]]; then
     # 2. Overwrite the dummy executable with the correctly compiled binary
     cp build/bin/ai-flight-dashboard "build/bin/AI Flight Dashboard.app/Contents/MacOS/ai-flight-dashboard"
     
+    # 3. Resign the app bundle to prevent macOS Gatekeeper from rejecting it
+    codesign --force --deep --sign - "build/bin/AI Flight Dashboard.app"
+    
     echo "✅ macOS .app bundle created at: build/bin/AI Flight Dashboard.app"
     echo "   You can now double-click it to run the application!"
 fi

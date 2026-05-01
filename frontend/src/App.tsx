@@ -14,22 +14,36 @@ export default function App() {
   const [data, setData] = useState<{periods: any[], sources: any[], devices: any[]} | null>(null);
   const [selectedDevice, setSelectedDevice] = useState<string>("all");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string>("");
   
   useEffect(() => {
     const fetchData = async () => {
       try {
         // Works in both Wails (assets handler) and standalone Web mode
         const res = await fetch("/api/stats?device=" + selectedDevice);
+        if (!res.ok) {
+           throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        }
         const json = await res.json();
         setData(json);
-      } catch (e) {
+        setErrorMsg("");
+      } catch (e: any) {
         console.error(e);
+        setErrorMsg(e.toString());
       }
     };
     fetchData();
     const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, [selectedDevice]);
+
+  if (errorMsg) return (
+    <div className="min-h-screen bg-bg-deep text-red-500 p-[40px] flex items-center justify-center font-display text-[24px] uppercase tracking-widest relative overflow-hidden">
+      <div className="z-10 bg-black/50 p-8 border-2 border-red-500 shadow-[0_0_20px_rgba(255,0,0,0.5)]">
+        ERROR FETCHING DATA: <br/> {errorMsg}
+      </div>
+    </div>
+  );
 
   if (!data) return (
     <div className="min-h-screen bg-bg-deep text-neon-cyan flex flex-col items-center justify-center font-display text-[24px] uppercase tracking-widest relative overflow-hidden">
@@ -38,7 +52,7 @@ export default function App() {
     </div>
   );
 
-  const { periods, sources } = data;
+  const { periods = [], sources = [] } = data;
 
   return (
     <div className="min-h-screen p-[24px] md:p-[40px]">
@@ -128,7 +142,7 @@ export default function App() {
              return pct.toFixed(0) + '%';
            };
 
-           const sortedModels = [...src.models].sort((a: any, b: any) => b.total_cost - a.total_cost);
+           const sortedModels = [...(src.models || [])].sort((a: any, b: any) => b.total_cost - a.total_cost);
 
            return (
             <article key={si} className="glass-panel flex flex-col">
