@@ -1,1 +1,5 @@
 @import "tailwindcss";
+
+.wails-drag {
+  --wails-draggable: drag;
+}

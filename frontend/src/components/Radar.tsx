@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 export default function Radar() {
+  const { t } = useTranslation();
   const [peers, setPeers] = useState<string[]>([]);
   const [joined, setJoined] = useState(false);
 
@@ -32,34 +34,34 @@ export default function Radar() {
   };
 
   return (
-    <div className="border-[5px] border-[#000000] p-[24px] bg-[#FFFFFF] flex flex-col items-center mb-[80px]">
-      <div className="w-full flex justify-between items-center border-b-[3px] border-[#000000] pb-[16px] mb-[32px]">
-        <h2 className="font-display text-[32px] uppercase">LAN Radar</h2>
+    <div className="border-[5px] border-[#000000] p-4 sm:p-6 md:p-10 bg-[#FFFFFF] flex flex-col items-center mb-16 md:mb-20">
+      <div className="w-full flex justify-between items-center border-b-[3px] border-[#000000] pb-4 mb-8">
+        <h2 className="font-display text-2xl sm:text-3xl uppercase">{t('lanRadar')}</h2>
         {!joined ? (
           <button 
             onClick={handleJoin}
-            className="border-[3px] border-[#000000] bg-[#000000] text-[#FFFFFF] px-[24px] py-[8px] font-bold uppercase hover:bg-[#333333] transition-none cursor-pointer"
+            className="border-[3px] border-[#000000] bg-[#000000] text-[#FFFFFF] px-4 py-2 sm:px-6 sm:py-2 font-bold text-sm sm:text-base uppercase hover:bg-[#333333] transition-none cursor-pointer"
           >
-            JOIN NETWORK
+            {t('joinNetwork')}
           </button>
         ) : (
-          <div className="border-[3px] border-[#008000] text-[#008000] px-[12px] py-[4px] font-sans text-[11px] font-bold uppercase tracking-[1px]">
-            CONNECTED
+          <div className="border-[3px] border-[#008000] text-[#008000] px-3 py-1 font-sans text-[11px] font-bold uppercase tracking-[1px]">
+            {t('connected')}
           </div>
         )}
       </div>
 
-      <div className="relative w-[300px] h-[300px] border-[3px] border-[#000000] rounded-full flex items-center justify-center overflow-hidden bg-[#F9F9F9]">
+      <div className="relative w-full max-w-[300px] aspect-square border-[3px] border-[#000000] rounded-full flex items-center justify-center overflow-hidden bg-[#F9F9F9]">
         {/* Radar Rings */}
-        <div className="absolute w-[200px] h-[200px] border-[2px] border-dashed border-[#CCCCCC] rounded-full"></div>
-        <div className="absolute w-[100px] h-[100px] border-[2px] border-dashed border-[#CCCCCC] rounded-full"></div>
+        <div className="absolute w-[66%] h-[66%] border-[2px] border-dashed border-[#CCCCCC] rounded-full"></div>
+        <div className="absolute w-[33%] h-[33%] border-[2px] border-dashed border-[#CCCCCC] rounded-full"></div>
         
         {/* Scanning Sweep */}
-        <div className="absolute w-[150px] h-[150px] origin-bottom-right bg-gradient-to-br from-transparent to-[#000000]/10 animate-spin" style={{ top: 0, left: 0, animationDuration: '3s' }}></div>
+        <div className="absolute w-[50%] h-[50%] origin-bottom-right bg-gradient-to-br from-transparent to-[#000000]/10 animate-spin" style={{ top: 0, left: 0, animationDuration: '3s' }}></div>
 
         {/* Center Node (Local) */}
-        <div className="absolute z-10 w-[16px] h-[16px] bg-[#000000] rounded-full border-[2px] border-[#FFFFFF] shadow-none"></div>
-        <div className="absolute z-10 mt-[40px] text-[10px] font-mono bg-[#FFFFFF] px-[4px] border-[1px] border-[#000000]">LOCAL</div>
+        <div className="absolute z-10 w-4 h-4 bg-[#000000] rounded-full border-[2px] border-[#FFFFFF] shadow-none"></div>
+        <div className="absolute z-10 mt-10 text-[10px] sm:text-xs font-mono bg-[#FFFFFF] px-1 border-[1px] border-[#000000] uppercase">{t('local')}</div>
 
         {/* Peers */}
         {peers.map((peer, i) => {
@@ -74,11 +76,11 @@ export default function Radar() {
           return (
             <React.Fragment key={peer}>
               <div 
-                className="absolute z-10 w-[12px] h-[12px] bg-[#FF0000] rounded-full border-[2px] border-[#FFFFFF] animate-pulse"
+                className="absolute z-10 w-3 h-3 bg-[#FF0000] rounded-full border-[2px] border-[#FFFFFF] animate-pulse"
                 style={{ transform: `translate(${x}px, ${y}px)` }}
               ></div>
               <div 
-                className="absolute z-10 text-[10px] font-mono bg-[#FFFFFF] px-[4px] border-[1px] border-[#000000]"
+                className="absolute z-10 text-[10px] sm:text-xs font-mono bg-[#FFFFFF] px-1 border-[1px] border-[#000000]"
                 style={{ transform: `translate(${x}px, ${y + 20}px)` }}
               >
                 {peer}
@@ -88,7 +90,7 @@ export default function Radar() {
         })}
 
         {peers.length === 0 && (
-          <div className="absolute bottom-[20px] text-[12px] font-mono text-[#666666]">Scanning for signals...</div>
+          <div className="absolute bottom-6 text-xs sm:text-sm font-mono text-[#666666]">{t('scanningForSignals')}</div>
         )}
       </div>
     </div>
