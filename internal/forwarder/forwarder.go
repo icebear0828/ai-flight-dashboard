@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"ai-flight-dashboard/internal/model"
@@ -30,16 +31,23 @@ func New(targetURL, token, deviceID string) *Forwarder {
 	}
 }
 
-// Start consumes usage events from the channel and sends them sequentially.
+// Start consumes usage events from the channel and sends them concurrently.
+// It returns when the channel is closed and all events have been sent.
 func (f *Forwarder) Start(usageChan <-chan model.TokenUsage) {
+	var wg sync.WaitGroup
 	for usage := range usageChan {
-		err := f.send(usage)
-		if err != nil {
-			log.Printf("Forwarder failed to send usage: %v", err)
-		} else {
-			log.Printf("Forwarded %d tokens for %s", usage.InputTokens+usage.OutputTokens, usage.Model)
-		}
+		wg.Add(1)
+		go func(u model.TokenUsage) {
+			defer wg.Done()
+			err := f.send(u)
+			if err != nil {
+				log.Printf("Forwarder failed to send usage: %v", err)
+			} else {
+				log.Printf("Forwarded %d tokens for %s", u.InputTokens+u.OutputTokens, u.Model)
+			}
+		}(usage)
 	}
+	wg.Wait()
 }
 
 func (f *Forwarder) send(usage model.TokenUsage) error {

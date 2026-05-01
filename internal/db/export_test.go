@@ -52,7 +52,7 @@ func TestExportCSV(t *testing.T) {
 
 	// Header should contain expected columns
 	header := string(lines[0])
-	for _, col := range []string{"log_timestamp", "source", "model", "input_tokens", "cached_tokens", "output_tokens", "cost_usd", "file_path", "device_id"} {
+	for _, col := range []string{"log_timestamp", "source", "model", "input_tokens", "cached_tokens", "cache_creation_tokens", "output_tokens", "cost_usd", "file_path", "device_id"} {
 		if !bytes.Contains([]byte(header), []byte(col)) {
 			t.Errorf("header missing column %q: %s", col, header)
 		}
@@ -93,9 +93,9 @@ func TestImportCSV(t *testing.T) {
 	}
 	defer database.Close()
 
-	csv := `log_timestamp,source,model,input_tokens,cached_tokens,output_tokens,cost_usd,file_path,device_id
-2026-04-20T10:00:00Z,Claude Code,claude-opus-4-7,1000,500,200,1.50,/a.jsonl,remote-mac
-2026-04-20T10:01:00Z,Gemini CLI,gemini-2.5-pro,800,0,100,0.60,/b.jsonl,remote-mac
+	csv := `log_timestamp,source,model,input_tokens,cached_tokens,cache_creation_tokens,output_tokens,cost_usd,file_path,device_id
+2026-04-20T10:00:00Z,Claude Code,claude-opus-4-7,1000,500,200,200,1.50,/a.jsonl,remote-mac
+2026-04-20T10:01:00Z,Gemini CLI,gemini-2.5-pro,800,0,0,100,0.60,/b.jsonl,remote-mac
 `
 	reader := bytes.NewBufferString(csv)
 	imported, skipped, err := database.ImportCSV(reader)
@@ -123,8 +123,8 @@ func TestImportCSV_Dedup(t *testing.T) {
 	}
 	defer database.Close()
 
-	csv := `log_timestamp,source,model,input_tokens,cached_tokens,output_tokens,cost_usd,file_path,device_id
-2026-04-20T10:00:00Z,Claude Code,claude-opus-4-7,1000,500,200,1.50,/a.jsonl,mac
+	csv := `log_timestamp,source,model,input_tokens,cached_tokens,cache_creation_tokens,output_tokens,cost_usd,file_path,device_id
+2026-04-20T10:00:00Z,Claude Code,claude-opus-4-7,1000,500,200,200,1.50,/a.jsonl,mac
 `
 	// Import once
 	reader := bytes.NewBufferString(csv)
