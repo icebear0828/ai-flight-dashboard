@@ -11,6 +11,7 @@ dist/
 build/
 dist-bin/*
 !dist-bin/empty.txt
+!internal/web/dist/empty.txt
 
 # Database
 *.db
