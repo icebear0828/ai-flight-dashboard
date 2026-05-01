@@ -72,6 +72,22 @@ func (w *Watcher) WatchDirRecursive(dir string) error {
 	})
 }
 
+// UnwatchDir removes a directory and all its existing subdirectories from the watcher.
+func (w *Watcher) UnwatchDir(dir string) error {
+	w.mu.Lock()
+	delete(w.recursiveDirs, dir)
+	w.mu.Unlock()
+
+	w.fw.Remove(dir)
+
+	return filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			w.fw.Remove(path)
+		}
+		return nil
+	})
+}
+
 // WatchKnownDirs registers specific directories without recursive walk.
 // Used with cached directory lists for fast startup.
 func (w *Watcher) WatchKnownDirs(dirs []string) {

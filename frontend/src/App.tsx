@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import SettingsModal from "./SettingsModal";
+import Radar from "./components/Radar";
 
 const fmt = (n: number) => {
   if (n >= 1e9) return (n/1e9).toFixed(2) + 'B';
@@ -108,6 +109,9 @@ export default function App() {
           )
         })}
       </section>
+
+      {/* LAN Radar Component */}
+      <Radar />
 
       {/* Source Stats Grid */}
       <section className="grid grid-cols-1 xl:grid-cols-2 gap-[40px]">
