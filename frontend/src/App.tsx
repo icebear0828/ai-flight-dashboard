@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import SettingsModal from "./SettingsModal";
 
 const fmt = (n: number) => {
   if (n >= 1e9) return (n/1e9).toFixed(2) + 'B';
@@ -11,6 +12,7 @@ const fmtCost = (n: number) => '$' + n.toFixed(2);
 export default function App() {
   const [data, setData] = useState<{periods: any[], sources: any[], devices: any[]} | null>(null);
   const [selectedDevice, setSelectedDevice] = useState<string>("all");
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   
   useEffect(() => {
     const fetchData = async () => {
@@ -64,13 +66,24 @@ export default function App() {
             )}
           </div>
         </div>
-        <div className="font-mono text-[15px] text-left md:text-right">
+        <div className="font-mono text-[15px] text-left md:text-right flex flex-col items-end">
           <div>DATA REFRESH RATE: 5000MS</div>
-          <div className="text-[#0000FF] uppercase underline decoration-[3px] underline-offset-4 cursor-pointer mt-[8px]">
-            SYSTEM LOGS
+          <div className="flex gap-[16px] mt-[8px]">
+            <button 
+              onClick={() => setIsSettingsOpen(true)}
+              style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}
+              className="text-[#0000FF] uppercase underline decoration-[3px] underline-offset-4 cursor-pointer bg-transparent border-none p-0 hover:text-[#000000]"
+            >
+              [ SETTINGS ]
+            </button>
+            <div className="text-[#0000FF] uppercase underline decoration-[3px] underline-offset-4 cursor-pointer hover:text-[#000000]">
+              SYSTEM LOGS
+            </div>
           </div>
         </div>
       </header>
+      
+      {isSettingsOpen && <SettingsModal onClose={() => setIsSettingsOpen(false)} />}
 
       {/* PeriodCost Stats Row */}
       <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-[24px] mb-[80px]">
