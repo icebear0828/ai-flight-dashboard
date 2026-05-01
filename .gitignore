@@ -23,6 +23,12 @@ test_db/
 # Logs
 *.log
 
+# Test Artifacts & Screenshots
+frontend/playwright-report/
+frontend/test-results/
+*.png
+test_dashboard
+
 # OS
 .DS_Store
 
