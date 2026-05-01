@@ -78,11 +78,15 @@ func (w *Watcher) UnwatchDir(dir string) error {
 	delete(w.recursiveDirs, dir)
 	w.mu.Unlock()
 
-	w.fw.Remove(dir)
+	if err := w.fw.Remove(dir); err != nil {
+		log.Printf("watcher: failed to unwatch %s: %v", dir, err)
+	}
 
 	return filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err == nil && d.IsDir() {
-			w.fw.Remove(path)
+			if rmErr := w.fw.Remove(path); rmErr != nil {
+				log.Printf("watcher: failed to unwatch %s: %v", path, rmErr)
+			}
 		}
 		return nil
 	})
