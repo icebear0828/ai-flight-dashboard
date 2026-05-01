@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -64,6 +65,12 @@ func main() {
 	flag.BoolVar(webMode, "w", false, "Run in web dashboard mode (shorthand)")
 	flag.StringVar(port, "p", "9100", "HTTP port for web mode (shorthand)")
 	flag.Parse()
+
+	// Auto-detect macOS .app bundle launch (Finder double-click)
+	exePath, _ := os.Executable()
+	if strings.Contains(exePath, ".app/Contents/MacOS/") {
+		*guiMode = true
+	}
 
 	// Read token from environment variable if not provided via flag
 	if *token == "" {
