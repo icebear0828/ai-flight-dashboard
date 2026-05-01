@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import SettingsModal from "./SettingsModal";
 import Radar from "./components/Radar";
 
@@ -11,6 +12,7 @@ const fmt = (n: number) => {
 const fmtCost = (n: number) => '$' + n.toFixed(2);
 
 export default function App() {
+  const { t, i18n } = useTranslation();
   const [data, setData] = useState<{periods: any[], sources: any[], devices: any[]} | null>(null);
   const [selectedDevice, setSelectedDevice] = useState<string>("all");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -37,62 +39,78 @@ export default function App() {
     return () => clearInterval(interval);
   }, [selectedDevice]);
 
+  // Detect if we are running inside the Wails desktop app
+  const isDesktop = typeof window !== 'undefined' && (window as any).go !== undefined;
+
   if (errorMsg) return (
-    <div className="min-h-screen bg-bg-deep text-red-500 p-[40px] flex items-center justify-center font-display text-[24px] uppercase tracking-widest relative overflow-hidden">
-      <div className="z-10 bg-black/50 p-8 border-2 border-red-500 shadow-[0_0_20px_rgba(255,0,0,0.5)]">
-        ERROR FETCHING DATA: <br/> {errorMsg}
+    <div className={`min-h-screen bg-[#FFFFFF] text-[#FF0000] p-4 sm:p-6 md:p-10 flex items-center justify-center font-display text-xl sm:text-2xl uppercase border-[12px] border-[#FF0000] m-3 ${isDesktop ? 'wails-drag' : ''}`}>
+      <div className="text-center">
+        <div className="text-4xl md:text-5xl mb-4 text-[#000000] bg-[#FF0000] inline-block px-6 py-2">{t('systemError')}</div>
+        <br/> {errorMsg}
       </div>
     </div>
   );
 
   if (!data) return (
-    <div className="min-h-screen bg-bg-deep text-neon-cyan flex flex-col items-center justify-center font-display text-[24px] uppercase tracking-widest relative overflow-hidden">
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-neon-cyan/20 via-bg-deep to-bg-deep"></div>
-      <div className="z-10 animate-pulse">SYSTEM INITIALIZING...</div>
+    <div className={`min-h-screen bg-[#FFFFFF] text-[#000000] p-4 sm:p-6 md:p-10 flex items-center justify-center font-display text-4xl sm:text-5xl md:text-6xl uppercase border-[12px] border-[#000000] m-3 ${isDesktop ? 'wails-drag' : ''}`}>
+      {t('systemInitializing')}
     </div>
   );
 
   const { periods = [], sources = [] } = data;
 
   return (
-    <div className="min-h-screen p-[24px] md:p-[40px]">
+    <div className={`bg-[#FFFFFF] text-[#000000] min-h-screen px-4 pb-4 sm:px-6 sm:pb-6 md:px-10 md:pb-10 font-sans selection:bg-[#000000] selection:text-[#FFFFFF] ${isDesktop ? 'pt-12' : 'pt-6 md:pt-10'}`}>
       
+      {/* Dedicated invisible draggable titlebar for macOS native window controls */}
+      {isDesktop && (
+        <div className="h-10 w-full wails-drag fixed top-0 left-0 z-50 bg-[#FFFFFF]"></div>
+      )}
+
       {/* Header Section */}
-      <header className="wails-drag flex flex-col md:flex-row justify-between items-start md:items-end gap-[24px] mb-[40px] pb-[24px] border-b border-panel-border">
+      <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 mb-16 border-b-[5px] border-[#000000] pb-6">
         <div>
-          <h1 className="font-display text-[48px] md:text-[64px] leading-[1.0] font-bold tracking-tight mb-[16px] bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
-            Aurora AI
+          <h1 className="font-display text-5xl sm:text-6xl md:text-7xl leading-[1.0] uppercase tracking-tighter mb-4 break-words" dangerouslySetInnerHTML={{ __html: t('aiFlightDashboard').replace(' ', '<br/>') }}>
           </h1>
-          <div className="flex flex-col md:flex-row md:items-center gap-[16px]">
-            <div className="glass-panel px-[16px] py-[6px] flex items-center gap-[8px] border-neon-cyan/50 shadow-[0_0_15px_rgba(0,240,255,0.2)]">
-              <span className="w-2 h-2 rounded-full bg-neon-cyan animate-pulse"></span>
-              <span className="font-sans text-[11px] font-semibold text-white tracking-[1px]">LIVE_OPERATIONS</span>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+            <div className="border-[3px] border-[#008000] text-[#008000] px-3 py-1 font-sans text-xs font-semibold uppercase tracking-wider w-fit min-w-[100px] text-center">
+              {t('liveOperations')}
             </div>
             {data && (
               <select 
                 value={selectedDevice} 
                 onChange={e => setSelectedDevice(e.target.value)}
-                className="glass-panel bg-transparent text-white px-[16px] py-[6px] font-mono text-[14px] outline-none cursor-pointer hover:border-neon-purple transition-colors"
+                className="bg-[#F0F0F0] text-[#000000] border-[3px] border-[#000000] rounded-none px-3 py-2 font-mono text-sm md:text-base outline-none focus:border-[5px] focus:m-[-2px] min-w-[140px]"
                 style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}
               >
-                <option value="all" className="bg-bg-deep">ALL DEVICES</option>
+                <option value="all">{t('allDevices')}</option>
                 {data.devices?.map((d: any) => (
-                  <option key={d.id || d} value={d.id || d} className="bg-bg-deep">{(d.display_name || d.id || d).toUpperCase()}</option>
+                  <option key={d.id || d} value={d.id || d}>{(d.display_name || d.id || d).toUpperCase()}</option>
                 ))}
               </select>
             )}
           </div>
         </div>
-        <div className="font-mono text-[13px] text-text-dim flex flex-col items-end">
-          <div>DATA REFRESH RATE: 5000MS</div>
-          <div className="flex gap-[16px] mt-[12px]">
+        <div className="font-mono text-sm md:text-base text-left md:text-right flex flex-col items-start md:items-end w-full md:w-auto mt-4 md:mt-0">
+          <div>{t('dataRefreshRate')}</div>
+          <div className="flex flex-wrap gap-4 mt-2">
             <button 
               onClick={() => setIsSettingsOpen(true)}
               style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}
-              className="text-white hover:neon-text-cyan cursor-pointer bg-transparent border-none p-0 transition-all"
+              className="text-[#0000FF] uppercase underline decoration-[3px] underline-offset-4 cursor-pointer bg-transparent border-none p-0 hover:text-[#000000]"
             >
-              [ SETTINGS ]
+              [ {t('settings')} ]
             </button>
+            <button 
+              onClick={() => i18n.changeLanguage(i18n.language === 'zh' ? 'en' : 'zh')}
+              style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}
+              className="text-[#0000FF] uppercase underline decoration-[3px] underline-offset-4 cursor-pointer bg-transparent border-none p-0 hover:text-[#000000] w-12 text-center"
+            >
+              [ {i18n.language === 'zh' ? 'EN' : '中'} ]
+            </button>
+            <div className="text-[#0000FF] uppercase underline decoration-[3px] underline-offset-4 cursor-pointer hover:text-[#000000]">
+              [ {t('systemLogs')} ]
+            </div>
           </div>
         </div>
       </header>
@@ -100,22 +118,22 @@ export default function App() {
       {isSettingsOpen && <SettingsModal onClose={() => setIsSettingsOpen(false)} />}
 
       {/* PeriodCost Stats Row */}
-      <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-[24px] mb-[40px]">
+      <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 md:gap-6 mb-12 md:mb-20">
         {periods.map((p: any, i: number) => {
           const isElevated = p.label === 'ALL';
-          const cardClass = `glass-panel p-[24px] flex flex-col justify-between transition-transform hover:-translate-y-1 ${isElevated ? 'border-neon-purple shadow-[0_0_20px_rgba(176,38,255,0.15)]' : 'border-panel-border hover:border-white/20'}`;
+          const cardClass = `bg-[#FFFFFF] border-[#000000] rounded-none p-4 md:p-6 flex flex-col justify-between shadow-none ${isElevated ? 'border-[5px]' : 'border-[3px]'}`;
           return (
             <div key={i} className={cardClass}>
-              <div className="mb-[16px]">
-                <h3 className="text-text-dim text-[14px] tracking-wider uppercase mb-[12px]">{p.label === 'ALL' ? 'TOTAL SPEND' : p.label}</h3>
-                <div className="flex flex-col gap-[6px] font-mono text-[13px] text-gray-300">
-                  <div className="flex justify-between"><span>IN</span><span className="text-white">{fmt(Math.max(0, p.input_tokens - p.cached_tokens - (p.cache_creation_tokens || 0)))}</span></div>
-                  <div className="flex justify-between"><span>CA_R</span><span className="text-neon-cyan">{fmt(p.cached_tokens)}</span></div>
-                  <div className="flex justify-between"><span>CA_W</span><span className="text-neon-purple">{fmt(p.cache_creation_tokens || 0)}</span></div>
-                  <div className="flex justify-between"><span>OUT</span><span className="text-neon-green">{fmt(p.output_tokens)}</span></div>
+              <div className="mb-4">
+                <h3 className="font-display text-xl xl:text-2xl leading-[1.1] uppercase mb-2">{p.label}</h3>
+                <div className="flex flex-col gap-1 font-mono text-xs xl:text-sm">
+                  <span>IN: {fmt(Math.max(0, p.input_tokens - p.cached_tokens - (p.cache_creation_tokens || 0)))}</span>
+                  <span>CA_R: {fmt(p.cached_tokens)}</span>
+                  <span>CA_W: {fmt(p.cache_creation_tokens || 0)}</span>
+                  <span>OUT: {fmt(p.output_tokens)}</span>
                 </div>
               </div>
-              <div className="font-mono text-[32px] md:text-[36px] font-light text-white leading-none mt-[16px]">
+              <div className="font-mono text-3xl xl:text-4xl leading-none mt-4 border-t-[3px] border-[#000000] pt-4 break-words">
                 {fmtCost(p.cost)}
               </div>
             </div>
@@ -127,7 +145,7 @@ export default function App() {
       <Radar />
 
       {/* Source Stats Grid */}
-      <section className="grid grid-cols-1 xl:grid-cols-2 gap-[32px] mt-[40px]">
+      <section className="grid grid-cols-1 2xl:grid-cols-2 gap-6 lg:gap-10">
         {sources.map((src: any, si: number) => {
            const baseInput = Math.max(0, src.total_input - src.total_cached - (src.total_cache_creation || 0));
            const totalTokens = baseInput + src.total_cached + (src.total_cache_creation || 0) + src.total_output;
@@ -145,88 +163,89 @@ export default function App() {
            const sortedModels = [...(src.models || [])].sort((a: any, b: any) => b.total_cost - a.total_cost);
 
            return (
-            <article key={si} className="glass-panel flex flex-col">
-              <div className="p-[24px] border-b border-panel-border flex flex-col md:flex-row justify-between items-start md:items-end gap-[16px] bg-white/5">
-                <div>
-                  <h2 className="font-display text-[28px] md:text-[36px] font-semibold tracking-tight text-white">
+            <article key={si} className="bg-[#FFFFFF] border-[5px] border-[#000000] rounded-none shadow-none flex flex-col">
+              <div className="p-4 sm:p-6 border-b-[5px] border-[#000000] flex flex-col md:flex-row justify-between items-start md:items-end gap-4 bg-[#000000] text-[#FFFFFF]">
+                <div className="break-words w-full">
+                  <h2 className="font-display text-3xl sm:text-4xl md:text-5xl uppercase leading-[1.05] break-words">
                     {src.name}
                   </h2>
                 </div>
-                <div className="text-left md:text-right">
-                  <span className="text-text-dim text-[12px] tracking-wider uppercase mb-[4px] block">TOTAL SPEND</span>
-                  <div className="font-mono text-[28px] md:text-[36px] text-white font-light">{fmtCost(src.total_cost)}</div>
+                <div className="text-left md:text-right shrink-0">
+                  <span className="font-display text-xs sm:text-sm uppercase mb-1 block">TOTAL SPEND</span>
+                  <div className="font-mono text-3xl sm:text-4xl md:text-5xl leading-none">{fmtCost(src.total_cost)}</div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 border-b border-panel-border">
+              <div className="grid grid-cols-1 lg:grid-cols-2 border-b-[5px] border-[#000000]">
                 {/* Token Distribution Grid */}
-                <div className="p-[24px] border-b md:border-b-0 md:border-r border-panel-border grid grid-cols-2 gap-[24px]">
-                  <div>
-                    <span className="text-text-dim text-[11px] tracking-wider uppercase block mb-[4px]">BASE IN</span>
-                    <div className="font-mono text-[20px] text-white">{fmt(baseInput)}</div>
+                <div className="p-4 sm:p-6 border-b-[5px] lg:border-b-0 lg:border-r-[5px] border-[#000000] grid grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-6">
+                  <div className="border-l-[5px] border-[#000000] pl-3">
+                    <span className="font-display text-xs sm:text-sm uppercase block mb-1">BASE IN</span>
+                    <div className="font-mono text-xl sm:text-2xl">{fmt(baseInput)}</div>
                   </div>
-                  <div>
-                    <span className="text-text-dim text-[11px] tracking-wider uppercase block mb-[4px]">CA_R</span>
-                    <div className="font-mono text-[20px] text-neon-cyan">{fmt(src.total_cached)}</div>
+                  <div className="border-l-[5px] border-[#000000] pl-3">
+                    <span className="font-display text-xs sm:text-sm uppercase block mb-1">CA_R</span>
+                    <div className="font-mono text-xl sm:text-2xl">{fmt(src.total_cached)}</div>
                   </div>
-                  <div>
-                    <span className="text-text-dim text-[11px] tracking-wider uppercase block mb-[4px]">CA_W</span>
-                    <div className="font-mono text-[20px] text-neon-purple">{fmt(src.total_cache_creation || 0)}</div>
+                  <div className="border-l-[5px] border-[#000000] pl-3">
+                    <span className="font-display text-xs sm:text-sm uppercase block mb-1">CA_W</span>
+                    <div className="font-mono text-xl sm:text-2xl">{fmt(src.total_cache_creation || 0)}</div>
                   </div>
-                  <div>
-                    <span className="text-text-dim text-[11px] tracking-wider uppercase block mb-[4px]">OUTPUT</span>
-                    <div className="font-mono text-[20px] text-neon-green">{fmt(src.total_output)}</div>
+                  <div className="border-l-[5px] border-[#000000] pl-3">
+                    <span className="font-display text-xs sm:text-sm uppercase block mb-1">OUTPUT</span>
+                    <div className="font-mono text-xl sm:text-2xl">{fmt(src.total_output)}</div>
+                  </div>
+                  <div className="border-l-[5px] border-[#000000] pl-3">
+                    <span className="font-display text-xs sm:text-sm uppercase block mb-1">TOTAL</span>
+                    <div className="font-mono text-xl sm:text-2xl">{fmt(totalTokens)}</div>
                   </div>
                 </div>
 
-                {/* Smooth Progress Bar Area */}
-                <div className="p-[24px] flex flex-col justify-center">
-                  <div className="w-full h-[12px] rounded-full bg-black/50 flex overflow-hidden mb-[20px] shadow-inner">
-                    <div style={{width: `${inPct}%`}} className="bg-gray-400 h-full"></div>
-                    <div style={{width: `${cachedPct}%`}} className="bg-neon-cyan h-full shadow-[0_0_10px_rgba(0,240,255,0.8)]"></div>
-                    <div style={{width: `${cacheCreationPct}%`}} className="bg-neon-purple h-full shadow-[0_0_10px_rgba(176,38,255,0.8)]"></div>
-                    <div style={{width: `${outPct}%`}} className="bg-neon-green h-full shadow-[0_0_10px_rgba(57,255,20,0.8)]"></div>
+                {/* Brutalist Progress Bar Area */}
+                <div className="p-4 sm:p-6 flex flex-col justify-center">
+                  <div className="w-full h-8 sm:h-10 border-[3px] border-[#000000] flex mb-4">
+                    <div style={{width: `${inPct}%`}} className="bg-[#000000] h-full border-r-[3px] border-[#000000]"></div>
+                    <div style={{width: `${cachedPct}%`}} className="bg-[#CCCCCC] h-full border-r-[3px] border-[#000000]"></div>
+                    <div style={{width: `${cacheCreationPct}%`}} className="bg-[#888888] h-full border-r-[3px] border-[#000000]"></div>
+                    <div style={{width: `${outPct}%`}} className="bg-[#FFFFFF] h-full"></div>
                   </div>
-                  <div className="grid grid-cols-2 gap-[12px] font-mono text-[12px] text-gray-300">
-                    <div className="flex items-center gap-[8px]">
-                      <span className="w-[8px] h-[8px] rounded-full bg-gray-400"></span> IN ({formatPct(inPct)})
+                  <div className="flex flex-col gap-2 font-mono text-xs sm:text-sm">
+                    <div className="flex items-center gap-2">
+                      <span className="w-4 h-4 bg-[#000000] border-[3px] border-[#000000] shrink-0"></span> IN ({formatPct(inPct)})
                     </div>
-                    <div className="flex items-center gap-[8px]">
-                      <span className="w-[8px] h-[8px] rounded-full bg-neon-cyan"></span> CA_R ({formatPct(cachedPct)})
+                    <div className="flex items-center gap-2">
+                      <span className="w-4 h-4 bg-[#CCCCCC] border-[3px] border-[#000000] shrink-0"></span> CA_R ({formatPct(cachedPct)})
                     </div>
-                    <div className="flex items-center gap-[8px]">
-                      <span className="w-[8px] h-[8px] rounded-full bg-neon-purple"></span> CA_W ({formatPct(cacheCreationPct)})
+                    <div className="flex items-center gap-2">
+                      <span className="w-4 h-4 bg-[#888888] border-[3px] border-[#000000] shrink-0"></span> CA_W ({formatPct(cacheCreationPct)})
                     </div>
-                    <div className="flex items-center gap-[8px]">
-                      <span className="w-[8px] h-[8px] rounded-full bg-neon-green"></span> OUT ({formatPct(outPct)})
+                    <div className="flex items-center gap-2">
+                      <span className="w-4 h-4 bg-[#FFFFFF] border-[3px] border-[#000000] shrink-0"></span> OUT ({formatPct(outPct)})
                     </div>
                   </div>
                 </div>
               </div>
 
               {/* Model Table */}
-              <div className="overflow-x-auto p-[16px]">
-                <table className="w-full text-left font-mono text-[13px]">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left font-mono text-xs sm:text-sm min-w-[600px]">
                   <thead>
-                    <tr className="text-text-dim border-b border-panel-border/50">
-                      <th className="px-[12px] py-[12px] font-normal uppercase tracking-wider">Model Identifier</th>
-                      <th className="px-[12px] py-[12px] font-normal uppercase tracking-wider">Rates (1M)</th>
-                      <th className="px-[12px] py-[12px] font-normal uppercase tracking-wider text-right">Events</th>
-                      <th className="px-[12px] py-[12px] font-normal uppercase tracking-wider text-right">Subtotal</th>
+                    <tr className="border-b-[5px] border-[#000000] bg-[#F0F0F0]">
+                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">Model Identifier</th>
+                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">Rates (1M)</th>
+                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">Events</th>
+                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase text-right">Subtotal</th>
                     </tr>
                   </thead>
                   <tbody>
                     {sortedModels.map((m: any, mi: number) => (
-                      <tr key={mi} className="border-b border-panel-border/30 last:border-0 hover:bg-white/5 transition-colors">
-                        <td className="px-[12px] py-[12px] text-white">{m.model}</td>
-                        <td className="px-[12px] py-[12px] text-gray-400">
-                          <span className="text-gray-500">I:</span>{fmtCost(m.input_price_per_m || 0)} 
-                          <span className="text-neon-cyan/50 ml-2">CR:</span><span className="text-neon-cyan">{fmtCost(m.cached_price_per_m || 0)}</span> 
-                          <span className="text-neon-purple/50 ml-2">CW:</span><span className="text-neon-purple">{fmtCost(m.cache_creation_price_per_m || 0)}</span> 
-                          <span className="text-neon-green/50 ml-2">O:</span><span className="text-neon-green">{fmtCost(m.output_price_per_m || 0)}</span>
+                      <tr key={mi} className="border-b-[3px] border-[#000000] last:border-b-0 hover:bg-[#000000] hover:text-[#FFFFFF] transition-none group">
+                        <td className="px-3 py-3 sm:px-4 sm:py-4 font-bold group-hover:text-[#FFFFFF] max-w-[200px] truncate" title={m.model}>{m.model}</td>
+                        <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
+                          IN: {fmtCost(m.input_price_per_m || 0)} / CA_R: {fmtCost(m.cached_price_per_m || 0)} / CA_W: {fmtCost(m.cache_creation_price_per_m || 0)} / OUT: {fmtCost(m.output_price_per_m || 0)}
                         </td>
-                        <td className="px-[12px] py-[12px] text-right text-gray-300">{m.events}</td>
-                        <td className="px-[12px] py-[12px] text-right text-white font-medium">{fmtCost(m.total_cost)}</td>
+                        <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">{m.events}</td>
+                        <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-bold group-hover:text-[#FFFFFF]">{fmtCost(m.total_cost)}</td>
                       </tr>
                     ))}
                   </tbody>

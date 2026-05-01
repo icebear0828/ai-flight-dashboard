@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import PricingTab from './components/SettingsModal/PricingTab';
 import SystemConfigTab from './components/SettingsModal/SystemConfigTab';
 
@@ -25,6 +26,7 @@ interface SettingsModalProps {
 }
 
 export default function SettingsModal({ onClose }: SettingsModalProps) {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<'pricing' | 'system'>('pricing');
   
   const [pricing, setPricing] = useState<PricingEntry[]>([]);
@@ -81,6 +83,12 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
       ...pricing
     ]);
     setNewModelName('');
+  };
+
+  const handleRemoveModel = (index: number) => {
+    const newPricing = [...pricing];
+    newPricing.splice(index, 1);
+    setPricing(newPricing);
   };
 
   const handleAddPath = () => {
@@ -140,39 +148,39 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-[24px] bg-[#000000]/80 overflow-y-auto" style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}>
-      <div className="bg-[#FFFFFF] text-[#000000] border-[5px] border-[#000000] w-full max-w-[1000px] flex flex-col max-h-full">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-6 bg-[#000000]/80 overflow-y-auto" style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}>
+      <div className="bg-[#FFFFFF] text-[#000000] border-[5px] border-[#000000] w-full max-w-5xl flex flex-col max-h-full">
         {/* Header */}
-        <div className="flex justify-between items-center p-[24px] border-b-[5px] border-[#000000] bg-[#F0F0F0]">
-          <h2 className="font-display text-[32px] uppercase leading-none">Settings Panel</h2>
+        <div className="flex justify-between items-center p-4 md:p-6 border-b-[5px] border-[#000000] bg-[#F0F0F0]">
+          <h2 className="font-display text-2xl sm:text-3xl uppercase leading-none">{t('settingsPanel')}</h2>
           <button 
             onClick={onClose}
-            className="font-mono text-[24px] border-[3px] border-[#000000] w-[40px] h-[40px] flex items-center justify-center hover:bg-[#000000] hover:text-[#FFFFFF] transition-none"
+            className="font-mono text-xl sm:text-2xl border-[3px] border-[#000000] w-10 h-10 flex items-center justify-center hover:bg-[#000000] hover:text-[#FFFFFF] transition-none"
           >
             ×
           </button>
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex border-b-[5px] border-[#000000] bg-[#F0F0F0]">
+        <div className="flex border-b-[5px] border-[#000000] bg-[#F0F0F0] overflow-x-auto">
           <button 
             onClick={() => setActiveTab('pricing')} 
-            className={`flex-1 py-[12px] font-display text-[20px] uppercase border-r-[5px] border-[#000000] transition-none ${activeTab === 'pricing' ? 'bg-[#000000] text-[#FFFFFF]' : 'hover:bg-[#E0E0E0]'}`}
+            className={`flex-1 py-3 px-4 whitespace-nowrap font-display text-lg sm:text-xl uppercase border-r-[5px] border-[#000000] transition-none ${activeTab === 'pricing' ? 'bg-[#000000] text-[#FFFFFF]' : 'hover:bg-[#E0E0E0]'}`}
           >
-            Model Pricing
+            {t('modelPricing')}
           </button>
           <button 
             onClick={() => setActiveTab('system')} 
-            className={`flex-1 py-[12px] font-display text-[20px] uppercase transition-none ${activeTab === 'system' ? 'bg-[#000000] text-[#FFFFFF]' : 'hover:bg-[#E0E0E0]'}`}
+            className={`flex-1 py-3 px-4 whitespace-nowrap font-display text-lg sm:text-xl uppercase transition-none ${activeTab === 'system' ? 'bg-[#000000] text-[#FFFFFF]' : 'hover:bg-[#E0E0E0]'}`}
           >
-            System Config
+            {t('systemConfig')}
           </button>
         </div>
 
         {/* Content */}
-        <div className="p-[24px] overflow-y-auto flex-1 font-mono text-[14px]">
+        <div className="p-4 md:p-6 overflow-y-auto flex-1 font-mono text-sm sm:text-base">
           {loading ? (
-            <div className="p-[40px] text-center font-display text-[24px]">LOADING...</div>
+            <div className="p-10 text-center font-display text-xl sm:text-2xl">{t('loading')}</div>
           ) : (
             <>
               {/* --- PRICING TAB --- */}
@@ -182,6 +190,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                   newModelName={newModelName}
                   setNewModelName={setNewModelName}
                   handleAddModel={handleAddModel}
+                  handleRemoveModel={handleRemoveModel}
                   handleUpdatePrice={handleUpdatePrice}
                 />
               )}
@@ -207,19 +216,19 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         </div>
 
         {/* Footer */}
-        <div className="p-[24px] border-t-[5px] border-[#000000] flex justify-end gap-[16px] bg-[#F0F0F0]">
+        <div className="p-4 md:p-6 border-t-[5px] border-[#000000] flex justify-end gap-4 bg-[#F0F0F0] flex-wrap">
           <button 
             onClick={onClose}
-            className="border-[3px] border-[#000000] px-[32px] py-[12px] font-bold uppercase hover:bg-[#CCCCCC] transition-none"
+            className="border-[3px] border-[#000000] px-6 py-3 md:px-8 font-bold uppercase hover:bg-[#CCCCCC] transition-none w-full sm:w-auto"
           >
-            Close
+            {t('close')}
           </button>
           <button 
             onClick={handleSave}
             disabled={saving || loading}
-            className="border-[3px] border-[#000000] bg-[#000000] text-[#FFFFFF] px-[32px] py-[12px] font-bold uppercase hover:bg-[#333333] transition-none disabled:opacity-50"
+            className="border-[3px] border-[#000000] bg-[#000000] text-[#FFFFFF] px-6 py-3 md:px-8 font-bold uppercase hover:bg-[#333333] transition-none disabled:opacity-50 w-full sm:w-auto"
           >
-            {saving ? 'SAVING...' : 'SAVE CONFIG & PRICING'}
+            {saving ? t('saving') : t('saveConfigPricing')}
           </button>
         </div>
       </div>
