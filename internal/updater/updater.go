@@ -4,8 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
+
+// GitHubRepo is the repository to check for releases.
+// Override at build time via ldflags if needed.
+var GitHubRepo = "icebear0828/ai-flight-dashboard"
 
 type Release struct {
 	TagName string `json:"tag_name"`
@@ -14,8 +19,12 @@ type Release struct {
 }
 
 func CheckForUpdates(currentVersion string) (*Release, error) {
-	req, _ := http.NewRequest("GET", "https://api.github.com/repos/icebear0828/ai-flight-dashboard/releases/latest", nil)
-	
+	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", GitHubRepo)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -32,8 +41,11 @@ func CheckForUpdates(currentVersion string) (*Release, error) {
 		return nil, err
 	}
 
-	// Simple check, in reality we'd use semver
-	if rel.TagName != "" && rel.TagName != currentVersion {
+	// Normalize "v" prefix for comparison (e.g. "v1.2.0" vs "1.2.0")
+	remoteVersion := strings.TrimPrefix(rel.TagName, "v")
+	localVersion := strings.TrimPrefix(currentVersion, "v")
+
+	if remoteVersion != "" && remoteVersion != localVersion {
 		return &rel, nil
 	}
 
