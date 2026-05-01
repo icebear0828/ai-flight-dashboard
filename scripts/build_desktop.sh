@@ -29,8 +29,16 @@ echo "  ./build/bin/ai-flight-dashboard --gui    # Native desktop window"
 echo "  ./build/bin/ai-flight-dashboard --web    # Web dashboard mode"
 echo "  ./build/bin/ai-flight-dashboard          # TUI terminal mode"
 
-# Platform-specific packaging hints
+# Platform-specific packaging
 if [[ "$(uname)" == "Darwin" ]]; then
-    echo ""
-    echo "📦 To create a macOS .app bundle, use: wails build"
+    echo "📦 Packaging macOS .app bundle..."
+    # 1. Run wails build to generate the .app structure (icons, plist, etc.)
+    # This generates a dummy archive executable because main.go is not in the root directory
+    wails build -platform darwin/arm64 -skipbindings > /dev/null 2>&1 || true
+    
+    # 2. Overwrite the dummy executable with the correctly compiled binary
+    cp build/bin/ai-flight-dashboard "build/bin/AI Flight Dashboard.app/Contents/MacOS/ai-flight-dashboard"
+    
+    echo "✅ macOS .app bundle created at: build/bin/AI Flight Dashboard.app"
+    echo "   You can now double-click it to run the application!"
 fi
