@@ -2,13 +2,11 @@ package desktop
 
 import (
 	"context"
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"sort"
 	"time"
 
 	"ai-flight-dashboard/internal/calculator"
+	"ai-flight-dashboard/internal/config"
 	"ai-flight-dashboard/internal/db"
 	"ai-flight-dashboard/internal/model"
 
@@ -226,36 +224,12 @@ func (a *App) ShowWindow() {
 
 // --- Config ---
 
-type AppConfig struct {
-	AutoStart     bool     `json:"auto_start"`
-	ExtraWatchDirs []string `json:"extra_watch_dirs"`
-}
-
-func configPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".ai-flight-dashboard", "config.json")
-}
-
 // GetConfig returns the current app configuration.
-func (a *App) GetConfig() (*AppConfig, error) {
-	data, err := os.ReadFile(configPath())
-	if err != nil {
-		return &AppConfig{}, nil // Return defaults if no config file
-	}
-	var cfg AppConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return &AppConfig{}, nil
-	}
-	return &cfg, nil
+func (a *App) GetConfig() (*config.AppConfig, error) {
+	return config.LoadConfig()
 }
 
 // SaveConfig persists the app configuration.
-func (a *App) SaveConfig(cfg *AppConfig) error {
-	dir := filepath.Dir(configPath())
-	os.MkdirAll(dir, 0755)
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(configPath(), data, 0644)
+func (a *App) SaveConfig(cfg *config.AppConfig) error {
+	return config.SaveConfig(cfg)
 }
