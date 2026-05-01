@@ -229,19 +229,8 @@ func (d *DB) QueryStatsSince(since time.Time, deviceID string) ([]ModelStat, err
 	return stats, rows.Err()
 }
 
-// ProjectStat represents aggregated token usage and cost for a project.
-type ProjectStat struct {
-	Project             string  `json:"project"`
-	Events              int     `json:"events"`
-	InputTokens         int     `json:"input_tokens"`
-	CachedTokens        int     `json:"cached_tokens"`
-	CacheCreationTokens int     `json:"cache_creation_tokens"`
-	OutputTokens        int     `json:"output_tokens"`
-	TotalCost           float64 `json:"total_cost"`
-}
-
 // QueryProjectStatsSince returns per-project stats since the given time.
-func (d *DB) QueryProjectStatsSince(since time.Time, deviceID string) ([]ProjectStat, error) {
+func (d *DB) QueryProjectStatsSince(since time.Time, deviceID string) ([]model.ProjectStat, error) {
 	query := `
 		SELECT COALESCE(project, 'Default') as project, COUNT(*) as events,
 			SUM(input_tokens), SUM(cached_tokens), SUM(cache_creation_tokens), SUM(output_tokens),
@@ -267,9 +256,9 @@ func (d *DB) QueryProjectStatsSince(since time.Time, deviceID string) ([]Project
 	}
 	defer rows.Close()
 
-	var stats []ProjectStat
+	var stats []model.ProjectStat
 	for rows.Next() {
-		var s ProjectStat
+		var s model.ProjectStat
 		if err := rows.Scan(&s.Project, &s.Events,
 			&s.InputTokens, &s.CachedTokens, &s.CacheCreationTokens, &s.OutputTokens, &s.TotalCost); err != nil {
 			return nil, err
