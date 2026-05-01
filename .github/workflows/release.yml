@@ -24,15 +24,22 @@ jobs:
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
       - name: Build macOS M-Series (Apple Silicon)
         run: |
+          cd cmd/dashboard
           wails build -platform darwin/arm64 -clean
-          cd build/bin
+          mkdir -p ../../build/bin
+          mv "build/bin/AI Flight Dashboard.app" "../../build/bin/AI Flight Dashboard.app"
+          cd ../../build/bin
           tar -czvf ai-flight-dashboard-macos-m-series.tar.gz "AI Flight Dashboard.app"
           rm -rf "AI Flight Dashboard.app"
       - name: Build macOS Intel
         run: |
+          cd cmd/dashboard
           wails build -platform darwin/amd64 -clean
-          cd build/bin
+          mkdir -p ../../build/bin
+          mv "build/bin/AI Flight Dashboard.app" "../../build/bin/AI Flight Dashboard.app"
+          cd ../../build/bin
           tar -czvf ai-flight-dashboard-macos-intel.tar.gz "AI Flight Dashboard.app"
+          rm -rf "AI Flight Dashboard.app"
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
         with:
@@ -52,7 +59,11 @@ jobs:
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
       - name: Build Windows App
-        run: wails build -platform windows/amd64 -clean
+        run: |
+          cd cmd/dashboard
+          wails build -platform windows/amd64 -clean
+          mkdir -p ../../build/bin
+          mv "build/bin/ai-flight-dashboard.exe" "../../build/bin/"
       - name: Archive App
         run: |
           cd build/bin
@@ -80,7 +91,11 @@ jobs:
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
       - name: Build Linux App
-        run: wails build -platform linux/amd64 -clean
+        run: |
+          cd cmd/dashboard
+          wails build -platform linux/amd64 -clean
+          mkdir -p ../../build/bin
+          mv "build/bin/ai-flight-dashboard" "../../build/bin/"
       - name: Archive App
         run: |
           cd build/bin
