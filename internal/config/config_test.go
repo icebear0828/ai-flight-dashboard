@@ -9,9 +9,11 @@ import (
 )
 
 func TestLoadConfig_FileNotExist(t *testing.T) {
-	// LoadConfig should return a zero-value AppConfig when the file doesn't exist
-	// We can't easily override GetConfigPath, but we can verify the behavior
-	// by checking that a non-existent path returns defaults gracefully.
+	// Use a temp dir so we don't read any real config
+	tmpDir := t.TempDir()
+	config.SetDataDir(tmpDir)
+	defer config.SetDataDir("")
+
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		t.Fatalf("LoadConfig should not error when file missing, got: %v", err)
@@ -19,7 +21,6 @@ func TestLoadConfig_FileNotExist(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("LoadConfig returned nil config")
 	}
-	// Default: auto_start should be false, no extra dirs
 	if cfg.AutoStart {
 		t.Error("default AutoStart should be false")
 	}
@@ -29,15 +30,9 @@ func TestLoadConfig_FileNotExist(t *testing.T) {
 }
 
 func TestSaveAndLoadConfig(t *testing.T) {
-	// Create a temporary config directory
 	tmpDir := t.TempDir()
-	configDir := filepath.Join(tmpDir, ".ai-flight-dashboard")
-	configPath := filepath.Join(configDir, "config.json")
-
-	// Temporarily override HOME to redirect config path
-	origHome := os.Getenv("HOME")
-	t.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	config.SetDataDir(tmpDir)
+	defer config.SetDataDir("")
 
 	cfg := &config.AppConfig{
 		AutoStart:      true,
@@ -49,12 +44,11 @@ func TestSaveAndLoadConfig(t *testing.T) {
 		t.Fatalf("SaveConfig failed: %v", err)
 	}
 
-	// Verify file was created
+	configPath := filepath.Join(tmpDir, "config.json")
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		t.Fatal("config file was not created")
 	}
 
-	// Load it back
 	loaded, err := config.LoadConfig()
 	if err != nil {
 		t.Fatalf("LoadConfig failed: %v", err)
@@ -72,13 +66,11 @@ func TestSaveAndLoadConfig(t *testing.T) {
 
 func TestLoadConfig_MalformedJSON(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	config.SetDataDir(tmpDir)
+	defer config.SetDataDir("")
 
-	configDir := filepath.Join(tmpDir, ".ai-flight-dashboard")
-	os.MkdirAll(configDir, 0755)
-	os.WriteFile(filepath.Join(configDir, "config.json"), []byte(`{invalid json`), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(`{invalid json`), 0644)
 
-	// LoadConfig should gracefully return defaults on malformed JSON
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		t.Fatalf("LoadConfig should not error on bad JSON, got: %v", err)
@@ -89,14 +81,35 @@ func TestLoadConfig_MalformedJSON(t *testing.T) {
 }
 
 func TestGetConfigPath(t *testing.T) {
+	// Default (no SetDataDir): current directory
+	config.SetDataDir("")
 	path := config.GetConfigPath()
-	if path == "" {
-		t.Fatal("GetConfigPath returned empty string")
-	}
 	if filepath.Base(path) != "config.json" {
 		t.Errorf("expected config.json, got %s", filepath.Base(path))
 	}
-	if filepath.Base(filepath.Dir(path)) != ".ai-flight-dashboard" {
-		t.Errorf("expected .ai-flight-dashboard dir, got %s", filepath.Dir(path))
+
+	// Custom dir
+	config.SetDataDir("/custom/path")
+	path = config.GetConfigPath()
+	if path != filepath.Join("/custom/path", "config.json") {
+		t.Errorf("expected /custom/path/config.json, got %s", path)
+	}
+	config.SetDataDir("")
+}
+
+func TestGetDataDir_Default(t *testing.T) {
+	config.SetDataDir("")
+	dir := config.GetDataDir()
+	if dir != "." {
+		t.Errorf("expected current directory '.', got %s", dir)
+	}
+}
+
+func TestGetDataDir_Custom(t *testing.T) {
+	config.SetDataDir("/my/data")
+	defer config.SetDataDir("")
+	dir := config.GetDataDir()
+	if dir != "/my/data" {
+		t.Errorf("expected /my/data, got %s", dir)
 	}
 }

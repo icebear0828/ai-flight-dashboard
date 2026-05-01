@@ -1,0 +1,7 @@
+{
+  "auto_start": true,
+  "extra_watch_dirs": [
+    "/tmp/logs",
+    "/var/data"
+  ]
+}

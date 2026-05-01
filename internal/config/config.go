@@ -24,8 +24,7 @@ func GetDataDir() string {
 	if customDir != "" {
 		return customDir
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".ai-flight-dashboard")
+	return "."
 }
 
 func GetConfigPath() string {
