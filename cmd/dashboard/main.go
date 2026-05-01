@@ -145,8 +145,13 @@ func main() {
 	}
 
 	// Initialize Database
-	os.MkdirAll("stats", 0755)
-	database, err := db.New("stats/usage.db")
+	homeDir, _ := os.UserHomeDir()
+	appDataDir := filepath.Join(homeDir, ".ai-flight-dashboard")
+	statsDir := filepath.Join(appDataDir, "stats")
+	os.MkdirAll(statsDir, 0755)
+	
+	dbPath := filepath.Join(statsDir, "usage.db")
+	database, err := db.New(dbPath)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
@@ -332,7 +337,10 @@ func main() {
 	}
 
 	// TUI mode — starts instantly, data populates in background
-	f, err := tea.LogToFile("stats/debug.log", "debug")
+	homeDirTui, _ := os.UserHomeDir()
+	logPath := filepath.Join(homeDirTui, ".ai-flight-dashboard", "stats", "debug.log")
+	os.MkdirAll(filepath.Dir(logPath), 0755)
+	f, err := tea.LogToFile(logPath, "debug")
 	if err != nil {
 		fmt.Println("fatal:", err)
 		os.Exit(1)
@@ -355,8 +363,10 @@ func main() {
 }
 
 func openDB() *db.DB {
-	os.MkdirAll("stats", 0755)
-	database, err := db.New("stats/usage.db")
+	homeDir, _ := os.UserHomeDir()
+	dbPath := filepath.Join(homeDir, ".ai-flight-dashboard", "stats", "usage.db")
+	os.MkdirAll(filepath.Dir(dbPath), 0755)
+	database, err := db.New(dbPath)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
