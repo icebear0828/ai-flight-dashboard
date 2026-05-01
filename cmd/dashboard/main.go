@@ -11,7 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
+
 	"syscall"
 	"time"
 
@@ -48,7 +48,7 @@ func main() {
 
 	// Parse CLI flags
 	webMode := flag.Bool("web", false, "Run in web dashboard mode")
-	guiMode := flag.Bool("gui", false, "Run as native desktop app with system tray")
+	tuiMode := flag.Bool("tui", false, "Run in legacy Terminal UI mode")
 	port := flag.String("port", "9100", "HTTP port for web mode")
 	forwardTo := flag.String("forward-to", "", "Forward local usage to remote dashboard URL (e.g. http://server:9100/api/track)")
 	token := flag.String("token", "", "Authorization token for web mode or forwarder")
@@ -66,10 +66,10 @@ func main() {
 	flag.StringVar(port, "p", "9100", "HTTP port for web mode (shorthand)")
 	flag.Parse()
 
-	// Auto-detect macOS .app bundle launch (Finder double-click)
-	exePath, _ := os.Executable()
-	if strings.Contains(exePath, ".app/Contents/MacOS/") {
-		*guiMode = true
+	// Default to GUI mode unless another mode is explicitly requested
+	runGui := true
+	if *tuiMode || *webMode || *forwardTo != "" || len(flag.Args()) > 0 {
+		runGui = false
 	}
 
 	// Read token from environment variable if not provided via flag
@@ -256,7 +256,7 @@ func main() {
 		}()
 	}
 
-	if *guiMode {
+	if runGui {
 		startDBDrain()
 
 		app := desktop.NewApp(database, calc)
