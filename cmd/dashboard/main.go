@@ -256,9 +256,19 @@ func main() {
 					if !ok {
 						return
 					}
-					if *syncMode == "fsnotify" {
+					isLocal := (u.DeviceID == "" || u.DeviceID == *deviceID)
+					
+					// If it's a remote packet from LAN, ALWAYS save it regardless of syncMode
+					// If it's a local packet, ONLY save it if fsnotify (poll mode saves it directly in ScanAll)
+					if !isLocal || *syncMode == "fsnotify" {
 						cost, _ := calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens)
-						database.InsertUsage(u, cost, *deviceID)
+						
+						effectiveDevice := u.DeviceID
+						if effectiveDevice == "" {
+							effectiveDevice = *deviceID
+						}
+						
+						database.InsertUsage(u, cost, effectiveDevice)
 					}
 				}
 			}

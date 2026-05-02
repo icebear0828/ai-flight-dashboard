@@ -5,6 +5,7 @@ import "time"
 // TokenUsage represents a single AI tool usage event with token counts.
 // Shared by watcher, scanner, db, and tui packages.
 type TokenUsage struct {
+	DeviceID            string    `json:"device_id,omitempty"` // For LAN routing
 	Source              string    `json:"source"`
 	Model               string    `json:"model"`
 	Project             string    `json:"project"`

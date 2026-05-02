@@ -235,6 +235,7 @@ func (l *LAN) StartListener(outChan chan<- model.TokenUsage) {
 		}
 
 		// Push to the channel for processing (DB, TUI, etc.)
+		payload.Usage.DeviceID = payload.DeviceID
 		outChan <- payload.Usage
 	}
 
