@@ -52,5 +52,8 @@
   "modelIdentifier": "Model Identifier",
   "rates1M": "Rates (1M)",
   "events": "Events",
-  "subtotal": "Subtotal"
+  "subtotal": "Subtotal",
+  "projects": "PROJECT STATS",
+  "project": "Project",
+  "tokens": "Tokens"
 }
