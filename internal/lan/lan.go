@@ -2,6 +2,7 @@ package lan
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -222,15 +223,24 @@ func (l *LAN) StartListener(outChan chan<- model.TokenUsage) {
 			return // just a presence announce
 		}
 
-		// Deduplicate incoming usage
+		// Deduplicate incoming usage packets
+		// We use a combination of UUID and token counts to form a unique state hash.
+		// This ensures identical duplicate UDP packets (from multicast+broadcast) are dropped,
+		// but legitimate streaming updates (where tokens increase) are allowed through.
 		uuid := payload.Usage.UUID
 		if uuid != "" {
+			stateHash := uuid
+			// Append token counts to distinguish stream updates
+			if payload.Usage.OutputTokens > 0 || payload.Usage.InputTokens > 0 || payload.Usage.Thoughts > 0 {
+				stateHash = fmt.Sprintf("%s-%d-%d-%d", uuid, payload.Usage.InputTokens, payload.Usage.OutputTokens, payload.Usage.Thoughts)
+			}
+			
 			seenMu.Lock()
-			if _, exists := seenUUIDs[uuid]; exists {
+			if _, exists := seenUUIDs[stateHash]; exists {
 				seenMu.Unlock()
 				return
 			}
-			seenUUIDs[uuid] = time.Now()
+			seenUUIDs[stateHash] = time.Now()
 			seenMu.Unlock()
 		}
 
