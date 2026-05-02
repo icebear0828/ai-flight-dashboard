@@ -52,5 +52,8 @@
   "modelIdentifier": "模型标识",
   "rates1M": "单价 (1M)",
   "events": "事件数",
-  "subtotal": "小计"
+  "subtotal": "小计",
+  "projects": "项目统计",
+  "project": "项目名称",
+  "tokens": "Tokens消耗"
 }

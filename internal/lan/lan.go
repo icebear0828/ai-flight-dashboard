@@ -3,6 +3,7 @@ package lan
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -352,39 +353,45 @@ func (l *LAN) StartAutoSync(database *db.DB, token string) {
 				continue
 			}
 
-			since := lastSync[id]
-			url := fmt.Sprintf("http://%s:%d/api/sync/pull", peer.IP, peer.HTTPPort)
-			if !since.IsZero() {
-				url += fmt.Sprintf("?since=%s", since.Format(time.RFC3339))
-			}
+			l.syncWithPeer(id, peer, database, token, lastSync)
+		}
+	}
+}
 
-			req, err := http.NewRequest("GET", url, nil)
-			if err != nil {
-				continue
-			}
-			if token != "" {
-				req.Header.Set("Authorization", "Bearer "+token)
-			}
+func (l *LAN) syncWithPeer(id string, peer PeerInfo, database *db.DB, token string, lastSync map[string]time.Time) {
+	since := lastSync[id]
+	url := fmt.Sprintf("http://%s:%d/api/sync/pull", peer.IP, peer.HTTPPort)
+	if !since.IsZero() {
+		url += fmt.Sprintf("?since=%s", since.Format(time.RFC3339))
+	}
 
-			client := &http.Client{Timeout: 10 * time.Second}
-			resp, err := client.Do(req)
-			if err != nil {
-				continue
-			}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 
-			if resp.StatusCode == http.StatusOK {
-				var records []model.SyncRecord
-				if err := json.NewDecoder(resp.Body).Decode(&records); err == nil {
-					for _, r := range records {
-						// InsertUsageWithTime handles UPSERT.
-						// r.TokenUsage already has the data. We pass r.DeviceID to preserve the original device.
-						_ = database.InsertUsageWithTime(r.TokenUsage, r.CostUSD, r.Timestamp, r.FilePath, r.DeviceID)
-					}
-					// Only update lastSync if we successfully reached them
-					lastSync[id] = time.Now()
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		var records []model.SyncRecord
+		if err := json.NewDecoder(resp.Body).Decode(&records); err == nil {
+			for _, r := range records {
+				// InsertUsageWithTime handles UPSERT.
+				// r.TokenUsage already has the data. We pass r.DeviceID to preserve the original device.
+				if err := database.InsertUsageWithTime(r.TokenUsage, r.CostUSD, r.Timestamp, r.FilePath, r.DeviceID); err != nil {
+					log.Printf("LAN sync DB insert error for device %s: %v", r.DeviceID, err)
 				}
 			}
-			resp.Body.Close()
+			// Only update lastSync if we successfully reached them
+			lastSync[id] = time.Now()
 		}
 	}
 }

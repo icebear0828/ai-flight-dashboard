@@ -45,10 +45,21 @@ interface DeviceStats {
   display_name?: string;
 }
 
+interface ProjectStat {
+  project: string;
+  events: number;
+  input_tokens: number;
+  cached_tokens: number;
+  cache_creation_tokens?: number;
+  output_tokens: number;
+  total_cost: number;
+}
+
 interface DashboardData {
   periods: PeriodStats[];
   sources: SourceStats[];
   devices: DeviceStats[];
+  projects?: ProjectStat[];
   is_paused?: boolean;
 }
 
@@ -214,6 +225,45 @@ export default function App() {
 
       {/* LAN Radar Component */}
       <Radar />
+
+      {/* Projects Section */}
+      {data.projects && data.projects.length > 0 && (
+        <section className="mb-12 md:mb-20">
+          <article className="bg-[#FFFFFF] border-[5px] border-[#000000] rounded-none shadow-none flex flex-col">
+            <div className="p-4 sm:p-6 border-b-[5px] border-[#000000] flex flex-col md:flex-row justify-between items-start md:items-end gap-4 bg-[#000000] text-[#FFFFFF]">
+              <div className="break-words w-full">
+                <h2 className="font-display text-3xl sm:text-4xl md:text-5xl uppercase leading-[1.05] break-words">
+                  {t('projects') || 'PROJECT STATS'}
+                </h2>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left font-mono text-xs sm:text-sm min-w-[600px]">
+                <thead>
+                  <tr className="border-b-[5px] border-[#000000] bg-[#F0F0F0]">
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('project')}</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('events')}</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('tokens')}</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase text-right">{t('subtotal')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.projects.map((p, i) => (
+                    <tr key={i} className="border-b-[3px] border-[#000000] last:border-b-0 hover:bg-[#000000] hover:text-[#FFFFFF] transition-none group">
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 font-bold group-hover:text-[#FFFFFF] truncate max-w-[300px]" title={p.project}>{p.project}</td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">{p.events}</td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
+                        {t('labelIn')}: {fmt(Math.max(0, p.input_tokens - p.cached_tokens - (p.cache_creation_tokens || 0)))} / {t('cacheRead')}: {fmt(p.cached_tokens)} / {t('cacheWrite')}: {fmt(p.cache_creation_tokens || 0)} / {t('labelOut')}: {fmt(p.output_tokens)}
+                      </td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-bold group-hover:text-[#FFFFFF]">{fmtCost(p.total_cost)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+      )}
 
       {/* Source Stats Grid */}
       <section className="grid grid-cols-1 2xl:grid-cols-2 gap-6 lg:gap-10">
