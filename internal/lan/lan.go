@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
+	"ai-flight-dashboard/internal/db"
 	"ai-flight-dashboard/internal/model"
 )
 
@@ -17,20 +19,28 @@ const (
 	PeerTTL         = 30 * time.Second
 )
 
+type PeerInfo struct {
+	IP       string
+	HTTPPort int
+	LastSeen time.Time
+}
+
 // LAN manages LAN-based device discovery and usage broadcasting.
 // It replaces the former package-level global state with a testable struct.
 type LAN struct {
 	DeviceID string
+	HTTPPort int
 
 	mu          sync.RWMutex
-	activePeers map[string]time.Time
+	activePeers map[string]PeerInfo
 }
 
 // New creates a new LAN instance for the given device.
-func New(deviceID string) *LAN {
+func New(deviceID string, httpPort int) *LAN {
 	return &LAN{
 		DeviceID:    deviceID,
-		activePeers: make(map[string]time.Time),
+		HTTPPort:    httpPort,
+		activePeers: make(map[string]PeerInfo),
 	}
 }
 
@@ -41,8 +51,8 @@ func (l *LAN) GetActivePeers() []string {
 	defer l.mu.Unlock()
 	var peers []string
 	now := time.Now()
-	for id, lastSeen := range l.activePeers {
-		if now.Sub(lastSeen) >= PeerTTL {
+	for id, peer := range l.activePeers {
+		if now.Sub(peer.LastSeen) >= PeerTTL {
 			delete(l.activePeers, id) // evict stale
 			continue
 		}
@@ -54,23 +64,36 @@ func (l *LAN) GetActivePeers() []string {
 }
 
 // RecordPeer records a peer as active. Exposed for testing.
-func (l *LAN) RecordPeer(deviceID string) {
+func (l *LAN) RecordPeer(deviceID, ip string, httpPort int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.activePeers[deviceID] = time.Now()
+	l.activePeers[deviceID] = PeerInfo{
+		IP:       ip,
+		HTTPPort: httpPort,
+		LastSeen: time.Time{}, // handled below, but time.Now() is what we want
+	}
+	// Note: We'll set LastSeen correctly
+	p := l.activePeers[deviceID]
+	p.LastSeen = time.Now()
+	l.activePeers[deviceID] = p
 }
 
 // RecordPeerAt records a peer with a specific timestamp. Exposed for testing.
-func (l *LAN) RecordPeerAt(deviceID string, at time.Time) {
+func (l *LAN) RecordPeerAt(deviceID, ip string, httpPort int, at time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.activePeers[deviceID] = at
+	l.activePeers[deviceID] = PeerInfo{
+		IP:       ip,
+		HTTPPort: httpPort,
+		LastSeen: at,
+	}
 }
 
 // StartPinger periodically sends ping packets to the LAN.
 func (l *LAN) StartPinger() {
 	payload := model.TrackPayload{
 		DeviceID: l.DeviceID,
+		HTTPPort: l.HTTPPort,
 		Type:     "ping",
 	}
 	data, _ := json.Marshal(payload)
@@ -86,6 +109,7 @@ func (l *LAN) StartPinger() {
 func (l *LAN) Ping() {
 	payload := model.TrackPayload{
 		DeviceID: l.DeviceID,
+		HTTPPort: l.HTTPPort,
 		Type:     "ping",
 	}
 	data, err := json.Marshal(payload)
@@ -169,6 +193,7 @@ func (l *LAN) StartBroadcaster(usageChan <-chan model.TokenUsage) {
 	for usage := range usageChan {
 		payload := model.TrackPayload{
 			DeviceID: l.DeviceID,
+			HTTPPort: l.HTTPPort,
 			Type:     "track",
 			Usage:    usage,
 		}
@@ -205,7 +230,7 @@ func (l *LAN) StartListener(outChan chan<- model.TokenUsage) {
 		}
 	}()
 
-	processPayload := func(buf []byte, n int) {
+	processPayload := func(buf []byte, n int, srcAddr *net.UDPAddr) {
 		var payload model.TrackPayload
 		if err := json.Unmarshal(buf[:n], &payload); err != nil {
 			return
@@ -216,8 +241,13 @@ func (l *LAN) StartListener(outChan chan<- model.TokenUsage) {
 			return
 		}
 
+		ipStr := ""
+		if srcAddr != nil && srcAddr.IP != nil {
+			ipStr = srcAddr.IP.String()
+		}
+
 		// Update active peers (remote only)
-		l.RecordPeer(payload.DeviceID)
+		l.RecordPeer(payload.DeviceID, ipStr, payload.HTTPPort)
 
 		if payload.Type == "ping" {
 			return // just a presence announce
@@ -260,12 +290,12 @@ func (l *LAN) StartListener(outChan chan<- model.TokenUsage) {
 				conn.SetReadBuffer(MaxDatagramSize)
 				buf := make([]byte, MaxDatagramSize)
 				for {
-					n, _, err := conn.ReadFromUDP(buf)
+					n, src, err := conn.ReadFromUDP(buf)
 					if err != nil {
 						time.Sleep(1 * time.Second)
 						continue
 					}
-					processPayload(buf, n)
+					processPayload(buf, n, src)
 				}
 			}
 		}
@@ -282,17 +312,79 @@ func (l *LAN) StartListener(outChan chan<- model.TokenUsage) {
 				conn.SetReadBuffer(MaxDatagramSize)
 				buf := make([]byte, MaxDatagramSize)
 				for {
-					n, _, err := conn.ReadFromUDP(buf)
+					n, src, err := conn.ReadFromUDP(buf)
 					if err != nil {
 						time.Sleep(1 * time.Second)
 						continue
 					}
-					processPayload(buf, n)
+					processPayload(buf, n, src)
 				}
 			}
 		}
 	}()
 
+
+
 	// Wait forever
 	wg.Wait()
+}
+
+// StartAutoSync runs a background loop to pull DB records from active LAN peers via HTTP.
+func (l *LAN) StartAutoSync(database *db.DB, token string) {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+
+	// Track the last time we synced with each peer
+	lastSync := make(map[string]time.Time)
+
+	for range ticker.C {
+		l.mu.RLock()
+		peers := make(map[string]PeerInfo)
+		for id, peer := range l.activePeers {
+			if id != l.DeviceID {
+				peers[id] = peer
+			}
+		}
+		l.mu.RUnlock()
+
+		for id, peer := range peers {
+			if peer.IP == "" || peer.HTTPPort == 0 {
+				continue
+			}
+
+			since := lastSync[id]
+			url := fmt.Sprintf("http://%s:%d/api/sync/pull", peer.IP, peer.HTTPPort)
+			if !since.IsZero() {
+				url += fmt.Sprintf("?since=%s", since.Format(time.RFC3339))
+			}
+
+			req, err := http.NewRequest("GET", url, nil)
+			if err != nil {
+				continue
+			}
+			if token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+
+			client := &http.Client{Timeout: 10 * time.Second}
+			resp, err := client.Do(req)
+			if err != nil {
+				continue
+			}
+
+			if resp.StatusCode == http.StatusOK {
+				var records []model.SyncRecord
+				if err := json.NewDecoder(resp.Body).Decode(&records); err == nil {
+					for _, r := range records {
+						// InsertUsageWithTime handles UPSERT.
+						// r.TokenUsage already has the data. We pass r.DeviceID to preserve the original device.
+						_ = database.InsertUsageWithTime(r.TokenUsage, r.CostUSD, r.Timestamp, r.FilePath, r.DeviceID)
+					}
+					// Only update lastSync if we successfully reached them
+					lastSync[id] = time.Now()
+				}
+			}
+			resp.Body.Close()
+		}
+	}
 }

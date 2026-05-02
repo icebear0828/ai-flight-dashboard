@@ -38,3 +38,4 @@ test_dashboard
 # IDE
 .idea/
 .vscode/
+*.exe

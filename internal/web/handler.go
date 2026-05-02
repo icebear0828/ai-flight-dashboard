@@ -139,6 +139,27 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 		w.WriteHeader(http.StatusOK)
 	}))
 
+	mux.HandleFunc("/api/sync/pull", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		sinceStr := r.URL.Query().Get("since")
+		var since time.Time
+		if sinceStr != "" {
+			if t, err := time.Parse(time.RFC3339, sinceStr); err == nil {
+				since = t
+			}
+		}
+		records, err := database.QuerySyncRecordsSince(since)
+		if err != nil {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(records)
+	}))
+
 	mux.HandleFunc("/api/pause", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

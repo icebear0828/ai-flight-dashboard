@@ -22,5 +22,14 @@ type TokenUsage struct {
 type TrackPayload struct {
 	DeviceID string     `json:"device_id"`
 	Type     string     `json:"type,omitempty"` // "ping" or empty/"track"
+	HTTPPort int        `json:"http_port,omitempty"` // for LAN auto-sync
 	Usage    TokenUsage `json:"usage"`
+}
+
+// SyncRecord represents a full database row for LAN auto-sync.
+type SyncRecord struct {
+	TokenUsage
+	CostUSD  float64 `json:"cost_usd"`
+	FilePath string  `json:"file_path"`
+	DeviceID string  `json:"device_id"` // override usage's device ID
 }

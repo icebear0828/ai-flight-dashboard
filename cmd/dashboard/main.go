@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 
 	"syscall"
 	"time"
@@ -190,11 +191,13 @@ func main() {
 
 	var lanInst *lan.LAN
 	if *lanMode && appConfig.EnableLAN != nil && *appConfig.EnableLAN {
-		lanInst = lan.New(*deviceID)
+		portInt, _ := strconv.Atoi(*port)
+		lanInst = lan.New(*deviceID, portInt)
 		fmt.Printf("📡 LAN discovery enabled. Multicast: %s\n", lan.MulticastAddr)
 		go lanInst.StartBroadcaster(w.BroadcastChan)
 		go lanInst.StartListener(w.UsageChan)
 		go lanInst.StartPinger()
+		go lanInst.StartAutoSync(database, *token)
 	} else {
 		fmt.Println("📡 LAN discovery is disabled in settings.")
 	}

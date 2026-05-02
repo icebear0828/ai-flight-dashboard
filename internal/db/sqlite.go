@@ -325,6 +325,36 @@ func (d *DB) QueryUsageRecords(since time.Time, deviceID string) ([]UsageRecord,
 	return records, rows.Err()
 }
 
+// QuerySyncRecordsSince returns raw records for P2P LAN DB synchronization.
+func (d *DB) QuerySyncRecordsSince(since time.Time) ([]model.SyncRecord, error) {
+	query := `SELECT uuid, log_timestamp, source, model, project, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd, file_path, device_id
+		FROM usage_records WHERE log_timestamp >= ?`
+	
+	rows, err := d.conn.Query(query, since.Format(time.RFC3339))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []model.SyncRecord
+	for rows.Next() {
+		var r model.SyncRecord
+		var logTsStr string
+		var uuidStr sql.NullString
+		
+		if err := rows.Scan(&uuidStr, &logTsStr, &r.Source, &r.Model, &r.Project, &r.InputTokens, &r.CachedTokens, &r.CacheCreationTokens, &r.OutputTokens, &r.CostUSD, &r.FilePath, &r.DeviceID); err != nil {
+			return nil, err
+		}
+		
+		r.UUID = uuidStr.String
+		if t, err := time.Parse(time.RFC3339, logTsStr); err == nil {
+			r.Timestamp = t
+		}
+		records = append(records, r)
+	}
+	return records, rows.Err()
+}
+
 func (d *DB) Close() error {
 	return d.conn.Close()
 }

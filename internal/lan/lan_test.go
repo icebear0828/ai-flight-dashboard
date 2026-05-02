@@ -8,14 +8,14 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	l := lan.New("test-device")
+	l := lan.New("test-device", 19100)
 	if l.DeviceID != "test-device" {
 		t.Errorf("expected device ID 'test-device', got %q", l.DeviceID)
 	}
 }
 
 func TestGetActivePeers_Empty(t *testing.T) {
-	l := lan.New("local")
+	l := lan.New("local", 19100)
 	peers := l.GetActivePeers()
 	if len(peers) != 0 {
 		t.Errorf("expected 0 peers, got %d", len(peers))
@@ -23,9 +23,9 @@ func TestGetActivePeers_Empty(t *testing.T) {
 }
 
 func TestGetActivePeers_ExcludesSelf(t *testing.T) {
-	l := lan.New("local")
-	l.RecordPeer("local")  // self
-	l.RecordPeer("remote") // other device
+	l := lan.New("local", 19100)
+	l.RecordPeer("local", "127.0.0.1", 19100)  // self
+	l.RecordPeer("remote", "127.0.0.2", 19100) // other device
 
 	peers := l.GetActivePeers()
 	if len(peers) != 1 {
@@ -37,12 +37,12 @@ func TestGetActivePeers_ExcludesSelf(t *testing.T) {
 }
 
 func TestGetActivePeers_EvictsStale(t *testing.T) {
-	l := lan.New("local")
+	l := lan.New("local", 19100)
 
 	// Record a peer as stale (older than PeerTTL)
-	l.RecordPeerAt("stale-device", time.Now().Add(-lan.PeerTTL-1*time.Second))
+	l.RecordPeerAt("stale-device", "127.0.0.2", 19100, time.Now().Add(-lan.PeerTTL-1*time.Second))
 	// Record a fresh peer
-	l.RecordPeer("fresh-device")
+	l.RecordPeer("fresh-device", "127.0.0.3", 19100)
 
 	peers := l.GetActivePeers()
 	if len(peers) != 1 {
@@ -54,11 +54,11 @@ func TestGetActivePeers_EvictsStale(t *testing.T) {
 }
 
 func TestGetActivePeers_MultiplePeers(t *testing.T) {
-	l := lan.New("local")
+	l := lan.New("local", 19100)
 
-	l.RecordPeer("device-a")
-	l.RecordPeer("device-b")
-	l.RecordPeer("device-c")
+	l.RecordPeer("device-a", "127.0.0.1", 19100)
+	l.RecordPeer("device-b", "127.0.0.2", 19100)
+	l.RecordPeer("device-c", "127.0.0.3", 19100)
 
 	peers := l.GetActivePeers()
 	if len(peers) != 3 {
@@ -78,10 +78,10 @@ func TestGetActivePeers_MultiplePeers(t *testing.T) {
 }
 
 func TestRecordPeer_UpdatesTimestamp(t *testing.T) {
-	l := lan.New("local")
+	l := lan.New("local", 19100)
 
 	// Record peer initially as stale
-	l.RecordPeerAt("device-x", time.Now().Add(-lan.PeerTTL-1*time.Second))
+	l.RecordPeerAt("device-x", "127.0.0.1", 19100, time.Now().Add(-lan.PeerTTL-1*time.Second))
 
 	// Should be evicted now
 	peers := l.GetActivePeers()
@@ -90,7 +90,7 @@ func TestRecordPeer_UpdatesTimestamp(t *testing.T) {
 	}
 
 	// Re-record with fresh timestamp
-	l.RecordPeer("device-x")
+	l.RecordPeer("device-x", "127.0.0.1", 19100)
 
 	peers = l.GetActivePeers()
 	if len(peers) != 1 {
