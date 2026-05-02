@@ -189,24 +189,36 @@ func (w *Watcher) processFile(path string) {
 
 	projectName := ExtractProjectName(path)
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if w.IsPaused() {
-			continue // skip parsing and recording while paused
-		}
-		if u, ok := ParseLine(line); ok {
-			u.Project = projectName
-			w.UsageChan <- u
-			select {
-			case w.BroadcastChan <- u:
-			default:
+	reader := bufio.NewReader(file)
+	newOffset := offset
+
+	for {
+		lineBytes, err := reader.ReadBytes('\n')
+		if len(lineBytes) > 0 && lineBytes[len(lineBytes)-1] == '\n' {
+			// Complete line
+			newOffset += int64(len(lineBytes))
+			line := string(lineBytes)
+			if w.IsPaused() {
+				continue // skip parsing and recording while paused
 			}
+			if u, ok := ParseLine(line); ok {
+				u.Project = projectName
+				w.UsageChan <- u
+				select {
+				case w.BroadcastChan <- u:
+				default:
+				}
+			}
+		} else {
+			// Partial line at EOF
+			break
+		}
+		if err != nil {
+			break
 		}
 	}
 
 	// Update offset
-	newOffset, _ := file.Seek(0, 1)
 	w.mu.Lock()
 	w.offsets[path] = newOffset
 	w.mu.Unlock()
@@ -257,18 +269,24 @@ func ParseLine(line string) (TokenUsage, bool) {
 			in := toInt(tokens["input"])
 			out := toInt(tokens["output"])
 			cached := toInt(tokens["cached"])
+			thoughts := toInt(tokens["thoughts"])
 			model := "gemini-2.5-pro"
 			if m, ok := data["model"].(string); ok {
 				model = m
 			}
-			return TokenUsage{
+			u := TokenUsage{
 				Source:       "Gemini CLI",
 				Model:        model,
 				InputTokens:  in,
-				OutputTokens: out,
+				OutputTokens: out + thoughts,
 				CachedTokens: cached,
+				Thoughts:     thoughts,
 				Timestamp:    ts,
-			}, true
+			}
+			if id, ok := data["id"].(string); ok {
+				u.UUID = id
+			}
+			return u, true
 		}
 	}
 

@@ -118,25 +118,36 @@ func (s *Scanner) scanFile(path string, usageChan chan<- watcher.TokenUsage) (in
 
 	projectName := watcher.ExtractProjectName(path)
 
-	sc := bufio.NewScanner(file)
-	sc.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
-	for sc.Scan() {
-		line := sc.Text()
-		u, ok := watcher.ParseLine(line)
-		if !ok {
-			continue
-		}
-		u.Project = projectName
-		cost, _ := s.calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens)
-		ts := u.Timestamp
-		if ts.IsZero() {
-			ts = info.ModTime()
-		}
-		e := entry{u: u, cost: cost, ts: ts}
-		if u.UUID != "" {
-			uuidMap[u.UUID] = e // overwrite = keep last
+	reader := bufio.NewReader(file)
+	newOffset := offset
+
+	for {
+		lineBytes, err := reader.ReadBytes('\n')
+		if len(lineBytes) > 0 && lineBytes[len(lineBytes)-1] == '\n' {
+			// Complete line
+			newOffset += int64(len(lineBytes))
+			line := string(lineBytes)
+			u, ok := watcher.ParseLine(line)
+			if ok {
+				u.Project = projectName
+				cost, _ := s.calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens)
+				ts := u.Timestamp
+				if ts.IsZero() {
+					ts = info.ModTime()
+				}
+				e := entry{u: u, cost: cost, ts: ts}
+				if u.UUID != "" {
+					uuidMap[u.UUID] = e // overwrite = keep last
+				} else {
+					noUUID = append(noUUID, e)
+				}
+			}
 		} else {
-			noUUID = append(noUUID, e)
+			// Partial line at EOF, don't advance offset, just break and wait for more
+			break
+		}
+		if err != nil {
+			break
 		}
 	}
 
@@ -161,8 +172,7 @@ func (s *Scanner) scanFile(path string, usageChan chan<- watcher.TokenUsage) (in
 		count++
 	}
 
-	// Update offset to current position
-	newOffset, _ := file.Seek(0, 1)
+	// Update offset to the end of the last complete line
 	s.db.SetOffset(path, newOffset)
 
 	// Cache this directory for fast startup next time
