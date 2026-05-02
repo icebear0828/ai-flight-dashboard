@@ -19,10 +19,32 @@ func SetDataDir(dir string) {
 	customDir = dir
 }
 
+func isWritable(dir string) bool {
+	testFile := filepath.Join(dir, ".writable_test")
+	f, err := os.OpenFile(testFile, os.O_WRONLY|os.O_CREATE, 0666)
+	if err != nil {
+		return false
+	}
+	f.Close()
+	os.Remove(testFile)
+	return true
+}
+
 // GetDataDir returns the application data directory.
 func GetDataDir() string {
 	if customDir != "" {
 		return customDir
+	}
+	// Default portable
+	if isWritable(".") {
+		return "."
+	}
+	// Fallback for macOS App Translocation / Read-Only environments
+	home, err := os.UserHomeDir()
+	if err == nil {
+		fallbackDir := filepath.Join(home, ".ai-flight-dashboard")
+		os.MkdirAll(fallbackDir, 0755)
+		return fallbackDir
 	}
 	return "."
 }
