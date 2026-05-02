@@ -61,7 +61,7 @@ func main() {
 	plan := flag.String("plan", "", "Subscription plan: pro, max5, max20 (only for subscription mode)")
 	budgetDaily := flag.Float64("budget-daily", 0, "Daily budget limit in USD (only for api mode, 0=disabled)")
 	syncMode := flag.String("sync-mode", "poll", "Sync mode: poll (default), fsnotify, once")
-	lanMode := flag.Bool("lan", false, "Enable UDP Multicast LAN discovery and broadcast")
+	lanMode := flag.Bool("lan", true, "Enable UDP Multicast LAN discovery and broadcast")
 	dataDir := flag.String("data-dir", "", "Data directory for database and config (default: current directory)")
 	flag.BoolVar(webMode, "w", false, "Run in web dashboard mode (shorthand)")
 	flag.StringVar(port, "p", "19100", "HTTP port for web mode (shorthand)")
