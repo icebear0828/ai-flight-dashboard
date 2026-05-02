@@ -249,7 +249,7 @@ export default function App() {
                 </thead>
                 <tbody>
                   {data.projects.map((p, i) => (
-                    <tr key={i} className="border-b-[3px] border-[#000000] last:border-b-0 hover:bg-[#000000] hover:text-[#FFFFFF] transition-none group">
+                    <tr key={p.project} className="border-b-[3px] border-[#000000] last:border-b-0 hover:bg-[#000000] hover:text-[#FFFFFF] transition-none group">
                       <td className="px-3 py-3 sm:px-4 sm:py-4 font-bold group-hover:text-[#FFFFFF] truncate max-w-[300px]" title={p.project}>{p.project}</td>
                       <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">{p.events}</td>
                       <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
