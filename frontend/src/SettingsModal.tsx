@@ -14,6 +14,7 @@ export interface PricingEntry {
 export interface AppConfig {
   auto_start: boolean;
   extra_watch_dirs: string[];
+  enable_lan?: boolean;
 }
 
 export interface DeviceInfo {
@@ -105,6 +106,10 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     const newDirs = [...(config.extra_watch_dirs || [])];
     newDirs.splice(index, 1);
     setConfig({ ...config, extra_watch_dirs: newDirs });
+  };
+
+  const handleToggleLAN = () => {
+    setConfig({ ...config, enable_lan: !(config.enable_lan !== false) });
   };
 
   const handleSaveAlias = async (deviceId: string) => {
@@ -209,6 +214,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                   editAliasName={editAliasName}
                   setEditAliasName={setEditAliasName}
                   handleSaveAlias={handleSaveAlias}
+                  handleToggleLAN={handleToggleLAN}
                 />
               )}
             </>

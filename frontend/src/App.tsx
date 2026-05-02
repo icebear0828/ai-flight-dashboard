@@ -168,7 +168,18 @@ export default function App() {
             >
               [ {i18n.language === 'zh' ? 'EN' : '中'} ]
             </button>
-            <div className="text-[#0000FF] uppercase underline decoration-[3px] underline-offset-4 cursor-pointer hover:text-[#000000] whitespace-nowrap">
+            <div 
+              onClick={() => {
+                // @ts-ignore
+                if (window.go?.desktop?.App?.OpenSystemLogs) {
+                  // @ts-ignore
+                  window.go.desktop.App.OpenSystemLogs();
+                } else {
+                  console.log("OpenSystemLogs not available in web mode");
+                }
+              }}
+              className="text-[#0000FF] uppercase underline decoration-[3px] underline-offset-4 cursor-pointer hover:text-[#000000] whitespace-nowrap"
+            >
               [ {t('systemLogs')} ]
             </div>
           </div>

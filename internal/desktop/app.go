@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
 
@@ -235,6 +236,16 @@ func (a *App) GetConfig() (*config.AppConfig, error) {
 // SaveConfig persists the app configuration.
 func (a *App) SaveConfig(cfg *config.AppConfig) error {
 	return config.SaveConfig(cfg)
+}
+
+// --- System ---
+
+// OpenSystemLogs opens the logs directory in the native file explorer.
+func (a *App) OpenSystemLogs() {
+	homeDir, _ := os.UserHomeDir()
+	logPath := filepath.Join(homeDir, ".ai-flight-dashboard", "stats")
+	// Wails BrowserOpenURL can open local directories if prefixed with file://
+	runtime.BrowserOpenURL(a.ctx, "file://"+logPath)
 }
 
 // --- Updater ---

@@ -14,6 +14,7 @@ interface SystemConfigTabProps {
   editAliasName: string;
   setEditAliasName: (name: string) => void;
   handleSaveAlias: (id: string) => void;
+  handleToggleLAN: () => void;
 }
 
 export default function SystemConfigTab({
@@ -28,10 +29,28 @@ export default function SystemConfigTab({
   editAliasName,
   setEditAliasName,
   handleSaveAlias,
+  handleToggleLAN,
 }: SystemConfigTabProps) {
   const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-8 mb-8">
+      {/* Network & Radar Section */}
+      <section>
+        <h3 className="font-display text-xl sm:text-2xl uppercase border-b-[3px] border-[#000000] pb-2 mb-4">{t('networkSettings', 'Network Settings')}</h3>
+        <div className="flex justify-between items-center border-[3px] border-[#000000] p-4 bg-[#F9F9F9]">
+          <div>
+            <div className="font-bold uppercase mb-1">{t('enableLanDiscovery', 'Enable LAN Discovery')}</div>
+            <div className="text-sm text-[#666666]">{t('enableLanDesc', 'Broadcast and receive real-time token usage across local network devices. Requires restart.')}</div>
+          </div>
+          <button
+            onClick={handleToggleLAN}
+            className={`font-bold px-4 py-2 border-[3px] border-[#000000] transition-none w-24 text-center ${config.enable_lan !== false ? 'bg-[#008000] text-[#FFFFFF]' : 'bg-[#FF0000] text-[#FFFFFF]'}`}
+          >
+            {config.enable_lan !== false ? t('on', 'ON') : t('off', 'OFF')}
+          </button>
+        </div>
+      </section>
+
       {/* Device Aliases Section */}
       <section>
         <h3 className="font-display text-xl sm:text-2xl uppercase border-b-[3px] border-[#000000] pb-2 mb-4">{t('deviceAliases')}</h3>

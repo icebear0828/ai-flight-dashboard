@@ -14,6 +14,7 @@ import (
 
 	"syscall"
 	"time"
+	goruntime "runtime"
 
 	"ai-flight-dashboard/internal/alert"
 	"ai-flight-dashboard/internal/calculator"
@@ -188,12 +189,14 @@ func main() {
 	defer w.Close()
 
 	var lanInst *lan.LAN
-	if *lanMode {
+	if *lanMode && appConfig.EnableLAN != nil && *appConfig.EnableLAN {
 		lanInst = lan.New(*deviceID)
 		fmt.Printf("📡 LAN discovery enabled. Multicast: %s\n", lan.MulticastAddr)
 		go lanInst.StartBroadcaster(w.BroadcastChan)
 		go lanInst.StartListener(w.UsageChan)
 		go lanInst.StartPinger()
+	} else {
+		fmt.Println("📡 LAN discovery is disabled in settings.")
 	}
 
 	// Fast path: register cached known directories (~1ms vs 134ms recursive)
@@ -290,6 +293,10 @@ func main() {
 		fileMenu.AddText("Quit", keys.CmdOrCtrl("q"), func(cd *menu.CallbackData) {
 			runtime.Quit(app.GetContext())
 		})
+		
+		if goos := goruntime.GOOS; goos == "darwin" {
+			appMenu.Append(menu.EditMenu())
+		}
 
 		fmt.Println("🖥️  Starting AI Flight Dashboard (GUI mode)...")
 

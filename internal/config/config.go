@@ -9,6 +9,7 @@ import (
 type AppConfig struct {
 	AutoStart      bool     `json:"auto_start"`
 	ExtraWatchDirs []string `json:"extra_watch_dirs"`
+	EnableLAN      *bool    `json:"enable_lan,omitempty"`
 }
 
 // customDir allows overriding the data directory at runtime.
@@ -56,13 +57,21 @@ func GetConfigPath() string {
 func LoadConfig() (*AppConfig, error) {
 	data, err := os.ReadFile(GetConfigPath())
 	if err != nil {
-		return &AppConfig{}, nil
+		t := true
+		return &AppConfig{EnableLAN: &t}, nil
 	}
-	var cfg AppConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return &AppConfig{}, nil
+	cfg := &AppConfig{}
+	if err := json.Unmarshal(data, cfg); err != nil {
+		t := true
+		return &AppConfig{EnableLAN: &t}, nil
 	}
-	return &cfg, nil
+
+	if cfg.EnableLAN == nil {
+		t := true
+		cfg.EnableLAN = &t
+	}
+
+	return cfg, nil
 }
 
 func SaveConfig(cfg *AppConfig) error {
