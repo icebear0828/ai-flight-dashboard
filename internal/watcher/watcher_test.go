@@ -204,3 +204,60 @@ func TestWatchDirRecursive_NewSubdir(t *testing.T) {
 		t.Fatal("Timeout: watcher did not auto-register dynamically created subdir")
 	}
 }
+
+func TestParseLine_GeminiWithThoughtsAndTool(t *testing.T) {
+	// Real Gemini CLI format with thoughts and tool tokens
+	line := `{"id":"abc-123","timestamp":"2026-05-01T02:44:45.432Z","type":"gemini","content":"hello","tokens":{"input":8864,"output":52,"cached":3000,"thoughts":576,"tool":100,"total":9592},"model":"gemini-3.1-pro-preview"}` + "\n"
+
+	u, ok := watcher.ParseLine(line)
+	if !ok {
+		t.Fatal("ParseLine should have succeeded for Gemini format")
+	}
+
+	if u.Source != "Gemini CLI" {
+		t.Errorf("Expected source 'Gemini CLI', got %q", u.Source)
+	}
+	if u.Model != "gemini-3.1-pro-preview" {
+		t.Errorf("Expected model 'gemini-3.1-pro-preview', got %q", u.Model)
+	}
+	if u.InputTokens != 8864 {
+		t.Errorf("Expected InputTokens=8864, got %d", u.InputTokens)
+	}
+	if u.CachedTokens != 3000 {
+		t.Errorf("Expected CachedTokens=3000, got %d", u.CachedTokens)
+	}
+	// OutputTokens = output + thoughts + tool = 52 + 576 + 100 = 728
+	if u.OutputTokens != 728 {
+		t.Errorf("Expected OutputTokens=728 (52+576+100), got %d", u.OutputTokens)
+	}
+	if u.Thoughts != 576 {
+		t.Errorf("Expected Thoughts=576, got %d", u.Thoughts)
+	}
+	if u.UUID != "abc-123" {
+		t.Errorf("Expected UUID 'abc-123', got %q", u.UUID)
+	}
+	if u.Timestamp.IsZero() {
+		t.Error("Expected non-zero timestamp")
+	}
+}
+
+func TestExtractProjectName_GeminiPaths(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"/Users/c/.gemini/tmp/token/chats/session-2026-05-01.jsonl", "token"},
+		{"/Users/c/.gemini/tmp/codex-proxy/chats/session-abc.jsonl", "codex-proxy"},
+		{"/Users/c/.gemini/tmp/wiki/chats/session.jsonl", "wiki"},
+		{"/Users/c/.gemini/other/something.jsonl", "Gemini"},     // fallback for non-tmp paths
+		{"/Users/c/.claude/projects/-Users-c-myapp/abc.jsonl", "myapp"},
+		{"/some/random/path/data.jsonl", "Default"},
+	}
+	for _, tt := range tests {
+		got := watcher.ExtractProjectName(tt.path)
+		if got != tt.want {
+			t.Errorf("ExtractProjectName(%q) = %q, want %q", tt.path, got, tt.want)
+		}
+	}
+}
+

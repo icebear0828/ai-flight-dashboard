@@ -270,6 +270,7 @@ func ParseLine(line string) (TokenUsage, bool) {
 			out := toInt(tokens["output"])
 			cached := toInt(tokens["cached"])
 			thoughts := toInt(tokens["thoughts"])
+			tool := toInt(tokens["tool"])
 			model := "gemini-2.5-pro"
 			if m, ok := data["model"].(string); ok {
 				model = m
@@ -278,7 +279,7 @@ func ParseLine(line string) (TokenUsage, bool) {
 				Source:       "Gemini CLI",
 				Model:        model,
 				InputTokens:  in,
-				OutputTokens: out + thoughts,
+				OutputTokens: out + thoughts + tool,
 				CachedTokens: cached,
 				Thoughts:     thoughts,
 				Timestamp:    ts,
@@ -369,6 +370,13 @@ func ExtractProjectName(path string) string {
 		return folderName
 	}
 	
+	// Gemini CLI: ~/.gemini/tmp/<project-name>/chats/session-*.jsonl
+	if parts := strings.Split(path, ".gemini/tmp/"); len(parts) > 1 {
+		segments := strings.Split(parts[1], "/")
+		if len(segments) > 0 && segments[0] != "" {
+			return segments[0]
+		}
+	}
 	if strings.Contains(path, ".gemini/") {
 		return "Gemini"
 	}
