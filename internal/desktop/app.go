@@ -71,10 +71,10 @@ func (a *App) GetStats(deviceID string) (*model.StatsResponse, error) {
 
 	var periods []model.PeriodCost
 	for _, win := range windows {
-		cost, inTok, caTok, caWTok, outTok, _ := a.database.QueryPeriodStatsSince(now.Add(-win.dur), deviceID)
+		cost, inTok, caTok, caWTok, outTok, _ := a.database.QueryPeriodStatsSince(now.Add(-win.dur), deviceID, "")
 		periods = append(periods, model.PeriodCost{Label: win.label, Cost: cost, InputTokens: inTok, CachedTokens: caTok, CacheCreationTokens: caWTok, OutputTokens: outTok})
 	}
-	total, tIn, tCa, tCaW, tOut, _ := a.database.QueryPeriodStatsAll(deviceID)
+	total, tIn, tCa, tCaW, tOut, _ := a.database.QueryPeriodStatsAll(deviceID, "")
 	periods = append(periods, model.PeriodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, CacheCreationTokens: tCaW, OutputTokens: tOut})
 
 	stats, _ := a.database.QueryStatsSince(time.Time{}, deviceID)
