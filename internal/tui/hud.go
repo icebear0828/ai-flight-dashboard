@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -82,10 +83,16 @@ func (m Model) refreshPeriods() tea.Cmd {
 
 		var periods []periodCost
 		for _, w := range windows {
-			cost, in, ca, caw, out, _ := m.database.QueryPeriodStatsSince(now.Add(-w.dur), m.watch.DeviceID, "")
+			cost, in, ca, caw, out, err := m.database.QueryPeriodStatsSince(now.Add(-w.dur), m.watch.DeviceID, "")
+			if err != nil {
+				log.Printf("TUI DB query error for %s: %v", w.label, err)
+			}
 			periods = append(periods, periodCost{Label: w.label, Cost: cost, InputTokens: in, CachedTokens: ca, CacheCreationTokens: caw, OutputTokens: out})
 		}
-		total, tIn, tCa, tCaw, tOut, _ := m.database.QueryPeriodStatsAll(m.watch.DeviceID, "")
+		total, tIn, tCa, tCaw, tOut, err := m.database.QueryPeriodStatsAll(m.watch.DeviceID, "")
+		if err != nil {
+			log.Printf("TUI DB query error for ALL: %v", err)
+		}
 		periods = append(periods, periodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, CacheCreationTokens: tCaw, OutputTokens: tOut})
 
 		return periodsMsg(periods)
