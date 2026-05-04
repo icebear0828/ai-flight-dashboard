@@ -238,6 +238,7 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *calculator.Calculator, wInst *watcher.Watcher) {
 	now := time.Now().UTC()
 	deviceID := r.URL.Query().Get("device")
+	source := r.URL.Query().Get("source") // "Claude Code", "Gemini CLI", or "" for all
 
 	windows := []struct {
 		label string
@@ -254,10 +255,10 @@ func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *
 
 	var periods []model.PeriodCost
 	for _, win := range windows {
-		cost, inTok, caTok, caWTok, outTok, _ := database.QueryPeriodStatsSince(now.Add(-win.dur), deviceID)
+		cost, inTok, caTok, caWTok, outTok, _ := database.QueryPeriodStatsSince(now.Add(-win.dur), deviceID, source)
 		periods = append(periods, model.PeriodCost{Label: win.label, Cost: cost, InputTokens: inTok, CachedTokens: caTok, CacheCreationTokens: caWTok, OutputTokens: outTok})
 	}
-	total, tIn, tCa, tCaW, tOut, _ := database.QueryPeriodStatsAll(deviceID)
+	total, tIn, tCa, tCaW, tOut, _ := database.QueryPeriodStatsAll(deviceID, source)
 	periods = append(periods, model.PeriodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, CacheCreationTokens: tCaW, OutputTokens: tOut})
 
 	// Get all-time stats grouped by model

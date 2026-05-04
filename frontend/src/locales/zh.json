@@ -55,5 +55,6 @@
   "subtotal": "小计",
   "projects": "项目统计",
   "project": "项目名称",
-  "tokens": "Tokens消耗"
+  "tokens": "Tokens消耗",
+  "total": "总计"
 }

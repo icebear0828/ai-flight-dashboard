@@ -39,7 +39,7 @@ func TestScanAll_FullScan(t *testing.T) {
 	}
 
 	// Verify DB has data
-	total, _, _, _, _, _ := database.QueryPeriodStatsAll("")
+	total, _, _, _, _, _ := database.QueryPeriodStatsAll("", "")
 	if total < 0.01 {
 		t.Errorf("expected non-zero cost, got %f", total)
 	}
@@ -105,7 +105,7 @@ func TestScanAll_GeminiFormat(t *testing.T) {
 		t.Errorf("expected 1, got %d", count)
 	}
 
-	total, _, _, _, _, _ := database.QueryPeriodStatsAll("")
+	total, _, _, _, _, _ := database.QueryPeriodStatsAll("", "")
 	if total < 0.01 {
 		t.Errorf("expected non-zero Gemini cost, got %f", total)
 	}

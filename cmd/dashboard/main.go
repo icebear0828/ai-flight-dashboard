@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -43,6 +44,19 @@ import (
 
 //go:embed pricing_table.json
 var embeddedPricing []byte
+
+func fetchDynamicPricing(url string, timeout time.Duration) ([]byte, error) {
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+}
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -135,8 +149,17 @@ func main() {
 		return
 	}
 
-	// Initialize Calculator from embedded pricing table
-	calc, err := calculator.NewFromBytes(embeddedPricing)
+	// Initialize Calculator from pricing table
+	pricingData := embeddedPricing
+	const pricingURL = "https://raw.githubusercontent.com/icebear0828/ai-flight-dashboard/main/cmd/dashboard/pricing_table.json"
+	if dynPricing, err := fetchDynamicPricing(pricingURL, 3*time.Second); err == nil {
+		fmt.Println("☁️  Successfully fetched dynamic pricing table from GitHub.")
+		pricingData = dynPricing
+	} else {
+		fmt.Printf("⚠️  Failed to fetch dynamic pricing table, using embedded version: %v\n", err)
+	}
+
+	calc, err := calculator.NewFromBytes(pricingData)
 	if err != nil {
 		log.Fatalf("Failed to initialize calculator: %v", err)
 	}

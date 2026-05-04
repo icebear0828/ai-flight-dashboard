@@ -95,7 +95,7 @@ func TestInsertUsageWithTime(t *testing.T) {
 	}
 
 	// Verify it's queryable
-	cost, _, _, _, _, err := database.QueryPeriodStatsAll("")
+	cost, _, _, _, _, err := database.QueryPeriodStatsAll("", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,25 +126,25 @@ func TestQueryCostSince(t *testing.T) {
 	database.InsertUsageWithTime(veryRecent, 3.00, now.Add(-5*time.Minute), "/c.jsonl", "dev2")
 
 	// Last 1 hour, all devices = 5.00
-	cost, _, _, _, _, _ := database.QueryPeriodStatsSince(now.Add(-1*time.Hour), "")
+	cost, _, _, _, _, _ := database.QueryPeriodStatsSince(now.Add(-1*time.Hour), "", "")
 	if cost < 4.99 || cost > 5.01 {
 		t.Errorf("last 1h all: expected ~5.00, got %f", cost)
 	}
 
 	// Last 1 hour, dev1 only = 2.00
-	cost, _, _, _, _, _ = database.QueryPeriodStatsSince(now.Add(-1*time.Hour), "dev1")
+	cost, _, _, _, _, _ = database.QueryPeriodStatsSince(now.Add(-1*time.Hour), "dev1", "")
 	if cost < 1.99 || cost > 2.01 {
 		t.Errorf("last 1h dev1: expected ~2.00, got %f", cost)
 	}
 
 	// Cumulative all = 6.00
-	cost, _, _, _, _, _ = database.QueryPeriodStatsAll("")
+	cost, _, _, _, _, _ = database.QueryPeriodStatsAll("", "")
 	if cost < 5.99 || cost > 6.01 {
 		t.Errorf("cumulative: expected ~6.00, got %f", cost)
 	}
 
 	// Cumulative dev2 = 3.00
-	cost, _, _, _, _, _ = database.QueryPeriodStatsAll("dev2")
+	cost, _, _, _, _, _ = database.QueryPeriodStatsAll("dev2", "")
 	if cost < 2.99 || cost > 3.01 {
 		t.Errorf("cumulative dev2: expected ~3.00, got %f", cost)
 	}
@@ -243,7 +243,7 @@ func TestInsertDedup(t *testing.T) {
 	}
 
 	// Should only have 1 record, not 2
-	cost, _, _, _, _, _ := database.QueryPeriodStatsAll("")
+	cost, _, _, _, _, _ := database.QueryPeriodStatsAll("", "")
 	if cost < 1.99 || cost > 2.01 {
 		t.Errorf("expected ~2.00 (upserted record), got %f (dedup failed)", cost)
 	}
@@ -263,7 +263,7 @@ func TestInsertDedup_DifferentDevices(t *testing.T) {
 	database.InsertUsageWithTime(u, 1.00, now, "/a.jsonl", "mac")
 	database.InsertUsageWithTime(u, 1.00, now, "/a.jsonl", "linux")
 
-	cost, _, _, _, _, _ := database.QueryPeriodStatsAll("")
+	cost, _, _, _, _, _ := database.QueryPeriodStatsAll("", "")
 	if cost < 1.99 || cost > 2.01 {
 		t.Errorf("expected ~2.00 (2 different devices), got %f", cost)
 	}
@@ -332,7 +332,7 @@ func TestDeduplicateExisting(t *testing.T) {
 	}
 
 	// Verify we have 3 records before dedup
-	cost, _, _, _, _, _ := database.QueryPeriodStatsAll("")
+	cost, _, _, _, _, _ := database.QueryPeriodStatsAll("", "")
 	if cost < 2.99 {
 		t.Fatalf("setup: expected ~3.00 before dedup, got %f", cost)
 	}
@@ -347,7 +347,7 @@ func TestDeduplicateExisting(t *testing.T) {
 	}
 
 	// After dedup, should be exactly 1 record
-	cost, _, _, _, _, _ = database.QueryPeriodStatsAll("")
+	cost, _, _, _, _, _ = database.QueryPeriodStatsAll("", "")
 	if cost < 0.99 || cost > 1.01 {
 		t.Errorf("expected ~1.00 after dedup, got %f", cost)
 	}

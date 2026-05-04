@@ -67,6 +67,7 @@ export default function App() {
   const { t, i18n } = useTranslation();
   const [data, setData] = useState<DashboardData | null>(null);
   const [selectedDevice, setSelectedDevice] = useState<string>("all");
+  const [selectedSource, setSelectedSource] = useState<string>("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string>("");
   
@@ -74,7 +75,9 @@ export default function App() {
     const fetchData = async () => {
       try {
         // Works in both Wails (assets handler) and standalone Web mode
-        const res = await fetch("/api/stats?device=" + selectedDevice);
+        const params = new URLSearchParams({ device: selectedDevice });
+        if (selectedSource) params.set('source', selectedSource);
+        const res = await fetch("/api/stats?" + params.toString());
         if (!res.ok) {
            throw new Error(`HTTP ${res.status}: ${await res.text()}`);
         }
@@ -89,7 +92,7 @@ export default function App() {
     fetchData();
     const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
-  }, [selectedDevice]);
+  }, [selectedDevice, selectedSource]);
 
   const togglePause = async () => {
 		try {
@@ -199,8 +202,29 @@ export default function App() {
       
       {isSettingsOpen && <SettingsModal onClose={() => setIsSettingsOpen(false)} />}
 
-      {/* PeriodCost Stats Row */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 md:gap-6 mb-12 md:mb-20">
+      {/* Source Filter Tabs + PeriodCost Stats */}
+      <section className="mb-12 md:mb-20">
+        <div className="flex items-center gap-0 mb-6">
+          {[
+            { label: t('total'), value: '' },
+            { label: 'CLAUDE', value: 'Claude Code' },
+            { label: 'GEMINI', value: 'Gemini CLI' },
+          ].map((tab) => (
+            <button
+              key={tab.value}
+              onClick={() => setSelectedSource(tab.value)}
+              className={`px-4 py-2 font-display text-sm uppercase tracking-wider border-[3px] border-[#000000] cursor-pointer transition-none -ml-[3px] first:ml-0 ${
+                selectedSource === tab.value
+                  ? 'bg-[#000000] text-[#FFFFFF]'
+                  : 'bg-[#FFFFFF] text-[#000000] hover:bg-[#F0F0F0]'
+              }`}
+              style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 md:gap-6">
         {periods.map((p: PeriodStats, i: number) => {
           const isElevated = p.label === 'ALL';
           const cardClass = `bg-[#FFFFFF] border-[#000000] rounded-none p-4 md:p-6 flex flex-col justify-between shadow-none ${isElevated ? 'border-[5px]' : 'border-[3px]'}`;
@@ -221,6 +245,7 @@ export default function App() {
             </div>
           )
         })}
+        </div>
       </section>
 
       {/* LAN Radar Component */}

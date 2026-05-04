@@ -153,7 +153,8 @@ func (d *DB) SetOffset(filePath string, offset int64) error {
 }
 
 // QueryPeriodStatsSince returns total cost and token breakdown since the given time.
-func (d *DB) QueryPeriodStatsSince(since time.Time, deviceID string) (float64, int, int, int, int, error) {
+// source filters by source column (e.g. "Claude Code", "Gemini CLI"); empty means all.
+func (d *DB) QueryPeriodStatsSince(since time.Time, deviceID string, source string) (float64, int, int, int, int, error) {
 	var cost sql.NullFloat64
 	var inTok, cacheTok, cacheCreationTok, outTok sql.NullInt64
 	query := "SELECT COALESCE(SUM(cost_usd), 0), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(cache_creation_tokens), 0), COALESCE(SUM(output_tokens), 0) FROM usage_records WHERE log_timestamp >= ?"
@@ -162,6 +163,10 @@ func (d *DB) QueryPeriodStatsSince(since time.Time, deviceID string) (float64, i
 	if deviceID != "" && deviceID != "all" {
 		query += " AND device_id = ?"
 		args = append(args, deviceID)
+	}
+	if source != "" {
+		query += " AND source = ?"
+		args = append(args, source)
 	}
 
 	err := d.conn.QueryRow(query, args...).Scan(&cost, &inTok, &cacheTok, &cacheCreationTok, &outTok)
@@ -172,7 +177,8 @@ func (d *DB) QueryPeriodStatsSince(since time.Time, deviceID string) (float64, i
 }
 
 // QueryPeriodStatsAll returns total cumulative cost and token breakdown.
-func (d *DB) QueryPeriodStatsAll(deviceID string) (float64, int, int, int, int, error) {
+// source filters by source column; empty means all.
+func (d *DB) QueryPeriodStatsAll(deviceID string, source string) (float64, int, int, int, int, error) {
 	var cost sql.NullFloat64
 	var inTok, cacheTok, cacheCreationTok, outTok sql.NullInt64
 	query := "SELECT COALESCE(SUM(cost_usd), 0), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(cache_creation_tokens), 0), COALESCE(SUM(output_tokens), 0) FROM usage_records WHERE 1=1"
@@ -181,6 +187,10 @@ func (d *DB) QueryPeriodStatsAll(deviceID string) (float64, int, int, int, int, 
 	if deviceID != "" && deviceID != "all" {
 		query += " AND device_id = ?"
 		args = append(args, deviceID)
+	}
+	if source != "" {
+		query += " AND source = ?"
+		args = append(args, source)
 	}
 
 	err := d.conn.QueryRow(query, args...).Scan(&cost, &inTok, &cacheTok, &cacheCreationTok, &outTok)
