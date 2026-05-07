@@ -23,7 +23,7 @@ func TestWatcher(t *testing.T) {
 	}
 
 	logFile := filepath.Join(tempDir, "session.jsonl")
-	
+
 	// Write a Claude log (Trigger Create event)
 	claudeLog := `{"type":"assistant", "model": "claude-3-7-sonnet-20250219", "usage": {"input_tokens": 100, "output_tokens": 50, "cache_read_input_tokens": 20}}` + "\n"
 	err = os.WriteFile(logFile, []byte(claudeLog), 0644)
@@ -249,8 +249,10 @@ func TestExtractProjectName_GeminiPaths(t *testing.T) {
 		{"/Users/c/.gemini/tmp/token/chats/session-2026-05-01.jsonl", "token"},
 		{"/Users/c/.gemini/tmp/codex-proxy/chats/session-abc.jsonl", "codex-proxy"},
 		{"/Users/c/.gemini/tmp/wiki/chats/session.jsonl", "wiki"},
-		{"/Users/c/.gemini/other/something.jsonl", "Gemini"},     // fallback for non-tmp paths
+		{"/Users/c/.gemini/other/something.jsonl", "Gemini"}, // fallback for non-tmp paths
 		{"/Users/c/.claude/projects/-Users-c-myapp/abc.jsonl", "myapp"},
+		{"/Users/alice/.claude/projects/-Users-alice-my-hyphen-app/abc.jsonl", "my-hyphen-app"},
+		{"/home/bob/.claude/projects/-home-bob-service-api/abc.jsonl", "service-api"},
 		{"/some/random/path/data.jsonl", "Default"},
 	}
 	for _, tt := range tests {
@@ -261,3 +263,21 @@ func TestExtractProjectName_GeminiPaths(t *testing.T) {
 	}
 }
 
+func TestParseLine_GeminiUsesTotalForUnknownTokenClasses(t *testing.T) {
+	line := `{"id":"abc-123","timestamp":"2026-05-01T02:44:45.432Z","type":"gemini","tokens":{"input":1000,"output":50,"cached":250,"thoughts":25,"tool":5,"total":1200},"model":"gemini-3.1-pro-preview"}` + "\n"
+
+	u, ok := watcher.ParseLine(line)
+	if !ok {
+		t.Fatal("ParseLine should have succeeded")
+	}
+
+	if u.InputTokens != 1000 {
+		t.Errorf("expected input 1000, got %d", u.InputTokens)
+	}
+	if u.CachedTokens != 250 {
+		t.Errorf("expected cached 250, got %d", u.CachedTokens)
+	}
+	if u.OutputTokens != 200 {
+		t.Errorf("expected output to reconcile to total-input=200, got %d", u.OutputTokens)
+	}
+}

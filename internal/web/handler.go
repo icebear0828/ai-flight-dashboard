@@ -171,7 +171,7 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 		if wInst != nil {
 			wInst.SetPaused(!wInst.IsPaused())
 		}
-		
+
 		isPaused := false
 		if wInst != nil {
 			isPaused = wInst.IsPaused()
@@ -262,7 +262,7 @@ func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *
 	periods = append(periods, model.PeriodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, CacheCreationTokens: tCaW, OutputTokens: tOut})
 
 	// Get all-time stats grouped by model
-	stats, _ := database.QueryStatsSince(time.Time{}, deviceID)
+	stats, _ := database.QueryStatsSince(time.Time{}, deviceID, source)
 
 	// Group by source
 	sourceMap := make(map[string]*model.SourceStats)
@@ -314,7 +314,7 @@ func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *
 		deviceInfos = append(deviceInfos, model.DeviceInfo{ID: id, DisplayName: name})
 	}
 
-	projects, _ := database.QueryProjectStatsSince(time.Time{}, deviceID)
+	projects, _ := database.QueryProjectStatsSince(time.Time{}, deviceID, source)
 
 	isPaused := false
 	if wInst != nil {
@@ -408,10 +408,18 @@ func handlePutPricing(w http.ResponseWriter, r *http.Request, calc *calculator.C
 
 	customPrices := make(map[string]calculator.ModelPrice)
 	for _, e := range entries {
-		if e.InputPricePerM < 0 { e.InputPricePerM = 0 }
-		if e.CachedPricePerM < 0 { e.CachedPricePerM = 0 }
-		if e.CacheCreationPricePerM < 0 { e.CacheCreationPricePerM = 0 }
-		if e.OutputPricePerM < 0 { e.OutputPricePerM = 0 }
+		if e.InputPricePerM < 0 {
+			e.InputPricePerM = 0
+		}
+		if e.CachedPricePerM < 0 {
+			e.CachedPricePerM = 0
+		}
+		if e.CacheCreationPricePerM < 0 {
+			e.CacheCreationPricePerM = 0
+		}
+		if e.OutputPricePerM < 0 {
+			e.OutputPricePerM = 0
+		}
 
 		customPrices[e.Model] = calculator.ModelPrice{
 			InputPricePerM:         e.InputPricePerM,
@@ -430,7 +438,7 @@ func handlePutPricing(w http.ResponseWriter, r *http.Request, calc *calculator.C
 
 	configDir := filepath.Join(home, ".ai-flight-dashboard")
 	os.MkdirAll(configDir, 0755)
-	
+
 	// Load existing first to merge, so we don't lose other custom models
 	existingCustomPrices := make(map[string]calculator.ModelPrice)
 	customPricingPath := filepath.Join(configDir, "custom_pricing.json")
@@ -440,11 +448,11 @@ func handlePutPricing(w http.ResponseWriter, r *http.Request, calc *calculator.C
 			return
 		}
 	}
-	
+
 	for k, v := range customPrices {
 		existingCustomPrices[k] = v
 	}
-	
+
 	data, err := json.MarshalIndent(existingCustomPrices, "", "  ")
 	if err != nil {
 		http.Error(w, "Failed to marshal pricing data", http.StatusInternalServerError)
@@ -478,7 +486,7 @@ func handlePutConfig(w http.ResponseWriter, r *http.Request, wInst *watcher.Watc
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
-	
+
 	oldCfg, _ := config.LoadConfig()
 
 	if err := config.SaveConfig(&cfg); err != nil {

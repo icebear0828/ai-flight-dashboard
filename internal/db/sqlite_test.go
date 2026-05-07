@@ -172,7 +172,7 @@ func TestQueryStatsSince(t *testing.T) {
 		0.80, now.Add(-1*time.Minute), "/c.jsonl", "local",
 	)
 
-	stats, err := database.QueryStatsSince(now.Add(-1*time.Hour), "")
+	stats, err := database.QueryStatsSince(now.Add(-1*time.Hour), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,6 +190,40 @@ func TestQueryStatsSince(t *testing.T) {
 	}
 	if stats[0].Events != 2 {
 		t.Errorf("expected 2 events, got %d", stats[0].Events)
+	}
+}
+
+func TestQueryStatsSourceFilters(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	now := time.Now().UTC()
+	database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", Project: "api", InputTokens: 1000, OutputTokens: 200},
+		1.50, now, "/claude.jsonl", "local",
+	)
+	database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Codex", Model: "gpt-5.5", Project: "dashboard", InputTokens: 2000, CachedTokens: 1500, OutputTokens: 300},
+		2.50, now, "/codex.sqlite", "local",
+	)
+
+	stats, err := database.QueryStatsSince(time.Time{}, "", "Codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 || stats[0].Source != "Codex" || stats[0].Model != "gpt-5.5" {
+		t.Fatalf("expected only Codex model stats, got %+v", stats)
+	}
+
+	projects, err := database.QueryProjectStatsSince(time.Time{}, "", "Codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].Project != "dashboard" {
+		t.Fatalf("expected only Codex project stats, got %+v", projects)
 	}
 }
 
@@ -352,4 +386,3 @@ func TestDeduplicateExisting(t *testing.T) {
 		t.Errorf("expected ~1.00 after dedup, got %f", cost)
 	}
 }
-

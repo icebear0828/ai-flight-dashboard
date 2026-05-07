@@ -26,6 +26,12 @@ const PricingJSON = `{
       "cached_price_per_m": 0.31,
       "cache_creation_price_per_m": 4.5,
       "output_price_per_m": 5
+    },
+    "gpt-5.5": {
+      "input_price_per_m": 5,
+      "cached_price_per_m": 0.5,
+      "cache_creation_price_per_m": 5,
+      "output_price_per_m": 30
     }
   }
 }`

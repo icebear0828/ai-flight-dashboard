@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -37,7 +38,7 @@ func New(deviceID string) (*Watcher, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	w := &Watcher{
 		fw:            fw,
 		offsets:       make(map[string]int64),
@@ -47,7 +48,7 @@ func New(deviceID string) (*Watcher, error) {
 		recursiveDirs: make(map[string]bool),
 		DeviceID:      deviceID,
 	}
-	
+
 	go w.listen()
 	return w, nil
 }
@@ -176,7 +177,7 @@ func (w *Watcher) processFile(path string) {
 	if err != nil {
 		return
 	}
-	
+
 	if info.Size() < offset {
 		// file truncated or rotated
 		offset = 0
@@ -262,7 +263,7 @@ func ParseLine(line string) (TokenUsage, bool) {
 			return u, true
 		}
 	}
-	
+
 	// Gemini log check
 	if t, ok := data["type"].(string); ok && t == "gemini" {
 		if tokens, ok := data["tokens"].(map[string]interface{}); ok {
@@ -271,6 +272,13 @@ func ParseLine(line string) (TokenUsage, bool) {
 			cached := toInt(tokens["cached"])
 			thoughts := toInt(tokens["thoughts"])
 			tool := toInt(tokens["tool"])
+			total := toInt(tokens["total"])
+			outputTotal := out + thoughts + tool
+			if total > in+outputTotal {
+				// Gemini CLI's total is authoritative when it includes token classes
+				// newer than this parser knows about.
+				outputTotal = total - in
+			}
 			model := "gemini-2.5-pro"
 			if m, ok := data["model"].(string); ok {
 				model = m
@@ -279,7 +287,7 @@ func ParseLine(line string) (TokenUsage, bool) {
 				Source:       "Gemini CLI",
 				Model:        model,
 				InputTokens:  in,
-				OutputTokens: out + thoughts + tool,
+				OutputTokens: outputTotal,
 				CachedTokens: cached,
 				Thoughts:     thoughts,
 				Timestamp:    ts,
@@ -361,15 +369,9 @@ func ExtractProjectName(path string) string {
 	parts := strings.Split(path, ".claude/projects/")
 	if len(parts) > 1 {
 		folderName := strings.Split(parts[1], "/")[0]
-		if strings.HasPrefix(folderName, "-Users-c-") {
-			return folderName[9:]
-		}
-		if strings.HasPrefix(folderName, "Users-c-") {
-			return folderName[8:]
-		}
-		return folderName
+		return normalizeClaudeProjectFolder(folderName)
 	}
-	
+
 	// Gemini CLI: ~/.gemini/tmp/<project-name>/chats/session-*.jsonl
 	if parts := strings.Split(path, ".gemini/tmp/"); len(parts) > 1 {
 		segments := strings.Split(parts[1], "/")
@@ -382,4 +384,39 @@ func ExtractProjectName(path string) string {
 	}
 
 	return "Default"
+}
+
+func ExtractProjectNameFromCWD(cwd string) string {
+	if cwd == "" {
+		return "Default"
+	}
+	clean := filepath.Clean(cwd)
+	base := filepath.Base(clean)
+	if base == "." || base == string(filepath.Separator) {
+		return "Default"
+	}
+	return base
+}
+
+func normalizeClaudeProjectFolder(folderName string) string {
+	if folderName == "" {
+		return "Default"
+	}
+	if !strings.HasPrefix(folderName, "-") {
+		return folderName
+	}
+
+	trimmed := strings.TrimPrefix(folderName, "-")
+	segments := strings.Split(trimmed, "-")
+	if len(segments) >= 3 {
+		switch segments[0] {
+		case "Users", "home":
+			return strings.Join(segments[2:], "-")
+		}
+		if runtime.GOOS == "windows" && len(segments) >= 4 && strings.HasSuffix(segments[0], ":") && segments[1] == "Users" {
+			return strings.Join(segments[3:], "-")
+		}
+	}
+
+	return trimmed
 }

@@ -209,6 +209,7 @@ export default function App() {
             { label: t('total'), value: '' },
             { label: 'CLAUDE', value: 'Claude Code' },
             { label: 'GEMINI', value: 'Gemini CLI' },
+            { label: 'CODEX', value: 'Codex' },
           ].map((tab) => (
             <button
               key={tab.value}

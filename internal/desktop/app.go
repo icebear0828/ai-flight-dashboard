@@ -84,7 +84,7 @@ func (a *App) GetStats(deviceID string) (*model.StatsResponse, error) {
 	}
 	periods = append(periods, model.PeriodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, CacheCreationTokens: tCaW, OutputTokens: tOut})
 
-	stats, _ := a.database.QueryStatsSince(time.Time{}, deviceID)
+	stats, _ := a.database.QueryStatsSince(time.Time{}, deviceID, "")
 
 	sourceMap := make(map[string]*model.SourceStats)
 	for _, s := range stats {
@@ -134,7 +134,7 @@ func (a *App) GetStats(deviceID string) (*model.StatsResponse, error) {
 		deviceInfos = append(deviceInfos, model.DeviceInfo{ID: id, DisplayName: name})
 	}
 
-	projects, _ := a.database.QueryProjectStatsSince(time.Time{}, deviceID)
+	projects, _ := a.database.QueryProjectStatsSince(time.Time{}, deviceID, "")
 
 	return &model.StatsResponse{
 		Periods:  periods,
@@ -198,8 +198,8 @@ func (a *App) SetDeviceAlias(deviceID, displayName string) error {
 // --- Pricing Management (Phase 2) ---
 
 type PricingEntry struct {
-	Model          string  `json:"model"`
-	InputPricePerM float64 `json:"input_price_per_m"`
+	Model           string  `json:"model"`
+	InputPricePerM  float64 `json:"input_price_per_m"`
 	CachedPricePerM float64 `json:"cached_price_per_m"`
 	OutputPricePerM float64 `json:"output_price_per_m"`
 }
@@ -211,8 +211,8 @@ func (a *App) GetPricing() ([]PricingEntry, error) {
 	for _, m := range models {
 		price, _ := a.calc.GetModelPrice(m)
 		entries = append(entries, PricingEntry{
-			Model:          m,
-			InputPricePerM: price.InputPricePerM,
+			Model:           m,
+			InputPricePerM:  price.InputPricePerM,
 			CachedPricePerM: price.CachedPricePerM,
 			OutputPricePerM: price.OutputPricePerM,
 		})
@@ -292,4 +292,3 @@ func (a *App) ApplyUpdate() error {
 
 	return nil
 }
-

@@ -4,8 +4,8 @@ import (
 	"database/sql"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"ai-flight-dashboard/internal/model"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 type DB struct {
@@ -13,14 +13,14 @@ type DB struct {
 }
 
 type ModelStat struct {
-	Model      string
-	Source     string
-	Events     int
+	Model               string
+	Source              string
+	Events              int
 	InputTokens         int
 	CachedTokens        int
 	CacheCreationTokens int
 	OutputTokens        int
-	TotalCost  float64
+	TotalCost           float64
 }
 
 func New(dsn string) (*DB, error) {
@@ -114,13 +114,20 @@ func (d *DB) InsertUsageWithTime(u model.TokenUsage, cost float64, logTS time.Ti
 		INSERT INTO usage_records (uuid, log_timestamp, source, model, project, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd, file_path, device_id)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(uuid) WHERE uuid IS NOT NULL AND uuid != '' DO UPDATE SET
+			source = excluded.source,
+			model = excluded.model,
 			log_timestamp = excluded.log_timestamp,
 			project = excluded.project,
 			input_tokens = excluded.input_tokens,
 			cached_tokens = excluded.cached_tokens,
 			cache_creation_tokens = excluded.cache_creation_tokens,
 			output_tokens = excluded.output_tokens,
-			cost_usd = excluded.cost_usd
+			cost_usd = excluded.cost_usd,
+			file_path = CASE
+				WHEN excluded.file_path != '' THEN excluded.file_path
+				ELSE usage_records.file_path
+			END,
+			device_id = excluded.device_id
 		`
 		_, err := d.conn.Exec(query, u.UUID, logTS.Format(time.RFC3339), u.Source, u.Model, u.Project, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens, cost, filePath, deviceID)
 		return err
@@ -159,7 +166,7 @@ func (d *DB) QueryPeriodStatsSince(since time.Time, deviceID string, source stri
 	var inTok, cacheTok, cacheCreationTok, outTok sql.NullInt64
 	query := "SELECT COALESCE(SUM(cost_usd), 0), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(cache_creation_tokens), 0), COALESCE(SUM(output_tokens), 0) FROM usage_records WHERE log_timestamp >= ?"
 	args := []interface{}{since.Format(time.RFC3339)}
-	
+
 	if deviceID != "" && deviceID != "all" {
 		query += " AND device_id = ?"
 		args = append(args, deviceID)
@@ -201,7 +208,7 @@ func (d *DB) QueryPeriodStatsAll(deviceID string, source string) (float64, int, 
 }
 
 // QueryStatsSince returns per-model stats since the given time, sorted by cost descending.
-func (d *DB) QueryStatsSince(since time.Time, deviceID string) ([]ModelStat, error) {
+func (d *DB) QueryStatsSince(since time.Time, deviceID string, source string) ([]ModelStat, error) {
 	query := `
 		SELECT source, model, COUNT(*) as events,
 			SUM(input_tokens), SUM(cached_tokens), SUM(cache_creation_tokens), SUM(output_tokens),
@@ -214,6 +221,10 @@ func (d *DB) QueryStatsSince(since time.Time, deviceID string) ([]ModelStat, err
 	if deviceID != "" && deviceID != "all" {
 		query += " AND device_id = ?"
 		args = append(args, deviceID)
+	}
+	if source != "" {
+		query += " AND source = ?"
+		args = append(args, source)
 	}
 
 	query += `
@@ -240,7 +251,7 @@ func (d *DB) QueryStatsSince(since time.Time, deviceID string) ([]ModelStat, err
 }
 
 // QueryProjectStatsSince returns per-project stats since the given time.
-func (d *DB) QueryProjectStatsSince(since time.Time, deviceID string) ([]model.ProjectStat, error) {
+func (d *DB) QueryProjectStatsSince(since time.Time, deviceID string, source string) ([]model.ProjectStat, error) {
 	query := `
 		SELECT COALESCE(project, 'Default') as project, COUNT(*) as events,
 			SUM(input_tokens), SUM(cached_tokens), SUM(cache_creation_tokens), SUM(output_tokens),
@@ -253,6 +264,10 @@ func (d *DB) QueryProjectStatsSince(since time.Time, deviceID string) ([]model.P
 	if deviceID != "" && deviceID != "all" {
 		query += " AND device_id = ?"
 		args = append(args, deviceID)
+	}
+	if source != "" {
+		query += " AND source = ?"
+		args = append(args, source)
 	}
 
 	query += `
@@ -339,7 +354,7 @@ func (d *DB) QueryUsageRecords(since time.Time, deviceID string) ([]UsageRecord,
 func (d *DB) QuerySyncRecordsSince(since time.Time) ([]model.SyncRecord, error) {
 	query := `SELECT uuid, log_timestamp, source, model, project, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd, file_path, device_id
 		FROM usage_records WHERE log_timestamp >= ?`
-	
+
 	rows, err := d.conn.Query(query, since.Format(time.RFC3339))
 	if err != nil {
 		return nil, err
@@ -351,11 +366,11 @@ func (d *DB) QuerySyncRecordsSince(since time.Time) ([]model.SyncRecord, error) 
 		var r model.SyncRecord
 		var logTsStr string
 		var uuidStr sql.NullString
-		
+
 		if err := rows.Scan(&uuidStr, &logTsStr, &r.Source, &r.Model, &r.Project, &r.InputTokens, &r.CachedTokens, &r.CacheCreationTokens, &r.OutputTokens, &r.CostUSD, &r.FilePath, &r.DeviceID); err != nil {
 			return nil, err
 		}
-		
+
 		r.UUID = uuidStr.String
 		if t, err := time.Parse(time.RFC3339, logTsStr); err == nil {
 			r.Timestamp = t
@@ -413,6 +428,65 @@ func (d *DB) ListKnownFiles() ([]string, error) {
 		files = append(files, p)
 	}
 	return files, rows.Err()
+}
+
+// BackfillProjectsFromFilePaths recalculates Default project names for records
+// that still have their originating log path.
+func (d *DB) BackfillProjectsFromFilePaths(extractProject func(string) string) (int64, error) {
+	rows, err := d.conn.Query("SELECT id, file_path FROM usage_records WHERE file_path != '' AND (project IS NULL OR project = '' OR project = 'Default')")
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	type update struct {
+		id      int64
+		project string
+	}
+	var updates []update
+	for rows.Next() {
+		var id int64
+		var filePath string
+		if err := rows.Scan(&id, &filePath); err != nil {
+			return 0, err
+		}
+		project := extractProject(filePath)
+		if project != "" && project != "Default" {
+			updates = append(updates, update{id: id, project: project})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if len(updates) == 0 {
+		return 0, nil
+	}
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return 0, err
+	}
+	stmt, err := tx.Prepare("UPDATE usage_records SET project = ? WHERE id = ?")
+	if err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	defer stmt.Close()
+
+	var changed int64
+	for _, u := range updates {
+		result, err := stmt.Exec(u.project, u.id)
+		if err != nil {
+			tx.Rollback()
+			return changed, err
+		}
+		n, _ := result.RowsAffected()
+		changed += n
+	}
+	if err := tx.Commit(); err != nil {
+		return changed, err
+	}
+	return changed, nil
 }
 
 // DeduplicateExisting removes duplicate usage records, keeping the one with the lowest rowid.

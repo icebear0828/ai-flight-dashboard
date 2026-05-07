@@ -14,12 +14,13 @@ import (
 	"path/filepath"
 	"strconv"
 
+	goruntime "runtime"
 	"syscall"
 	"time"
-	goruntime "runtime"
 
 	"ai-flight-dashboard/internal/alert"
 	"ai-flight-dashboard/internal/calculator"
+	"ai-flight-dashboard/internal/codexusage"
 	"ai-flight-dashboard/internal/config"
 	"ai-flight-dashboard/internal/db"
 	"ai-flight-dashboard/internal/desktop"
@@ -127,7 +128,7 @@ func main() {
 	// Forwarder Mode
 	if *forwardTo != "" {
 		fmt.Printf("🚀 Starting forwarder mode. Device: %s, Target: %s\n", *deviceID, *forwardTo)
-		
+
 		w, err := watcher.New(*deviceID)
 		if err != nil {
 			log.Fatalf("Failed to initialize watcher: %v", err)
@@ -163,7 +164,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize calculator: %v", err)
 	}
-	
+
 	home, _ := os.UserHomeDir()
 	customPricingPath := filepath.Join(home, ".ai-flight-dashboard", "custom_pricing.json")
 	if err := calc.LoadCustomPrices(customPricingPath); err != nil {
@@ -177,13 +178,18 @@ func main() {
 	appDataDir := config.GetDataDir()
 	statsDir := filepath.Join(appDataDir, "stats")
 	os.MkdirAll(statsDir, 0755)
-	
+
 	dbPath := filepath.Join(statsDir, "usage.db")
 	database, err := db.New(dbPath)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	defer database.Close()
+	if n, err := database.BackfillProjectsFromFilePaths(watcher.ExtractProjectName); err != nil {
+		log.Printf("Failed to backfill project names: %v", err)
+	} else if n > 0 {
+		fmt.Printf("🧭 Backfilled project names for %d existing records.\n", n)
+	}
 
 	// Collect scan directories
 	var scanDirs []string
@@ -238,7 +244,9 @@ func main() {
 	// Background: full scan + discover new directories
 	go func() {
 		s := scanner.New(database, calc, *deviceID)
+		codexScanner := codexusage.New(database, calc, *deviceID)
 		s.ScanAll(scanDirs, w.UsageChan) // incremental; auto-caches new dirs to known_dirs
+		codexScanner.Scan(w.UsageChan)
 
 		if *syncMode == "fsnotify" {
 			if len(knownDirs) == 0 {
@@ -250,6 +258,18 @@ func main() {
 				// Subsequent runs: pick up any newly discovered dirs
 				newDirs, _ := database.ListKnownDirs()
 				w.WatchKnownDirs(newDirs)
+			}
+			codexTicker := time.NewTicker(30 * time.Second)
+			defer codexTicker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-codexTicker.C:
+					if !w.IsPaused() {
+						codexScanner.Scan(w.UsageChan)
+					}
+				}
 			}
 		} else if *syncMode == "poll" {
 			fastTicker := time.NewTicker(2 * time.Second)
@@ -263,6 +283,7 @@ func main() {
 				case <-fastTicker.C:
 					if !w.IsPaused() {
 						s.ScanKnownFiles(w.UsageChan)
+						codexScanner.Scan(w.UsageChan)
 					}
 				case <-slowTicker.C:
 					if !w.IsPaused() {
@@ -286,17 +307,17 @@ func main() {
 						return
 					}
 					isLocal := (u.DeviceID == "" || u.DeviceID == *deviceID)
-					
+
 					// If it's a remote packet from LAN, ALWAYS save it regardless of syncMode
 					// If it's a local packet, ONLY save it if fsnotify (poll mode saves it directly in ScanAll)
 					if !isLocal || *syncMode == "fsnotify" {
 						cost, _ := calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens)
-						
+
 						effectiveDevice := u.DeviceID
 						if effectiveDevice == "" {
 							effectiveDevice = *deviceID
 						}
-						
+
 						database.InsertUsage(u, cost, effectiveDevice)
 					}
 				}
@@ -319,7 +340,7 @@ func main() {
 		fileMenu.AddText("Quit", keys.CmdOrCtrl("q"), func(cd *menu.CallbackData) {
 			runtime.Quit(app.GetContext())
 		})
-		
+
 		if goos := goruntime.GOOS; goos == "darwin" {
 			appMenu.Append(menu.EditMenu())
 		}
@@ -342,7 +363,7 @@ func main() {
 			MinWidth:  900,
 			MinHeight: 600,
 			SingleInstanceLock: &options.SingleInstanceLock{
-				UniqueId:               "ai-flight-dashboard",
+				UniqueId: "ai-flight-dashboard",
 				OnSecondInstanceLaunch: func(secondInstanceData options.SecondInstanceData) {
 					// Wails handles focusing the primary window automatically
 				},
@@ -478,4 +499,3 @@ func runDedup() {
 	}
 	fmt.Printf("✅ Removed %d duplicate records\n", removed)
 }
-
