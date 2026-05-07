@@ -111,6 +111,45 @@ func TestScanAll_GeminiFormat(t *testing.T) {
 	}
 }
 
+func TestScanAll_ProjectPrefersClaudeCWDOverFolderFallback(t *testing.T) {
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
+
+	logDir := t.TempDir()
+	projectDir := filepath.Join(logDir, "projects", "-Users-john-doe-my-hyphen-app")
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	logFile := filepath.Join(projectDir, "session-abc.jsonl")
+	metadata := `{"type":"system","cwd":"/Users/john-doe/my-hyphen-app"}` + "\n"
+	content := fmt.Sprintf(
+		`{"uuid":"abc","timestamp":"%s","message":{"model":"claude-opus-4-7","type":"message","role":"assistant","content":[],"usage":{"input_tokens":1000,"cache_read_input_tokens":0,"output_tokens":200}}}`,
+		ts,
+	) + "\n"
+	if err := os.WriteFile(logFile, []byte(metadata+content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := scanner.New(database, calc, "test-device")
+	count, err := s.ScanAll([]string{logDir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 record scanned, got %d", count)
+	}
+
+	projects, err := database.QueryProjectStatsSince(time.Time{}, "", "Claude Code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].Project != "my-hyphen-app" {
+		t.Fatalf("expected cwd-derived project my-hyphen-app, got %+v", projects)
+	}
+}
+
 func TestScanAll_SkipsNonUsageLines(t *testing.T) {
 	database := testutil.NewTestDB(t)
 	calc := testutil.NewTestCalc(t)

@@ -159,6 +159,16 @@ func (d *DB) SetOffset(filePath string, offset int64) error {
 	return err
 }
 
+// ResetOffsetsLike resets scan offsets matching a SQL LIKE pattern so files are
+// re-read by the incremental scanner. UUID/upsert dedup keeps the rescan safe.
+func (d *DB) ResetOffsetsLike(pattern string) (int64, error) {
+	result, err := d.conn.Exec("UPDATE scan_offsets SET byte_offset = 0 WHERE file_path LIKE ?", pattern)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 // QueryPeriodStatsSince returns total cost and token breakdown since the given time.
 // source filters by source column (e.g. "Claude Code", "Gemini CLI"); empty means all.
 func (d *DB) QueryPeriodStatsSince(since time.Time, deviceID string, source string) (float64, int, int, int, int, error) {
