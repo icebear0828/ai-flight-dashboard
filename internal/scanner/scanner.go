@@ -2,6 +2,9 @@ package scanner
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,17 +28,33 @@ func New(database *db.DB, calc *calculator.Calculator, deviceID string) *Scanner
 // ScanAll walks all dirs, finds .jsonl files, reads from last offset, parses usage, inserts into DB.
 // Returns the number of new usage records inserted.
 func (s *Scanner) ScanAll(dirs []string, usageChan chan<- watcher.TokenUsage) (int, error) {
+	return s.scanAll(dirs, usageChan, false)
+}
+
+// ScanAllStrict is used by repair flows where silently skipping a replay file
+// could leave repaired history incomplete.
+func (s *Scanner) ScanAllStrict(dirs []string, usageChan chan<- watcher.TokenUsage) (int, error) {
+	return s.scanAll(dirs, usageChan, true)
+}
+
+func (s *Scanner) scanAll(dirs []string, usageChan chan<- watcher.TokenUsage, strict bool) (int, error) {
 	total := 0
 	for _, dir := range dirs {
 		err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
+				if strict {
+					return err
+				}
 				return nil // skip inaccessible
 			}
 			if d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
 				return nil
 			}
-			n, err := s.scanFile(path, usageChan)
+			n, err := s.scanFile(path, usageChan, strict)
 			if err != nil {
+				if strict {
+					return err
+				}
 				return nil // skip broken files, don't abort scan
 			}
 			total += n
@@ -73,13 +92,13 @@ func (s *Scanner) ScanKnownFiles(usageChan chan<- watcher.TokenUsage) (int, erro
 			continue
 		}
 
-		n, _ := s.scanFile(path, usageChan)
+		n, _ := s.scanFile(path, usageChan, false)
 		total += n
 	}
 	return total, nil
 }
 
-func (s *Scanner) scanFile(path string, usageChan chan<- watcher.TokenUsage) (int, error) {
+func (s *Scanner) scanFile(path string, usageChan chan<- watcher.TokenUsage, processPartialEOF bool) (int, error) {
 	offset, err := s.db.GetOffset(path)
 	if err != nil {
 		return 0, err
@@ -124,8 +143,10 @@ func (s *Scanner) scanFile(path string, usageChan chan<- watcher.TokenUsage) (in
 
 	for {
 		lineBytes, err := reader.ReadBytes('\n')
-		if len(lineBytes) > 0 && lineBytes[len(lineBytes)-1] == '\n' {
-			// Complete line
+		completeLine := len(lineBytes) > 0 && lineBytes[len(lineBytes)-1] == '\n'
+		partialEOF := processPartialEOF && len(lineBytes) > 0 && err == io.EOF
+		if completeLine || partialEOF {
+			lineStartOffset := newOffset
 			newOffset += int64(len(lineBytes))
 			line := string(lineBytes)
 			if project := watcher.ExtractProjectNameFromLine(line); project != "" {
@@ -134,6 +155,9 @@ func (s *Scanner) scanFile(path string, usageChan chan<- watcher.TokenUsage) (in
 			u, ok := watcher.ParseLine(line)
 			if ok {
 				u = watcher.WithProjectFallback(u, currentProject)
+				if u.Source == "Gemini CLI" && u.UUID == "" {
+					u.UUID = stableGeminiUUID(s.DeviceID, path, lineStartOffset)
+				}
 				cost, _ := s.calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens)
 				ts := u.Timestamp
 				if ts.IsZero() {
@@ -159,7 +183,7 @@ func (s *Scanner) scanFile(path string, usageChan chan<- watcher.TokenUsage) (in
 	count := 0
 	for _, e := range uuidMap {
 		if err := s.db.InsertUsageWithTime(e.u, e.cost, e.ts, path, s.DeviceID); err != nil {
-			continue
+			return count, err
 		}
 		if usageChan != nil {
 			usageChan <- e.u
@@ -168,7 +192,7 @@ func (s *Scanner) scanFile(path string, usageChan chan<- watcher.TokenUsage) (in
 	}
 	for _, e := range noUUID {
 		if err := s.db.InsertUsageWithTime(e.u, e.cost, e.ts, path, s.DeviceID); err != nil {
-			continue
+			return count, err
 		}
 		if usageChan != nil {
 			usageChan <- e.u
@@ -176,11 +200,21 @@ func (s *Scanner) scanFile(path string, usageChan chan<- watcher.TokenUsage) (in
 		count++
 	}
 
-	// Update offset to the end of the last complete line
-	s.db.SetOffset(path, newOffset)
-
 	// Cache this directory for fast startup next time
-	s.db.UpsertKnownDir(filepath.Dir(path))
+	if err := s.db.UpsertKnownDir(filepath.Dir(path)); err != nil {
+		return count, err
+	}
+
+	// Update offset to the end of the last complete line only after inserts succeed.
+	if err := s.db.SetOffset(path, newOffset); err != nil {
+		return count, err
+	}
 
 	return count, nil
+}
+
+func stableGeminiUUID(deviceID string, path string, lineStartOffset int64) string {
+	deviceHash := sha256.Sum256([]byte(deviceID))
+	pathHash := sha256.Sum256([]byte(filepath.ToSlash(path)))
+	return fmt.Sprintf("gemini:%x:%x:%d", deviceHash[:8], pathHash[:16], lineStartOffset)
 }

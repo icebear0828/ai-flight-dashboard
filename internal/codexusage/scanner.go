@@ -19,7 +19,7 @@ import (
 
 const (
 	SourceName = "Codex"
-	offsetKey  = "codex:logs_2.sqlite:id"
+	OffsetKey  = "codex:logs_2.sqlite:id"
 )
 
 var metricPattern = regexp.MustCompile(`([A-Za-z_.]+)=("[^"]*"|\S+)`)
@@ -45,6 +45,7 @@ type codexEvent struct {
 	input        int
 	cached       int
 	output       int
+	reasoning    int
 }
 
 func New(database *db.DB, calc *calculator.Calculator, deviceID string) *Scanner {
@@ -81,7 +82,7 @@ func (s *Scanner) Scan(usageChan chan<- watcher.TokenUsage) (int, error) {
 		return 0, err
 	}
 
-	offset, err := s.db.GetOffset(offsetKey)
+	offset, err := s.db.GetOffset(OffsetKey)
 	if err != nil {
 		return 0, err
 	}
@@ -97,6 +98,7 @@ func (s *Scanner) Scan(usageChan chan<- watcher.TokenUsage) (int, error) {
 		FROM logs
 		WHERE id > ?
 			AND target = 'codex_otel.log_only'
+			AND feedback_log_body LIKE 'event.name=%codex.sse_event%'
 			AND feedback_log_body LIKE '%event.kind=response.completed%'
 			AND feedback_log_body LIKE '%input_token_count=%'
 		ORDER BY id ASC
@@ -143,6 +145,7 @@ func (s *Scanner) Scan(usageChan chan<- watcher.TokenUsage) (int, error) {
 			InputTokens:  event.input,
 			CachedTokens: event.cached,
 			OutputTokens: event.output,
+			Thoughts:     event.reasoning,
 			Timestamp:    event.ts,
 			UUID:         fmt.Sprintf("codex:%d", event.logID),
 		}
@@ -162,7 +165,7 @@ func (s *Scanner) Scan(usageChan chan<- watcher.TokenUsage) (int, error) {
 		return count, err
 	}
 	if maxOffset > offset {
-		if err := s.db.SetOffset(offsetKey, maxOffset); err != nil {
+		if err := s.db.SetOffset(OffsetKey, maxOffset); err != nil {
 			return count, err
 		}
 	}
@@ -198,6 +201,7 @@ func parseCodexEvent(logID int64, tsSec int64, tsNanos int64, body string) (code
 	input := parseIntField(fields, "input_token_count")
 	output := parseIntField(fields, "output_token_count")
 	cached := parseIntField(fields, "cached_token_count")
+	reasoning := parseIntField(fields, "reasoning_token_count")
 	conversation := fields["conversation.id"]
 	if conversation == "" || input == 0 && output == 0 && cached == 0 {
 		return codexEvent{}, false
@@ -218,6 +222,7 @@ func parseCodexEvent(logID int64, tsSec int64, tsNanos int64, body string) (code
 		input:        input,
 		cached:       cached,
 		output:       output,
+		reasoning:    reasoning,
 	}, true
 }
 

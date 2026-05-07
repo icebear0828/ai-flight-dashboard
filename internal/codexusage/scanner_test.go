@@ -23,6 +23,7 @@ func TestScanImportsCodexTelemetryEvents(t *testing.T) {
 	createCodexLogs(t, logsPath)
 
 	insertThread(t, statePath, "thread-1", "gpt-5.5", "/Users/c/token")
+	insertLog(t, logsPath, 9, `session_loop{thread_id=thread-1}: event.name="codex.tool_result" event.kind=response.completed input_token_count=999 output_token_count=999 cached_token_count=999 event.timestamp=2026-05-07T11:13:02.000Z conversation.id=thread-1 model=gpt-5.5`)
 	insertLog(t, logsPath, 10, `event.name="codex.sse_event" event.kind=response.completed duration_ms=178 event.timestamp=2026-05-07T11:13:03.315Z conversation.id=thread-1 model=gpt-5.5`)
 	insertLog(t, logsPath, 11, `event.name="codex.sse_event" event.kind=response.completed input_token_count=115541 output_token_count=713 cached_token_count=49024 reasoning_token_count=261 tool_token_count=116254 event.timestamp=2026-05-07T11:13:03.316Z conversation.id=thread-1 model=gpt-5.5 slug=gpt-5.5`)
 	insertLog(t, logsPath, 12, `event.name="codex.sse_event" event.kind=response.completed input_token_count=999 output_token_count=1 cached_token_count=0 event.timestamp=2026-05-07T11:13:05.000Z conversation.id=missing-thread model=gpt-5.5`)

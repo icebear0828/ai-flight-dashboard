@@ -5,9 +5,6 @@ import (
 	"fmt"
 	"io"
 	"strconv"
-	"time"
-
-	"ai-flight-dashboard/internal/model"
 )
 
 var csvHeader = []string{
@@ -21,14 +18,14 @@ var csvHeader = []string{
 // Returns the number of rows written.
 func (d *DB) ExportCSV(w io.Writer, deviceID string) (int, error) {
 	query := `SELECT log_timestamp, source, model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd, file_path, device_id
-		FROM usage_records WHERE 1=1`
+		FROM usage_records WHERE ` + activeUsagePredicate
 	var args []interface{}
 
 	if deviceID != "" && deviceID != "all" {
 		query += " AND device_id = ?"
 		args = append(args, deviceID)
 	}
-	query += " ORDER BY log_timestamp"
+	query += " ORDER BY julianday(log_timestamp), id"
 
 	rows, err := d.conn.Query(query, args...)
 	if err != nil {
@@ -105,36 +102,17 @@ func (d *DB) ImportCSV(r io.Reader) (int, int, error) {
 		filePath := record[colIdx["file_path"]]
 		devID := record[colIdx["device_id"]]
 
-		// Parse timestamp for proper formatting
-		ts, terr := time.Parse(time.RFC3339, logTS)
-		if terr != nil {
-			ts, terr = time.Parse("2006-01-02T15:04:05Z", logTS)
-		}
-		if terr != nil {
-			// Use raw string as-is
-			ts = time.Time{}
-		}
-
-		u := model.TokenUsage{
-			Source:              source,
-			Model:               mdl,
-			InputTokens:         inTok,
-			CachedTokens:        cacheTok,
-			CacheCreationTokens: cacheCreationTok,
-			OutputTokens:        outTok,
-		}
-
-		var tsStr string
-		if ts.IsZero() {
-			tsStr = logTS
-		} else {
-			tsStr = ts.Format(time.RFC3339)
+		// Parse timestamp for canonical formatting.
+		tsStr := logTS
+		ts, terr := parseLogTimestamp(logTS)
+		if terr == nil {
+			tsStr = formatLogTimestamp(ts)
 		}
 
 		query := `INSERT OR IGNORE INTO usage_records
 			(log_timestamp, source, model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd, file_path, device_id)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-		result, err := d.conn.Exec(query, tsStr, u.Source, u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens, cost, filePath, devID)
+		result, err := d.conn.Exec(query, tsStr, source, mdl, inTok, cacheTok, cacheCreationTok, outTok, cost, filePath, devID)
 		if err != nil {
 			return imported, skipped, fmt.Errorf("insert row %d: %w", imported+skipped+1, err)
 		}
