@@ -241,6 +241,37 @@ func TestParseLine_GeminiWithThoughtsAndTool(t *testing.T) {
 	}
 }
 
+func TestParseLine_ClaudeUsesCWDProject(t *testing.T) {
+	line := `{"uuid":"abc","cwd":"/Users/john-doe/my-hyphen-app","timestamp":"2026-05-01T02:44:45Z","message":{"model":"claude-sonnet-4-6","type":"message","role":"assistant","usage":{"input_tokens":100,"output_tokens":20}}}` + "\n"
+
+	u, ok := watcher.ParseLine(line)
+	if !ok {
+		t.Fatal("ParseLine should have succeeded")
+	}
+
+	if u.Project != "my-hyphen-app" {
+		t.Errorf("expected cwd-derived project my-hyphen-app, got %q", u.Project)
+	}
+}
+
+func TestWithProjectFallbackDoesNotOverrideMetadataProject(t *testing.T) {
+	u := watcher.TokenUsage{Project: "my-hyphen-app"}
+	u = watcher.WithProjectFallback(u, "doe-my-hyphen-app")
+
+	if u.Project != "my-hyphen-app" {
+		t.Errorf("fallback overwrote metadata project: got %q", u.Project)
+	}
+}
+
+func TestExtractProjectNameFromLineReadsNonUsageCWD(t *testing.T) {
+	line := `{"type":"system","cwd":"/Users/john-doe/my-hyphen-app"}` + "\n"
+
+	got := watcher.ExtractProjectNameFromLine(line)
+	if got != "my-hyphen-app" {
+		t.Errorf("expected cwd-derived project my-hyphen-app, got %q", got)
+	}
+}
+
 func TestExtractProjectName_GeminiPaths(t *testing.T) {
 	tests := []struct {
 		path string
@@ -251,8 +282,15 @@ func TestExtractProjectName_GeminiPaths(t *testing.T) {
 		{"/Users/c/.gemini/tmp/wiki/chats/session.jsonl", "wiki"},
 		{"/Users/c/.gemini/other/something.jsonl", "Gemini"}, // fallback for non-tmp paths
 		{"/Users/c/.claude/projects/-Users-c-myapp/abc.jsonl", "myapp"},
+		{"/Users/c/.claude/projects/-Users-c/abc.jsonl", "c"},
+		{"/Users/c/.claude/projects/Users-c-antigravity-proxy/abc.jsonl", "antigravity-proxy"},
 		{"/Users/alice/.claude/projects/-Users-alice-my-hyphen-app/abc.jsonl", "my-hyphen-app"},
+		{"/Users/alice/.claude/projects/-Users-alice/abc.jsonl", "alice"},
+		{"/Users/runner/.claude/projects/-Users-runner-service-api/abc.jsonl", "service-api"},
 		{"/home/bob/.claude/projects/-home-bob-service-api/abc.jsonl", "service-api"},
+		{"/home/bob/.claude/projects/-home-bob/abc.jsonl", "bob"},
+		{`C:\Users\alice\.claude\projects\C:-Users-alice-windows-app\abc.jsonl`, "windows-app"},
+		{`C:\Users\alice\.claude\projects\C:-Users-alice\abc.jsonl`, "alice"},
 		{"/some/random/path/data.jsonl", "Default"},
 	}
 	for _, tt := range tests {
@@ -260,6 +298,31 @@ func TestExtractProjectName_GeminiPaths(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("ExtractProjectName(%q) = %q, want %q", tt.path, got, tt.want)
 		}
+	}
+}
+
+func TestExtractProjectName_GeminiUsesProjectRootFile(t *testing.T) {
+	tempDir := t.TempDir()
+	projectDir := filepath.Join(tempDir, ".gemini", "tmp", "encoded-folder")
+	chatsDir := filepath.Join(projectDir, "chats")
+	if err := os.MkdirAll(chatsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, ".project_root"), []byte("/Users/alice/wiki-token\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	logFile := filepath.Join(chatsDir, "session.jsonl")
+	got := watcher.ExtractProjectName(logFile)
+	if got != "wiki-token" {
+		t.Errorf("expected project_root-derived project wiki-token, got %q", got)
+	}
+}
+
+func TestExtractProjectNameFromCWD_NormalizesWindowsPath(t *testing.T) {
+	got := watcher.ExtractProjectNameFromCWD(`C:\Users\john-doe\my-hyphen-app\`)
+	if got != "my-hyphen-app" {
+		t.Errorf("expected Windows cwd base my-hyphen-app, got %q", got)
 	}
 }
 

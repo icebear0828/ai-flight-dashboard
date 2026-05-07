@@ -190,6 +190,40 @@ func main() {
 	} else if n > 0 {
 		fmt.Printf("🧭 Backfilled project names for %d existing records.\n", n)
 	}
+	const projectMetadataMigrationKey = "migration:project-metadata-v2"
+	if done, err := database.GetOffset(projectMetadataMigrationKey); err == nil && done == 0 {
+		var queued int64
+		for _, pattern := range []string{
+			"%/.claude/projects/%",
+			"%\\.claude\\projects\\%",
+			"%/.gemini/tmp/%",
+			"%\\.gemini\\tmp\\%",
+		} {
+			n, err := database.ResetOffsetsLike(pattern)
+			if err != nil {
+				log.Printf("Failed to reset project metadata scan offsets for %q: %v", pattern, err)
+				continue
+			}
+			queued += n
+		}
+		if queued > 0 {
+			fmt.Printf("🧭 Queued %d log files for project metadata backfill.\n", queued)
+		}
+		if err := database.SetOffset(projectMetadataMigrationKey, 1); err != nil {
+			log.Printf("Failed to mark project metadata migration complete: %v", err)
+		}
+	}
+	const geminiParserMigrationKey = "migration:gemini-parser-v2"
+	if done, err := database.GetOffset(geminiParserMigrationKey); err == nil && done == 0 {
+		if n, err := database.ResetOffsetsLike("%/.gemini/tmp/%"); err != nil {
+			log.Printf("Failed to reset Gemini scan offsets: %v", err)
+		} else if n > 0 {
+			fmt.Printf("🧭 Queued %d Gemini log files for parser backfill.\n", n)
+		}
+		if err := database.SetOffset(geminiParserMigrationKey, 1); err != nil {
+			log.Printf("Failed to mark Gemini parser migration complete: %v", err)
+		}
+	}
 
 	// Collect scan directories
 	var scanDirs []string

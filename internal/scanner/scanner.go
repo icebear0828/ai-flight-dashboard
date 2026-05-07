@@ -55,7 +55,7 @@ func (s *Scanner) ScanKnownFiles(usageChan chan<- watcher.TokenUsage) (int, erro
 	if err != nil {
 		return 0, err
 	}
-	
+
 	total := 0
 	for _, path := range files {
 		// Only check if it exists and hasn't shrunk/disappeared
@@ -63,7 +63,7 @@ func (s *Scanner) ScanKnownFiles(usageChan chan<- watcher.TokenUsage) (int, erro
 		if err != nil {
 			continue // skip broken files
 		}
-		
+
 		// Optimization: Check offset here to avoid opening file if no new data
 		offset, err := s.db.GetOffset(path)
 		if err != nil {
@@ -72,7 +72,7 @@ func (s *Scanner) ScanKnownFiles(usageChan chan<- watcher.TokenUsage) (int, erro
 		if info.Size() == offset {
 			continue
 		}
-		
+
 		n, _ := s.scanFile(path, usageChan)
 		total += n
 	}
@@ -113,10 +113,11 @@ func (s *Scanner) scanFile(path string, usageChan chan<- watcher.TokenUsage) (in
 		cost float64
 		ts   time.Time
 	}
-	uuidMap := make(map[string]entry)  // uuid -> last entry
-	var noUUID []entry                  // entries without uuid
+	uuidMap := make(map[string]entry) // uuid -> last entry
+	var noUUID []entry                // entries without uuid
 
 	projectName := watcher.ExtractProjectName(path)
+	currentProject := projectName
 
 	reader := bufio.NewReader(file)
 	newOffset := offset
@@ -127,9 +128,12 @@ func (s *Scanner) scanFile(path string, usageChan chan<- watcher.TokenUsage) (in
 			// Complete line
 			newOffset += int64(len(lineBytes))
 			line := string(lineBytes)
+			if project := watcher.ExtractProjectNameFromLine(line); project != "" {
+				currentProject = project
+			}
 			u, ok := watcher.ParseLine(line)
 			if ok {
-				u.Project = projectName
+				u = watcher.WithProjectFallback(u, currentProject)
 				cost, _ := s.calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens)
 				ts := u.Timestamp
 				if ts.IsZero() {

@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	pathpkg "path"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -189,6 +189,7 @@ func (w *Watcher) processFile(path string) {
 	}
 
 	projectName := ExtractProjectName(path)
+	currentProject := projectName
 
 	reader := bufio.NewReader(file)
 	newOffset := offset
@@ -199,11 +200,14 @@ func (w *Watcher) processFile(path string) {
 			// Complete line
 			newOffset += int64(len(lineBytes))
 			line := string(lineBytes)
+			if project := ExtractProjectNameFromLine(line); project != "" {
+				currentProject = project
+			}
 			if w.IsPaused() {
 				continue // skip parsing and recording while paused
 			}
 			if u, ok := ParseLine(line); ok {
-				u.Project = projectName
+				u = WithProjectFallback(u, currentProject)
 				w.UsageChan <- u
 				select {
 				case w.BroadcastChan <- u:
@@ -247,6 +251,7 @@ func ParseLine(line string) (TokenUsage, bool) {
 					ts = parseTimestamp(msg)
 				}
 				u.Timestamp = ts
+				applyProjectFromCWD(&u, data, msg)
 				if uuid, ok := data["uuid"].(string); ok {
 					u.UUID = uuid
 				}
@@ -260,6 +265,7 @@ func ParseLine(line string) (TokenUsage, bool) {
 		if usage, ok := data["usage"].(map[string]interface{}); ok {
 			u := parseClaudeUsage(data, usage)
 			u.Timestamp = ts
+			applyProjectFromCWD(&u, data)
 			return u, true
 		}
 	}
@@ -292,6 +298,7 @@ func ParseLine(line string) (TokenUsage, bool) {
 				Thoughts:     thoughts,
 				Timestamp:    ts,
 			}
+			applyProjectFromCWD(&u, data)
 			if id, ok := data["id"].(string); ok {
 				u.UUID = id
 			}
@@ -326,6 +333,26 @@ func parseClaudeUsage(container map[string]interface{}, usage map[string]interfa
 		CachedTokens:        cached,
 		CacheCreationTokens: cacheCreation,
 	}
+}
+
+func applyProjectFromCWD(u *TokenUsage, containers ...map[string]interface{}) {
+	project := projectNameFromCWDFields(containers...)
+	if project != "" {
+		u.Project = project
+	}
+}
+
+// WithProjectFallback fills Project only when the parsed log did not provide
+// reliable metadata. Folder names are a fallback because some CLIs encode path
+// separators and hyphens identically.
+func WithProjectFallback(u TokenUsage, fallback string) TokenUsage {
+	if u.Project == "" || u.Project == "Default" {
+		u.Project = fallback
+	}
+	if u.Project == "" {
+		u.Project = "Default"
+	}
+	return u
 }
 
 // isNoiseRecord filters out synthetic/empty model records
@@ -364,8 +391,25 @@ func toInt(v interface{}) int {
 	return 0
 }
 
+// ExtractProjectNameFromLine returns a cwd-derived project from any JSONL row.
+// It is used to carry project metadata from non-usage rows to later usage rows
+// in the same file.
+func ExtractProjectNameFromLine(line string) string {
+	var data map[string]interface{}
+	if err := json.Unmarshal([]byte(line), &data); err != nil {
+		return ""
+	}
+
+	containers := []map[string]interface{}{data}
+	if msg, ok := data["message"].(map[string]interface{}); ok {
+		containers = append(containers, msg)
+	}
+	return projectNameFromCWDFields(containers...)
+}
+
 func ExtractProjectName(path string) string {
 	path = filepath.ToSlash(path) // Normalize to forward slashes for Windows support
+	path = strings.ReplaceAll(path, "\\", "/")
 	parts := strings.Split(path, ".claude/projects/")
 	if len(parts) > 1 {
 		folderName := strings.Split(parts[1], "/")[0]
@@ -376,6 +420,9 @@ func ExtractProjectName(path string) string {
 	if parts := strings.Split(path, ".gemini/tmp/"); len(parts) > 1 {
 		segments := strings.Split(parts[1], "/")
 		if len(segments) > 0 && segments[0] != "" {
+			if project := geminiProjectFromRootFile(path, segments[0]); project != "" {
+				return project
+			}
 			return segments[0]
 		}
 	}
@@ -387,36 +434,78 @@ func ExtractProjectName(path string) string {
 }
 
 func ExtractProjectNameFromCWD(cwd string) string {
+	cwd = strings.TrimSpace(cwd)
 	if cwd == "" {
 		return "Default"
 	}
-	clean := filepath.Clean(cwd)
-	base := filepath.Base(clean)
-	if base == "." || base == string(filepath.Separator) {
+	normalized := strings.ReplaceAll(filepath.ToSlash(cwd), "\\", "/")
+	clean := pathpkg.Clean(normalized)
+	base := pathpkg.Base(clean)
+	if base == "." || base == "/" || strings.HasSuffix(base, ":") {
 		return "Default"
 	}
 	return base
+}
+
+func projectNameFromCWDFields(containers ...map[string]interface{}) string {
+	for _, container := range containers {
+		cwd, ok := container["cwd"].(string)
+		if !ok || strings.TrimSpace(cwd) == "" {
+			continue
+		}
+		project := ExtractProjectNameFromCWD(cwd)
+		if project != "" && project != "Default" {
+			return project
+		}
+	}
+	return ""
+}
+
+func geminiProjectFromRootFile(filePath string, tmpProject string) string {
+	normalized := strings.ReplaceAll(filepath.ToSlash(filePath), "\\", "/")
+	parts := strings.Split(normalized, ".gemini/tmp/")
+	if len(parts) < 2 {
+		return ""
+	}
+	prefix := parts[0] + ".gemini/tmp/" + tmpProject
+	rootFile := filepath.FromSlash(prefix + "/.project_root")
+	data, err := os.ReadFile(rootFile)
+	if err != nil {
+		return ""
+	}
+	project := ExtractProjectNameFromCWD(string(data))
+	if project == "Default" {
+		return ""
+	}
+	return project
 }
 
 func normalizeClaudeProjectFolder(folderName string) string {
 	if folderName == "" {
 		return "Default"
 	}
-	if !strings.HasPrefix(folderName, "-") {
+	trimmed := strings.TrimPrefix(folderName, "-")
+	segments := strings.Split(trimmed, "-")
+	if len(segments) < 2 {
 		return folderName
 	}
 
-	trimmed := strings.TrimPrefix(folderName, "-")
-	segments := strings.Split(trimmed, "-")
-	if len(segments) >= 3 {
-		switch segments[0] {
-		case "Users", "home":
-			return strings.Join(segments[2:], "-")
+	switch segments[0] {
+	case "Users", "home":
+		if len(segments) == 2 {
+			return segments[1]
 		}
-		if runtime.GOOS == "windows" && len(segments) >= 4 && strings.HasSuffix(segments[0], ":") && segments[1] == "Users" {
-			return strings.Join(segments[3:], "-")
+		return strings.Join(segments[2:], "-")
+	default:
+		if strings.HasSuffix(segments[0], ":") && segments[1] == "Users" {
+			if len(segments) == 3 {
+				return segments[2]
+			}
+			if len(segments) > 3 {
+				return strings.Join(segments[3:], "-")
+			}
 		}
 	}
 
-	return trimmed
+	return folderName
 }

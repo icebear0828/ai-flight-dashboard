@@ -227,6 +227,37 @@ func TestQueryStatsSourceFilters(t *testing.T) {
 	}
 }
 
+func TestResetOffsetsLike(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	database.SetOffset("/Users/c/.gemini/tmp/wiki/chats/session.jsonl", 100)
+	database.SetOffset("/Users/c/.claude/projects/-Users-c-token/session.jsonl", 200)
+
+	changed, err := database.ResetOffsetsLike("%/.gemini/tmp/%")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed != 1 {
+		t.Fatalf("expected 1 reset offset, got %d", changed)
+	}
+
+	geminiOffset, err := database.GetOffset("/Users/c/.gemini/tmp/wiki/chats/session.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeOffset, err := database.GetOffset("/Users/c/.claude/projects/-Users-c-token/session.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if geminiOffset != 0 || claudeOffset != 200 {
+		t.Fatalf("unexpected offsets: gemini=%d claude=%d", geminiOffset, claudeOffset)
+	}
+}
+
 func TestQueryDevices(t *testing.T) {
 	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
