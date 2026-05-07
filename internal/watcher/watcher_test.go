@@ -3,6 +3,7 @@ package watcher_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,6 +63,9 @@ func TestWatcher(t *testing.T) {
 		}
 		if usage.InputTokens != 200 || usage.OutputTokens != 150 || usage.CachedTokens != 50 {
 			t.Errorf("Tokens parsed incorrectly: %+v", usage)
+		}
+		if !strings.HasPrefix(usage.UUID, "gemini:") {
+			t.Errorf("Expected stable Gemini UUID, got %q", usage.UUID)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Timeout waiting for second watcher event (Gemini)")

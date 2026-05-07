@@ -380,15 +380,22 @@ func (l *LAN) syncWithPeer(id string, peer PeerInfo, database *db.DB, token stri
 	if resp.StatusCode == http.StatusOK {
 		var records []model.SyncRecord
 		if err := json.NewDecoder(resp.Body).Decode(&records); err == nil {
+			var maxUpdatedAt time.Time
 			for _, r := range records {
-				// InsertUsageWithTime handles UPSERT.
-				// r.TokenUsage already has the data. We pass r.DeviceID to preserve the original device.
-				if err := database.InsertUsageWithTime(r.TokenUsage, r.CostUSD, r.Timestamp, r.FilePath, r.DeviceID); err != nil {
+				if err := database.UpsertSyncRecord(r); err != nil {
 					log.Printf("LAN sync DB insert error for device %s: %v", r.DeviceID, err)
 				}
+				if r.UpdatedAt.After(maxUpdatedAt) {
+					maxUpdatedAt = r.UpdatedAt
+				}
 			}
-			// Only update lastSync if we successfully reached them
-			lastSync[id] = time.Now()
+			// Keep a small overlap so clock skew and same-second updates cannot
+			// strand repaired historical rows on peers.
+			if maxUpdatedAt.IsZero() {
+				lastSync[id] = time.Now().UTC().Add(-5 * time.Minute)
+			} else {
+				lastSync[id] = maxUpdatedAt.Add(-1 * time.Second)
+			}
 		}
 	}
 }

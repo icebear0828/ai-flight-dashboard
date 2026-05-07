@@ -2,8 +2,6 @@ package scanner
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -147,16 +145,16 @@ func (s *Scanner) scanFile(path string, usageChan chan<- watcher.TokenUsage, pro
 		partialEOF := processPartialEOF && len(lineBytes) > 0 && err == io.EOF
 		if completeLine || partialEOF {
 			lineStartOffset := newOffset
-			newOffset += int64(len(lineBytes))
 			line := string(lineBytes)
 			if project := watcher.ExtractProjectNameFromLine(line); project != "" {
 				currentProject = project
 			}
 			u, ok := watcher.ParseLine(line)
 			if ok {
+				newOffset += int64(len(lineBytes))
 				u = watcher.WithProjectFallback(u, currentProject)
 				if u.Source == "Gemini CLI" && u.UUID == "" {
-					u.UUID = stableGeminiUUID(s.DeviceID, path, lineStartOffset)
+					u.UUID = watcher.StableGeminiUUID(s.DeviceID, path, lineStartOffset)
 				}
 				cost, _ := s.calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens)
 				ts := u.Timestamp
@@ -169,6 +167,8 @@ func (s *Scanner) scanFile(path string, usageChan chan<- watcher.TokenUsage, pro
 				} else {
 					noUUID = append(noUUID, e)
 				}
+			} else if completeLine {
+				newOffset += int64(len(lineBytes))
 			}
 		} else {
 			// Partial line at EOF, don't advance offset, just break and wait for more
@@ -211,10 +211,4 @@ func (s *Scanner) scanFile(path string, usageChan chan<- watcher.TokenUsage, pro
 	}
 
 	return count, nil
-}
-
-func stableGeminiUUID(deviceID string, path string, lineStartOffset int64) string {
-	deviceHash := sha256.Sum256([]byte(deviceID))
-	pathHash := sha256.Sum256([]byte(filepath.ToSlash(path)))
-	return fmt.Sprintf("gemini:%x:%x:%d", deviceHash[:8], pathHash[:16], lineStartOffset)
 }

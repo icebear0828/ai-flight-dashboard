@@ -206,6 +206,62 @@ func TestScanAllStrictProcessesFinalLineWithoutTrailingNewline(t *testing.T) {
 	}
 }
 
+func TestScanAllStrictDoesNotAdvanceInvalidPartialEOF(t *testing.T) {
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
+
+	logDir := t.TempDir()
+	logFile := filepath.Join(logDir, "session.jsonl")
+	complete := `{"timestamp":"2026-05-07T11:13:03.316Z","type":"gemini","tokens":{"input":1000,"output":50,"cached":250},"model":"gemini-3.1-pro-preview"}` + "\n"
+	partial := `{"timestamp":"2026-05-07T11:13:04.316Z","type":"gemini"`
+	if err := os.WriteFile(logFile, []byte(complete+partial), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := scanner.New(database, calc, "local")
+	count, err := s.ScanAllStrict([]string{logDir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected strict scan to import only complete row, got %d", count)
+	}
+	offset, err := database.GetOffset(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if offset != int64(len(complete)) {
+		t.Fatalf("expected offset to stop before invalid partial EOF, got %d want %d", offset, len(complete))
+	}
+
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`,"tokens":{"input":2000,"output":75,"cached":300},"model":"gemini-3.1-pro-preview"}` + "\n"); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	count, err = s.ScanAll([]string{logDir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected completed partial row to import later, got %d", count)
+	}
+	stats, err := database.QueryStatsSince(time.Time{}, "", "Gemini CLI")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 || stats[0].Events != 2 || stats[0].InputTokens != 3000 {
+		t.Fatalf("expected both rows after partial completion, got %+v", stats)
+	}
+}
+
 func TestScanAll_ProjectPrefersClaudeCWDOverFolderFallback(t *testing.T) {
 	database := testutil.NewTestDB(t)
 	calc := testutil.NewTestCalc(t)
