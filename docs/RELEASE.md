@@ -14,4 +14,6 @@ The `Tag Release` workflow validates that:
 - `main` HEAD is not already release-tagged,
 - the `Test` workflow passed for the exact `main` commit being tagged.
 
-Pushing the tag triggers the `Release` workflow. During release builds, Wails `productVersion` is derived from the tag and written into both Wails config files before packaging.
+The `Tag Release` workflow pushes the tag, then explicitly dispatches the `Release` workflow at that tag. Manual user-created `vX.Y.Z` tag pushes also trigger `Release`.
+
+During release builds, Wails `productVersion` is derived from the tag and written into both Wails config files before packaging.
