@@ -152,3 +152,33 @@ func TestSyncWithPeerFollowsPagination(t *testing.T) {
 		t.Fatalf("expected both pages to sync, got input=%d output=%d", input, output)
 	}
 }
+
+func TestSyncWithPeerAcceptsLegacyArrayResponse(t *testing.T) {
+	database, _ := testutil.NewTestDBAndCalc(t)
+	defer database.Close()
+
+	now := time.Now().UTC()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]model.SyncRecord{{
+			TokenUsage: model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 400, OutputTokens: 40, Timestamp: now, UUID: "legacy-array-1"},
+			CostUSD:    4.00,
+			DeviceID:   "remote",
+			UpdatedAt:  now,
+		}})
+	}))
+	defer server.Close()
+
+	l := New("local", 19100)
+	peer := testPeerFromServerURL(t, server.URL)
+	l.RecordPeer(peer.ID, peer.IP, peer.HTTPPort)
+	l.syncWithPeer(peer.ID, peer, database, "", map[string]syncCursor{})
+
+	_, input, _, _, output, err := database.QueryPeriodStatsAll("remote", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input != 400 || output != 40 {
+		t.Fatalf("expected legacy array response to sync, got input=%d output=%d", input, output)
+	}
+}

@@ -3,6 +3,7 @@ package lan
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -454,13 +455,23 @@ func (l *LAN) syncWithPeer(id string, peer PeerInfo, database *db.DB, token stri
 			return
 		}
 
-		var page model.SyncPullResponse
-		if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
-			resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
 			l.updatePeerSyncResult(id, "error", err.Error(), time.Time{})
 			return
 		}
-		resp.Body.Close()
+
+		var page model.SyncPullResponse
+		if err := json.Unmarshal(body, &page); err != nil {
+			var legacyRecords []model.SyncRecord
+			if legacyErr := json.Unmarshal(body, &legacyRecords); legacyErr != nil {
+				l.updatePeerSyncResult(id, "error", err.Error(), time.Time{})
+				return
+			}
+			page.Records = legacyRecords
+			page.HasMore = false
+		}
 
 		for _, r := range page.Records {
 			if err := database.UpsertSyncRecord(r); err != nil {

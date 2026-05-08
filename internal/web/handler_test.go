@@ -319,11 +319,13 @@ func TestSyncPullPaginates(t *testing.T) {
 		}
 	}
 
-	handler := web.NewHandler(database, calc, nil, nil, "", emptyFS)
+	handler := web.NewHandler(database, calc, nil, nil, "secret-token", emptyFS)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/sync/pull?limit=1")
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/sync/pull?limit=1", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +339,9 @@ func TestSyncPullPaginates(t *testing.T) {
 	}
 
 	nextURL := srv.URL + "/api/sync/pull?limit=1&since=" + first.NextUpdatedAt.Format(time.RFC3339Nano) + "&after_id=" + strconv.FormatInt(first.NextAfterID, 10)
-	resp, err = http.Get(nextURL)
+	req, _ = http.NewRequest(http.MethodGet, nextURL, nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,5 +381,23 @@ func TestLANHandlerExposesOnlySyncSurface(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected authorized sync pull, got %d", resp.StatusCode)
+	}
+}
+
+func TestSyncPullRequiresToken(t *testing.T) {
+	database, calc := testutil.NewTestDBAndCalc(t)
+	defer database.Close()
+
+	handler := web.NewHandler(database, calc, nil, nil, "", emptyFS)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/sync/pull")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected sync pull to require token, got %d", resp.StatusCode)
 	}
 }

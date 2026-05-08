@@ -292,8 +292,12 @@ func main() {
 
 	var lanInst *lan.LAN
 	if *lanMode && appConfig.EnableLAN != nil && *appConfig.EnableLAN {
-		portInt, _ := strconv.Atoi(*port)
-		lanInst = lan.New(*deviceID, portInt)
+		if *token == "" {
+			fmt.Println("📡 LAN discovery is disabled: --token or DASHBOARD_TOKEN is required for authenticated sync.")
+		} else {
+			portInt, _ := strconv.Atoi(*port)
+			lanInst = lan.New(*deviceID, portInt)
+		}
 	} else {
 		fmt.Println("📡 LAN discovery is disabled in settings.")
 	}

@@ -39,6 +39,16 @@ func authMiddleware(token string, next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func syncAuthMiddleware(token string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if token == "" {
+			http.Error(w, "LAN sync token required", http.StatusUnauthorized)
+			return
+		}
+		authMiddleware(token, next)(w, r)
+	}
+}
+
 // NewLANHandler exposes only the endpoints needed by LAN peers.
 func NewLANHandler(database *db.DB, token string) http.Handler {
 	mux := http.NewServeMux()
@@ -49,7 +59,7 @@ func NewLANHandler(database *db.DB, token string) http.Handler {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/api/sync/pull", authMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/sync/pull", syncAuthMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
 		handleSyncPull(w, r, database)
 	}))
 	return mux
@@ -184,7 +194,7 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	mux.HandleFunc("/api/sync/pull", authMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/sync/pull", syncAuthMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
 		handleSyncPull(w, r, database)
 	}))
 

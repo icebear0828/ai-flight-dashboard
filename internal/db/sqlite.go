@@ -179,8 +179,15 @@ func (d *DB) InsertUsageWithTime(u model.TokenUsage, cost float64, logTS time.Ti
 }
 
 func (d *DB) insertUsageWithTime(u model.TokenUsage, cost float64, logTS time.Time, filePath string, deviceID string, superseded bool) error {
+	return d.insertUsageWithTimeUpdatedAt(u, cost, logTS, filePath, deviceID, time.Now().UTC(), superseded)
+}
+
+func (d *DB) insertUsageWithTimeUpdatedAt(u model.TokenUsage, cost float64, logTS time.Time, filePath string, deviceID string, updatedAtTS time.Time, superseded bool) error {
+	if updatedAtTS.IsZero() {
+		updatedAtTS = time.Now().UTC()
+	}
 	logTimestamp := formatLogTimestamp(logTS)
-	updatedAt := formatLogTimestamp(time.Now().UTC())
+	updatedAt := formatLogTimestamp(updatedAtTS)
 	supersededValue := 0
 	if superseded {
 		supersededValue = 1
@@ -228,18 +235,22 @@ func (d *DB) UpsertSyncRecord(r model.SyncRecord) error {
 	}
 	u := r.TokenUsage
 	u.DeviceID = deviceID
+	updatedAt := r.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = time.Now().UTC()
+	}
 	if r.Superseded {
 		if u.UUID != "" {
-			return d.insertUsageWithTime(u, r.CostUSD, u.Timestamp, r.FilePath, deviceID, true)
+			return d.insertUsageWithTimeUpdatedAt(u, r.CostUSD, u.Timestamp, r.FilePath, deviceID, updatedAt, true)
 		}
-		return d.supersedeOrInsertLegacySyncRecord(u, r.CostUSD, r.FilePath, deviceID)
+		return d.supersedeOrInsertLegacySyncRecord(u, r.CostUSD, r.FilePath, deviceID, updatedAt)
 	}
-	return d.InsertUsageWithTime(u, r.CostUSD, u.Timestamp, r.FilePath, deviceID)
+	return d.insertUsageWithTimeUpdatedAt(u, r.CostUSD, u.Timestamp, r.FilePath, deviceID, updatedAt, false)
 }
 
-func (d *DB) supersedeOrInsertLegacySyncRecord(u model.TokenUsage, cost float64, filePath string, deviceID string) error {
+func (d *DB) supersedeOrInsertLegacySyncRecord(u model.TokenUsage, cost float64, filePath string, deviceID string, updatedAtTS time.Time) error {
 	logTimestamp := formatLogTimestamp(u.Timestamp)
-	updatedAt := formatLogTimestamp(time.Now().UTC())
+	updatedAt := formatLogTimestamp(updatedAtTS)
 	result, err := d.conn.Exec(`UPDATE usage_records SET superseded = 1, updated_at = ?
 		WHERE log_timestamp = ? AND source = ? AND model = ? AND input_tokens = ? AND cached_tokens = ?
 			AND cache_creation_tokens = ? AND output_tokens = ? AND file_path = ?
@@ -254,7 +265,7 @@ func (d *DB) supersedeOrInsertLegacySyncRecord(u model.TokenUsage, cost float64,
 	} else if changed > 0 {
 		return nil
 	}
-	return d.insertUsageWithTime(u, cost, u.Timestamp, filePath, deviceID, true)
+	return d.insertUsageWithTimeUpdatedAt(u, cost, u.Timestamp, filePath, deviceID, updatedAtTS, true)
 }
 
 func formatLogTimestamp(ts time.Time) string {

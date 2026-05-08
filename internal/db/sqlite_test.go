@@ -788,6 +788,45 @@ func TestQuerySyncRecordsPageUsesCursor(t *testing.T) {
 	}
 }
 
+func TestUpsertSyncRecordPreservesRemoteUpdatedAt(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "peer.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	logTS := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	remoteUpdatedAt := time.Date(2026, 5, 2, 13, 0, 0, 0, time.UTC)
+	record := model.SyncRecord{
+		TokenUsage: model.TokenUsage{
+			Source:       "Claude Code",
+			Model:        "claude-opus-4-7",
+			InputTokens:  100,
+			OutputTokens: 10,
+			Timestamp:    logTS,
+			UUID:         "preserve-updated-at",
+		},
+		CostUSD:   1.00,
+		FilePath:  "/remote.jsonl",
+		DeviceID:  "remote",
+		UpdatedAt: remoteUpdatedAt,
+	}
+	if err := database.UpsertSyncRecord(record); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := database.QuerySyncRecordsPage(time.Time{}, 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Records) != 1 {
+		t.Fatalf("expected one sync record, got %+v", page)
+	}
+	if !page.Records[0].UpdatedAt.Equal(remoteUpdatedAt) {
+		t.Fatalf("expected remote updated_at %s preserved, got %s", remoteUpdatedAt, page.Records[0].UpdatedAt)
+	}
+}
+
 func TestQueryDevices(t *testing.T) {
 	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
