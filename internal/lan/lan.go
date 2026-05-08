@@ -179,6 +179,7 @@ func (l *LAN) StartPinger() {
 		Type:     "ping",
 	}
 	data, _ := json.Marshal(payload)
+	l.sendToAll(data)
 
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()

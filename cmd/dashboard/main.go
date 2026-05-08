@@ -67,9 +67,13 @@ func fetchDynamicPricing(url string, timeout time.Duration) ([]byte, error) {
 
 func startLANGoroutines(lanInst *lan.LAN, database *db.DB, token string, broadcastChan <-chan model.TokenUsage, usageChan chan<- model.TokenUsage) {
 	fmt.Printf("📡 LAN discovery enabled. Multicast: %s\n", lan.MulticastAddr)
-	go lanInst.StartBroadcaster(broadcastChan)
 	go lanInst.StartListener(usageChan)
 	go lanInst.StartPinger()
+	if token == "" {
+		fmt.Println("🔒 LAN sync disabled: --token or DASHBOARD_TOKEN is required for authenticated database sync.")
+		return
+	}
+	go lanInst.StartBroadcaster(broadcastChan)
 	go lanInst.StartAutoSync(database, token)
 }
 
@@ -96,6 +100,17 @@ func startLANHTTPServer(ctx context.Context, port string, handler http.Handler) 
 		}
 	}()
 	return true
+}
+
+func newLANInstance(lanMode bool, enableLAN *bool, token string, deviceID string, port string) *lan.LAN {
+	if !lanMode || enableLAN == nil || !*enableLAN {
+		return nil
+	}
+	portInt, _ := strconv.Atoi(port)
+	if token == "" {
+		portInt = 0
+	}
+	return lan.New(deviceID, portInt)
 }
 
 func main() {
@@ -291,15 +306,13 @@ func main() {
 	defer w.Close()
 
 	var lanInst *lan.LAN
-	if *lanMode && appConfig.EnableLAN != nil && *appConfig.EnableLAN {
-		if *token == "" {
-			fmt.Println("📡 LAN discovery is disabled: --token or DASHBOARD_TOKEN is required for authenticated sync.")
-		} else {
-			portInt, _ := strconv.Atoi(*port)
-			lanInst = lan.New(*deviceID, portInt)
-		}
-	} else {
+	lanInst = newLANInstance(*lanMode, appConfig.EnableLAN, *token, *deviceID, *port)
+	if lanInst == nil {
 		fmt.Println("📡 LAN discovery is disabled in settings.")
+	} else {
+		if *token == "" {
+			fmt.Println("📡 LAN discovery is enabled without sync: --token or DASHBOARD_TOKEN is required for authenticated sync.")
+		}
 	}
 
 	// Fast path: register cached known directories (~1ms vs 134ms recursive)
@@ -431,7 +444,9 @@ func main() {
 		}
 
 		if lanInst != nil {
-			if startLANHTTPServer(ctx, *port, web.NewLANHandler(database, *token)) {
+			if *token == "" {
+				startLANGoroutines(lanInst, database, *token, w.BroadcastChan, w.UsageChan)
+			} else if startLANHTTPServer(ctx, *port, web.NewLANHandler(database, *token)) {
 				startLANGoroutines(lanInst, database, *token, w.BroadcastChan, w.UsageChan)
 			} else {
 				lanInst = nil
@@ -525,7 +540,9 @@ func main() {
 		fmt.Printf("💰 Budget mode: $%.2f/day limit\n", *budgetDaily)
 	}
 	if lanInst != nil {
-		if startLANHTTPServer(ctx, *port, web.NewLANHandler(database, *token)) {
+		if *token == "" {
+			startLANGoroutines(lanInst, database, *token, w.BroadcastChan, w.UsageChan)
+		} else if startLANHTTPServer(ctx, *port, web.NewLANHandler(database, *token)) {
 			startLANGoroutines(lanInst, database, *token, w.BroadcastChan, w.UsageChan)
 		} else {
 			lanInst = nil

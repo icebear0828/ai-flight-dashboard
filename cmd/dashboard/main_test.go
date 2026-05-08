@@ -62,6 +62,38 @@ func TestLocalRepairDeviceIDsIncludesCurrentAndLegacyLocalOnce(t *testing.T) {
 	}
 }
 
+func TestNewLANInstanceAllowsDiscoveryWithoutSyncToken(t *testing.T) {
+	enabled := true
+	lanInst := newLANInstance(true, &enabled, "", "local-device", "19100")
+	if lanInst == nil {
+		t.Fatal("expected LAN discovery instance without token")
+	}
+	if lanInst.DeviceID != "local-device" {
+		t.Fatalf("unexpected device ID: %q", lanInst.DeviceID)
+	}
+	if lanInst.HTTPPort != 0 {
+		t.Fatalf("expected no advertised sync port without token, got %d", lanInst.HTTPPort)
+	}
+}
+
+func TestNewLANInstanceAdvertisesSyncPortWithToken(t *testing.T) {
+	enabled := true
+	lanInst := newLANInstance(true, &enabled, "secret-token", "local-device", "19100")
+	if lanInst == nil {
+		t.Fatal("expected LAN instance with token")
+	}
+	if lanInst.HTTPPort != 19100 {
+		t.Fatalf("expected advertised sync port, got %d", lanInst.HTTPPort)
+	}
+}
+
+func TestNewLANInstanceDisabledBySettings(t *testing.T) {
+	disabled := false
+	if lanInst := newLANInstance(true, &disabled, "", "local-device", "19100"); lanInst != nil {
+		t.Fatalf("expected LAN instance to be disabled, got %+v", lanInst)
+	}
+}
+
 func TestRunRepairHistorySupersedesLocalGeminiLegacyRows(t *testing.T) {
 	database := testutil.NewTestDB(t)
 	calc := testutil.NewTestCalc(t)
