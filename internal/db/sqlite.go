@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"ai-flight-dashboard/internal/model"
@@ -69,9 +70,6 @@ func initSchema(conn *sql.DB) error {
 		uuid TEXT,
 		superseded INTEGER DEFAULT 0
 	);
-	CREATE INDEX IF NOT EXISTS idx_usage_log_ts ON usage_records(log_timestamp);
-	CREATE INDEX IF NOT EXISTS idx_usage_device ON usage_records(device_id);
-	CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_device_uuid ON usage_records(device_id, uuid) WHERE uuid IS NOT NULL AND uuid != '';
 
 	CREATE TABLE IF NOT EXISTS scan_offsets (
 		file_path TEXT PRIMARY KEY,
@@ -93,21 +91,54 @@ func initSchema(conn *sql.DB) error {
 		return err
 	}
 
-	// Lightweight migrations for existing tables
-	conn.Exec("ALTER TABLE usage_records ADD COLUMN device_id TEXT DEFAULT 'local'")
-	conn.Exec("ALTER TABLE usage_records ADD COLUMN cache_creation_tokens INTEGER DEFAULT 0")
-	conn.Exec("ALTER TABLE usage_records ADD COLUMN uuid TEXT")
-	conn.Exec("ALTER TABLE usage_records ADD COLUMN project TEXT DEFAULT 'Default'")
-	conn.Exec("ALTER TABLE usage_records ADD COLUMN superseded INTEGER DEFAULT 0")
-	conn.Exec("ALTER TABLE usage_records ADD COLUMN updated_at DATETIME")
-	conn.Exec("UPDATE usage_records SET updated_at = COALESCE(timestamp, log_timestamp, CURRENT_TIMESTAMP) WHERE updated_at IS NULL OR updated_at = ''")
-	conn.Exec("DROP INDEX IF EXISTS idx_usage_uuid")
-	conn.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_device_uuid ON usage_records(device_id, uuid) WHERE uuid IS NOT NULL AND uuid != ''")
+	// Lightweight migrations for existing tables. Index creation intentionally
+	// runs after ALTER TABLE so old databases missing newer columns still open.
+	for _, stmt := range []string{
+		"ALTER TABLE usage_records ADD COLUMN device_id TEXT DEFAULT 'local'",
+		"ALTER TABLE usage_records ADD COLUMN cache_creation_tokens INTEGER DEFAULT 0",
+		"ALTER TABLE usage_records ADD COLUMN uuid TEXT",
+		"ALTER TABLE usage_records ADD COLUMN project TEXT DEFAULT 'Default'",
+		"ALTER TABLE usage_records ADD COLUMN superseded INTEGER DEFAULT 0",
+		"ALTER TABLE usage_records ADD COLUMN updated_at DATETIME",
+	} {
+		if err := execMigration(conn, stmt, true); err != nil {
+			return err
+		}
+	}
+	for _, stmt := range []string{
+		"UPDATE usage_records SET updated_at = COALESCE(timestamp, log_timestamp, CURRENT_TIMESTAMP) WHERE updated_at IS NULL OR updated_at = ''",
+		"DROP INDEX IF EXISTS idx_usage_uuid",
+		"CREATE INDEX IF NOT EXISTS idx_usage_log_ts ON usage_records(log_timestamp)",
+		"CREATE INDEX IF NOT EXISTS idx_usage_device ON usage_records(device_id)",
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_device_uuid ON usage_records(device_id, uuid) WHERE uuid IS NOT NULL AND uuid != ''",
+		"CREATE INDEX IF NOT EXISTS idx_usage_active_source_log_ts ON usage_records(source, log_timestamp) WHERE COALESCE(superseded, 0) = 0",
+		"CREATE INDEX IF NOT EXISTS idx_usage_active_device_source_log_ts ON usage_records(device_id, source, log_timestamp) WHERE COALESCE(superseded, 0) = 0",
+		"CREATE INDEX IF NOT EXISTS idx_usage_active_source_log_jd ON usage_records(source, julianday(log_timestamp)) WHERE COALESCE(superseded, 0) = 0",
+		"CREATE INDEX IF NOT EXISTS idx_usage_active_device_source_log_jd ON usage_records(device_id, source, julianday(log_timestamp)) WHERE COALESCE(superseded, 0) = 0",
+		"CREATE INDEX IF NOT EXISTS idx_usage_active_source_model ON usage_records(source, model) WHERE COALESCE(superseded, 0) = 0",
+		"CREATE INDEX IF NOT EXISTS idx_usage_active_source_project ON usage_records(source, project) WHERE COALESCE(superseded, 0) = 0",
+		"CREATE INDEX IF NOT EXISTS idx_usage_active_updated_at ON usage_records(julianday(COALESCE(updated_at, timestamp, log_timestamp)))",
+	} {
+		if err := execMigration(conn, stmt, false); err != nil {
+			return err
+		}
+	}
 	if err := ensurePartialDedupIndex(conn); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func execMigration(conn *sql.DB, stmt string, ignoreDuplicateColumn bool) error {
+	_, err := conn.Exec(stmt)
+	if err == nil {
+		return nil
+	}
+	if ignoreDuplicateColumn && strings.Contains(err.Error(), "duplicate column name") {
+		return nil
+	}
+	return err
 }
 
 func ensurePartialDedupIndex(conn *sql.DB) error {
@@ -372,9 +403,13 @@ func (d *DB) QueryStatsSince(since time.Time, deviceID string, source string) ([
 			SUM(cost_usd)
 		FROM usage_records
 		WHERE COALESCE(superseded, 0) = 0
-			AND julianday(log_timestamp) >= julianday(?)
 	`
-	args := []interface{}{formatLogTimestamp(since)}
+	var args []interface{}
+
+	if !since.IsZero() {
+		query += " AND julianday(log_timestamp) >= julianday(?)"
+		args = append(args, formatLogTimestamp(since))
+	}
 
 	if deviceID != "" && deviceID != "all" {
 		query += " AND device_id = ?"
@@ -416,9 +451,13 @@ func (d *DB) QueryProjectStatsSince(since time.Time, deviceID string, source str
 			SUM(cost_usd)
 		FROM usage_records
 		WHERE COALESCE(superseded, 0) = 0
-			AND julianday(log_timestamp) >= julianday(?)
 	`
-	args := []interface{}{formatLogTimestamp(since)}
+	var args []interface{}
+
+	if !since.IsZero() {
+		query += " AND julianday(log_timestamp) >= julianday(?)"
+		args = append(args, formatLogTimestamp(since))
+	}
 
 	if deviceID != "" && deviceID != "all" {
 		query += " AND device_id = ?"
@@ -484,9 +523,13 @@ type UsageRecord struct {
 // QueryUsageRecords returns individual usage records since the given time.
 func (d *DB) QueryUsageRecords(since time.Time, deviceID string) ([]UsageRecord, error) {
 	query := `SELECT model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd
-		FROM usage_records WHERE COALESCE(superseded, 0) = 0
-			AND julianday(log_timestamp) >= julianday(?)`
-	args := []interface{}{formatLogTimestamp(since)}
+		FROM usage_records WHERE COALESCE(superseded, 0) = 0`
+	var args []interface{}
+
+	if !since.IsZero() {
+		query += " AND julianday(log_timestamp) >= julianday(?)"
+		args = append(args, formatLogTimestamp(since))
+	}
 
 	if deviceID != "" && deviceID != "all" {
 		query += " AND device_id = ?"
