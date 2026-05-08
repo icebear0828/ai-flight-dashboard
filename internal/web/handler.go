@@ -13,6 +13,7 @@ import (
 
 	"ai-flight-dashboard/internal/calculator"
 	"ai-flight-dashboard/internal/config"
+	"ai-flight-dashboard/internal/dashboard"
 	"ai-flight-dashboard/internal/db"
 	"ai-flight-dashboard/internal/lan"
 	"ai-flight-dashboard/internal/model"
@@ -236,100 +237,22 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 }
 
 func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *calculator.Calculator, wInst *watcher.Watcher) {
-	now := time.Now().UTC()
 	deviceID := r.URL.Query().Get("device")
 	source := r.URL.Query().Get("source") // "Claude Code", "Gemini CLI", or "" for all
-
-	windows := []struct {
-		label string
-		dur   time.Duration
-	}{
-		{"1h", 1 * time.Hour},
-		{"24h", 24 * time.Hour},
-		{"7d", 7 * 24 * time.Hour},
-		{"30d", 30 * 24 * time.Hour},
-		{"3mo", 90 * 24 * time.Hour},
-		{"6mo", 180 * 24 * time.Hour},
-		{"1y", 365 * 24 * time.Hour},
-	}
-
-	var periods []model.PeriodCost
-	for _, win := range windows {
-		cost, inTok, caTok, caWTok, outTok, _ := database.QueryPeriodStatsSince(now.Add(-win.dur), deviceID, source)
-		periods = append(periods, model.PeriodCost{Label: win.label, Cost: cost, InputTokens: inTok, CachedTokens: caTok, CacheCreationTokens: caWTok, OutputTokens: outTok})
-	}
-	total, tIn, tCa, tCaW, tOut, _ := database.QueryPeriodStatsAll(deviceID, source)
-	periods = append(periods, model.PeriodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, CacheCreationTokens: tCaW, OutputTokens: tOut})
-
-	// Get all-time stats grouped by model
-	stats, _ := database.QueryStatsSince(time.Time{}, deviceID, source)
-
-	// Group by source
-	sourceMap := make(map[string]*model.SourceStats)
-	for _, s := range stats {
-		src, ok := sourceMap[s.Source]
-		if !ok {
-			src = &model.SourceStats{Name: s.Source}
-			sourceMap[s.Source] = src
-		}
-		price, _ := calc.GetModelPrice(s.Model)
-		src.Models = append(src.Models, model.ModelStats{
-			Model:                  s.Model,
-			Events:                 s.Events,
-			InputTokens:            s.InputTokens,
-			CachedTokens:           s.CachedTokens,
-			CacheCreationTokens:    s.CacheCreationTokens,
-			OutputTokens:           s.OutputTokens,
-			TotalCost:              s.TotalCost,
-			InputPricePerM:         price.InputPricePerM,
-			CachedPricePerM:        price.CachedPricePerM,
-			CacheCreationPricePerM: price.CacheCreationPricePerM,
-			OutputPricePerM:        price.OutputPricePerM,
-		})
-		src.TotalInput += s.InputTokens
-		src.TotalCached += s.CachedTokens
-		src.TotalCacheCreation += s.CacheCreationTokens
-		src.TotalOutput += s.OutputTokens
-		src.TotalCost += s.TotalCost
-		src.TotalEvents += s.Events
-	}
-
-	var sources []model.SourceStats
-	for _, s := range sourceMap {
-		sources = append(sources, *s)
-	}
-
-	sort.Slice(sources, func(i, j int) bool {
-		return sources[i].Name < sources[j].Name
-	})
-
-	devices, _ := database.QueryDevices()
-	aliases, _ := database.GetDeviceAliases()
-
-	var deviceInfos []model.DeviceInfo
-	for _, id := range devices {
-		name := id
-		if alias, ok := aliases[id]; ok && alias != "" {
-			name = alias
-		}
-		deviceInfos = append(deviceInfos, model.DeviceInfo{ID: id, DisplayName: name})
-	}
-
-	projects, _ := database.QueryProjectStatsSince(time.Time{}, deviceID, source)
 
 	isPaused := false
 	if wInst != nil {
 		isPaused = wInst.IsPaused()
 	}
 
+	stats, err := dashboard.BuildStats(database, calc, deviceID, source, isPaused)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(model.StatsResponse{
-		Periods:  periods,
-		Sources:  sources,
-		Devices:  deviceInfos,
-		Projects: projects,
-		IsPaused: isPaused,
-	})
+	json.NewEncoder(w).Encode(stats)
 }
 
 func handleCacheSavings(w http.ResponseWriter, r *http.Request, database *db.DB, calc *calculator.Calculator) {

@@ -118,6 +118,7 @@ internal/
 ```
 GET /api/stats              # 全量统计（包含 Project、Device、Period 分组）
 GET /api/stats?device=my-mac  # 按设备过滤
+GET /api/stats?source=Codex # 按来源过滤（Codex / Claude Code / Gemini CLI）
 POST /api/device-alias      # 命名设备别名 (body: {"device_id": "...", "display_name": "..."})
 GET /download/dashboard     # 动态拉取适配当前平台的 Fat Server 本体
 ```

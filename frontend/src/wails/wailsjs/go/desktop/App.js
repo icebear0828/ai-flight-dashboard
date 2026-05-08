@@ -26,8 +26,8 @@ export function GetPricing() {
   return window['go']['desktop']['App']['GetPricing']();
 }
 
-export function GetStats(arg1) {
-  return window['go']['desktop']['App']['GetStats'](arg1);
+export function GetStats(arg1, arg2) {
+  return window['go']['desktop']['App']['GetStats'](arg1, arg2);
 }
 
 export function MinimiseToTray() {

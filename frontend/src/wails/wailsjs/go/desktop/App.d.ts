@@ -18,7 +18,7 @@ export function GetContext():Promise<context.Context>;
 
 export function GetPricing():Promise<Array<desktop.PricingEntry>>;
 
-export function GetStats(arg1:string):Promise<model.StatsResponse>;
+export function GetStats(arg1:string,arg2:string):Promise<model.StatsResponse>;
 
 export function MinimiseToTray():Promise<void>;
 

@@ -97,6 +97,57 @@ func TestAPIStats(t *testing.T) {
 	}
 }
 
+func TestAPIStatsCodexSourceFilter(t *testing.T) {
+	database, calc := testutil.NewTestDBAndCalc(t)
+	defer database.Close()
+
+	now := time.Now().UTC()
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", Project: "api", InputTokens: 1000, OutputTokens: 200},
+		1.50, now.Add(-2*time.Minute), "/claude.jsonl", "local",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Codex", Model: "gpt-5.5", Project: "dashboard", InputTokens: 2000, CachedTokens: 1500, OutputTokens: 300},
+		2.50, now.Add(-1*time.Minute), "/codex.sqlite", "local",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := web.NewHandler(database, calc, nil, nil, "", emptyFS)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	client := http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(srv.URL + "/api/stats?device=all&source=Codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var data model.StatsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Periods) != 8 {
+		t.Fatalf("expected 8 periods, got %d", len(data.Periods))
+	}
+	if len(data.Sources) != 1 || data.Sources[0].Name != "Codex" {
+		t.Fatalf("expected only Codex source, got %+v", data.Sources)
+	}
+	if len(data.Projects) != 1 || data.Projects[0].Project != "dashboard" {
+		t.Fatalf("expected only Codex project, got %+v", data.Projects)
+	}
+	if data.Sources[0].TotalInput != 2000 || data.Sources[0].TotalCached != 1500 || data.Sources[0].TotalOutput != 300 {
+		t.Fatalf("unexpected Codex token totals: %+v", data.Sources[0])
+	}
+}
+
 func TestStaticPage(t *testing.T) {
 	database, calc := testutil.NewTestDBAndCalc(t)
 	defer database.Close()

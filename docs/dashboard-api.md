@@ -44,7 +44,11 @@ interface StatsResponse {
 ```
 GET /api/stats
 GET /api/stats?device={device_id}
+GET /api/stats?source={source_name}
+GET /api/stats?device={device_id}&source={source_name}
 ```
+
+`source_name` supports the same source names shown in the dashboard, including `Claude Code`, `Gemini CLI`, and `Codex`.
 
 Response:
 ```json
