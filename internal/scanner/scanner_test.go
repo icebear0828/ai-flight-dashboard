@@ -83,6 +83,29 @@ func TestScanAll_IncrementalScan(t *testing.T) {
 	}
 }
 
+func TestScanAllStrictReturnsFileErrors(t *testing.T) {
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
+
+	logDir := t.TempDir()
+	logFile := filepath.Join(logDir, "session.jsonl")
+	line := `{"timestamp":"2026-05-07T11:13:03Z","message":{"model":"claude-opus-4-7","type":"message","role":"assistant","content":[],"usage":{"input_tokens":500,"cache_read_input_tokens":0,"output_tokens":100}}}` + "\n"
+	if err := os.WriteFile(logFile, []byte(line), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s := scanner.New(database, calc, "local")
+	if _, err := s.ScanAllStrict([]string{logDir}, nil); err == nil {
+		t.Fatal("expected strict scan to return the closed database error")
+	}
+	if count, err := s.ScanAll([]string{logDir}, nil); err != nil || count != 0 {
+		t.Fatalf("non-strict scan should skip file errors, count=%d err=%v", count, err)
+	}
+}
+
 func TestScanAll_GeminiFormat(t *testing.T) {
 	database := testutil.NewTestDB(t)
 	calc := testutil.NewTestCalc(t)
@@ -108,6 +131,134 @@ func TestScanAll_GeminiFormat(t *testing.T) {
 	total, _, _, _, _, _ := database.QueryPeriodStatsAll("", "")
 	if total < 0.01 {
 		t.Errorf("expected non-zero Gemini cost, got %f", total)
+	}
+}
+
+func TestScanAll_GeminiWithoutIDGetsStableUUID(t *testing.T) {
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
+
+	logDir := t.TempDir()
+	chatsDir := filepath.Join(logDir, ".gemini", "tmp", "wiki", "chats")
+	if err := os.MkdirAll(chatsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	logFile := filepath.Join(chatsDir, "session.jsonl")
+	lines := `{"timestamp":"2026-05-07T11:13:03.316Z","type":"gemini","tokens":{"input":1000,"output":50,"cached":250},"model":"gemini-3.1-pro-preview"}` + "\n" +
+		`{"timestamp":"2026-05-07T11:13:04.316Z","type":"gemini","tokens":{"input":2000,"output":75,"cached":300},"model":"gemini-3.1-pro-preview"}` + "\n"
+	if err := os.WriteFile(logFile, []byte(lines), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := scanner.New(database, calc, "local")
+	count, err := s.ScanAll([]string{logDir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("expected first scan to import 2 rows, got %d", count)
+	}
+	if err := database.SetOffset(logFile, 0); err != nil {
+		t.Fatal(err)
+	}
+	count, err = s.ScanAll([]string{logDir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("expected rescan to upsert 2 rows, got %d", count)
+	}
+
+	stats, err := database.QueryStatsSince(time.Time{}, "", "Gemini CLI")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 || stats[0].Events != 2 || stats[0].InputTokens != 3000 || stats[0].OutputTokens != 125 {
+		t.Fatalf("expected stable UUID rescan to avoid duplicates, got %+v", stats)
+	}
+}
+
+func TestScanAllStrictProcessesFinalLineWithoutTrailingNewline(t *testing.T) {
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
+
+	logDir := t.TempDir()
+	logFile := filepath.Join(logDir, "session.jsonl")
+	line := `{"timestamp":"2026-05-07T11:13:03.316Z","type":"gemini","tokens":{"input":1000,"output":50,"cached":250},"model":"gemini-3.1-pro-preview"}`
+	if err := os.WriteFile(logFile, []byte(line), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := scanner.New(database, calc, "local")
+	count, err := s.ScanAll([]string{logDir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expected non-strict scan to wait for newline, got %d", count)
+	}
+	count, err = s.ScanAllStrict([]string{logDir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected strict scan to process final line, got %d", count)
+	}
+}
+
+func TestScanAllStrictDoesNotAdvanceInvalidPartialEOF(t *testing.T) {
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
+
+	logDir := t.TempDir()
+	logFile := filepath.Join(logDir, "session.jsonl")
+	complete := `{"timestamp":"2026-05-07T11:13:03.316Z","type":"gemini","tokens":{"input":1000,"output":50,"cached":250},"model":"gemini-3.1-pro-preview"}` + "\n"
+	partial := `{"timestamp":"2026-05-07T11:13:04.316Z","type":"gemini"`
+	if err := os.WriteFile(logFile, []byte(complete+partial), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := scanner.New(database, calc, "local")
+	count, err := s.ScanAllStrict([]string{logDir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected strict scan to import only complete row, got %d", count)
+	}
+	offset, err := database.GetOffset(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if offset != int64(len(complete)) {
+		t.Fatalf("expected offset to stop before invalid partial EOF, got %d want %d", offset, len(complete))
+	}
+
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`,"tokens":{"input":2000,"output":75,"cached":300},"model":"gemini-3.1-pro-preview"}` + "\n"); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	count, err = s.ScanAll([]string{logDir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected completed partial row to import later, got %d", count)
+	}
+	stats, err := database.QueryStatsSince(time.Time{}, "", "Gemini CLI")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 || stats[0].Events != 2 || stats[0].InputTokens != 3000 {
+		t.Fatalf("expected both rows after partial completion, got %+v", stats)
 	}
 }
 

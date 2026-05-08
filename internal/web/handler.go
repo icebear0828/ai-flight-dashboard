@@ -147,7 +147,7 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 		sinceStr := r.URL.Query().Get("since")
 		var since time.Time
 		if sinceStr != "" {
-			t, err := time.Parse(time.RFC3339, sinceStr)
+			t, err := time.Parse(time.RFC3339Nano, sinceStr)
 			if err != nil {
 				http.Error(w, "Invalid since format, expected RFC3339", http.StatusBadRequest)
 				return

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	_ "embed"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -12,13 +14,16 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 
 	goruntime "runtime"
 	"syscall"
 	"time"
 
 	"ai-flight-dashboard/internal/alert"
+	"ai-flight-dashboard/internal/applock"
 	"ai-flight-dashboard/internal/calculator"
 	"ai-flight-dashboard/internal/codexusage"
 	"ai-flight-dashboard/internal/config"
@@ -83,6 +88,11 @@ func main() {
 	flag.BoolVar(webMode, "w", false, "Run in web dashboard mode (shorthand)")
 	flag.StringVar(port, "p", "19100", "HTTP port for web mode (shorthand)")
 	flag.Parse()
+	args := flag.Args()
+	repairHistory := len(args) > 0 && args[0] == "repair-history"
+	if *dataDir != "" {
+		config.SetDataDir(*dataDir)
+	}
 
 	// Default to GUI mode unless another mode is explicitly requested
 	runGui := true
@@ -106,8 +116,8 @@ func main() {
 		}
 	}
 
-	// Subcommand dispatch: export | import | dedup
-	if args := flag.Args(); len(args) > 0 {
+	// Subcommand dispatch: export | import | dedup | repair-history
+	if len(args) > 0 {
 		switch args[0] {
 		case "export":
 			runExport(*deviceID)
@@ -122,6 +132,8 @@ func main() {
 		case "dedup":
 			runDedup()
 			return
+		case "repair-history":
+			// Handled after calculator/database initialization.
 		}
 	}
 
@@ -172,12 +184,12 @@ func main() {
 	}
 
 	// Initialize Database
-	if *dataDir != "" {
-		config.SetDataDir(*dataDir)
-	}
 	appDataDir := config.GetDataDir()
 	statsDir := filepath.Join(appDataDir, "stats")
 	os.MkdirAll(statsDir, 0755)
+
+	processLock := acquireProcessLock(appDataDir)
+	defer processLock.Release()
 
 	dbPath := filepath.Join(statsDir, "usage.db")
 	database, err := db.New(dbPath)
@@ -213,18 +225,6 @@ func main() {
 			log.Printf("Failed to mark project metadata migration complete: %v", err)
 		}
 	}
-	const geminiParserMigrationKey = "migration:gemini-parser-v2"
-	if done, err := database.GetOffset(geminiParserMigrationKey); err == nil && done == 0 {
-		if n, err := database.ResetOffsetsLike("%/.gemini/tmp/%"); err != nil {
-			log.Printf("Failed to reset Gemini scan offsets: %v", err)
-		} else if n > 0 {
-			fmt.Printf("🧭 Queued %d Gemini log files for parser backfill.\n", n)
-		}
-		if err := database.SetOffset(geminiParserMigrationKey, 1); err != nil {
-			log.Printf("Failed to mark Gemini parser migration complete: %v", err)
-		}
-	}
-
 	// Collect scan directories
 	var scanDirs []string
 
@@ -243,6 +243,10 @@ func main() {
 		if _, err := os.Stat(dir); err == nil {
 			scanDirs = append(scanDirs, dir)
 		}
+	}
+	if repairHistory {
+		runRepairHistory(database, calc, *deviceID, scanDirs)
+		return
 	}
 
 	// Initialize Watcher immediately (instant, ~26µs)
@@ -269,9 +273,9 @@ func main() {
 	knownDirs, _ := database.ListKnownDirs()
 	if *syncMode == "fsnotify" && len(knownDirs) > 0 {
 		w.WatchKnownDirs(knownDirs)
-		// Also watch project roots for new session dirs
+		// Also watch roots recursively so new Gemini/Claude session subdirs are not missed.
 		for _, dir := range scanDirs {
-			w.WatchDir(dir)
+			w.WatchDirRecursive(dir)
 		}
 	}
 
@@ -475,19 +479,35 @@ func main() {
 	}
 }
 
-func openDB() *db.DB {
-	homeDir, _ := os.UserHomeDir()
-	dbPath := filepath.Join(homeDir, ".ai-flight-dashboard", "stats", "usage.db")
+func openDB() (*db.DB, *applock.Lock) {
+	appDataDir := config.GetDataDir()
+	lock := acquireProcessLock(appDataDir)
+	dbPath := filepath.Join(appDataDir, "stats", "usage.db")
 	os.MkdirAll(filepath.Dir(dbPath), 0755)
 	database, err := db.New(dbPath)
 	if err != nil {
+		lock.Release()
 		log.Fatalf("Failed to open database: %v", err)
 	}
-	return database
+	return database, lock
+}
+
+func acquireProcessLock(dataDir string) *applock.Lock {
+	lockPath := filepath.Join(dataDir, "dashboard.lock")
+	lock, err := applock.TryAcquire(lockPath)
+	if err == nil {
+		return lock
+	}
+	if errors.Is(err, applock.ErrAlreadyLocked) {
+		log.Fatalf("Another AI Flight Dashboard process is already using %s. Stop it before starting a second dashboard or running a repair/import/dedup command.", dataDir)
+	}
+	log.Fatalf("Failed to acquire process lock %s: %v", lockPath, err)
+	return nil
 }
 
 func runExport(deviceID string) {
-	database := openDB()
+	database, lock := openDB()
+	defer lock.Release()
 	defer database.Close()
 
 	filter := ""
@@ -507,7 +527,8 @@ func runExport(deviceID string) {
 }
 
 func runImport(filePath string) {
-	database := openDB()
+	database, lock := openDB()
+	defer lock.Release()
 	defer database.Close()
 
 	file, err := os.Open(filePath)
@@ -524,7 +545,8 @@ func runImport(filePath string) {
 }
 
 func runDedup() {
-	database := openDB()
+	database, lock := openDB()
+	defer lock.Release()
 	defer database.Close()
 
 	removed, err := database.DeduplicateExisting()
@@ -532,4 +554,132 @@ func runDedup() {
 		log.Fatalf("Dedup failed: %v", err)
 	}
 	fmt.Printf("✅ Removed %d duplicate records\n", removed)
+}
+
+func runRepairHistory(database *db.DB, calc *calculator.Calculator, deviceID string, scanDirs []string) {
+	geminiFiles, err := discoverGeminiHistoryFiles(scanDirs)
+	if err != nil {
+		log.Fatalf("Failed to discover Gemini history files: %v", err)
+	}
+
+	var resetFiles int64
+	for _, filePath := range geminiFiles {
+		n, err := database.ResetOffset(filePath)
+		if err != nil {
+			log.Fatalf("Failed to reset Gemini offset for %q: %v", filePath, err)
+		}
+		resetFiles += n
+	}
+	for _, pattern := range []string{
+		"%/.claude/projects/%",
+		"%\\.claude\\projects\\%",
+	} {
+		n, err := database.ResetOffsetsLike(pattern)
+		if err != nil {
+			log.Fatalf("Failed to reset Claude offsets for %q: %v", pattern, err)
+		}
+		resetFiles += n
+	}
+	if err := database.SetOffset(codexusage.OffsetKey, 0); err != nil {
+		log.Fatalf("Failed to reset Codex offset: %v", err)
+	}
+
+	s := scanner.New(database, calc, deviceID)
+	scanned, err := s.ScanAllStrict(scanDirs, nil)
+	if err != nil {
+		log.Fatalf("History repair scan failed: %v", err)
+	}
+	codexScanner := codexusage.New(database, calc, deviceID)
+	codexScanned, err := codexScanner.Scan(nil)
+	if err != nil {
+		log.Fatalf("Codex repair scan failed: %v", err)
+	}
+
+	supersededGemini, err := database.SupersedeLegacyUsageBySourceFilePathsAndDevices("Gemini CLI", geminiFiles, localRepairDeviceIDs(deviceID))
+	if err != nil {
+		log.Fatalf("Failed to supersede replayed Gemini rows: %v", err)
+	}
+
+	fmt.Printf("✅ History repair complete: superseded %d old Gemini rows, reset %d file offsets, replayed %d JSONL records and %d Codex events\n", supersededGemini, resetFiles, scanned, codexScanned)
+}
+
+func discoverGeminiHistoryFiles(scanDirs []string) ([]string, error) {
+	return discoverHistoryFiles(scanDirs, func(path string) bool {
+		if !isGeminiHistoryFile(path) {
+			return false
+		}
+		ok, err := fileHasUsageSource(path, "Gemini CLI")
+		return err == nil && ok
+	})
+}
+
+func discoverHistoryFiles(scanDirs []string, match func(string) bool) ([]string, error) {
+	seen := make(map[string]struct{})
+	for _, dir := range scanDirs {
+		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if d.IsDir() || !match(path) {
+				return nil
+			}
+			seen[path] = struct{}{}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	files := make([]string, 0, len(seen))
+	for path := range seen {
+		files = append(files, path)
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+func isGeminiHistoryFile(path string) bool {
+	if !strings.HasSuffix(path, ".jsonl") {
+		return false
+	}
+	return strings.Contains(filepath.ToSlash(path), "/.gemini/tmp/")
+}
+
+func fileHasUsageSource(path string, source string) (bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+
+	reader := bufio.NewReader(file)
+	for {
+		line, err := reader.ReadString('\n')
+		if len(line) > 0 {
+			if u, ok := watcher.ParseLine(line); ok && u.Source == source {
+				return true, nil
+			}
+		}
+		if err == io.EOF {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+}
+
+func localRepairDeviceIDs(deviceID string) []string {
+	ids := []string{deviceID, "local", ""}
+	seen := make(map[string]struct{}, len(ids))
+	unique := ids[:0]
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	return unique
 }

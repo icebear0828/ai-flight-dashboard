@@ -86,6 +86,44 @@ func TestExportCSV_DeviceFilter(t *testing.T) {
 	}
 }
 
+func TestExportCSVSkipsSupersededRows(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	now := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
+	path := "/Users/c/.gemini/tmp/wiki/chats/session.jsonl"
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Gemini CLI", Model: "gemini-2.5-pro", InputTokens: 100, OutputTokens: 50},
+		1.00, now, path, "mac",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Gemini CLI", Model: "gemini-2.5-pro", InputTokens: 200, OutputTokens: 100, UUID: "gemini:active"},
+		2.00, now.Add(time.Second), path, "mac",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.SupersedeLegacyUsageBySourceFilePathsAndDevices("Gemini CLI", []string{path}, []string{"mac"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	count, err := database.ExportCSV(&buf, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one active exported row, got %d\n%s", count, buf.String())
+	}
+	if bytes.Contains(buf.Bytes(), []byte(",100,0,0,50,")) {
+		t.Fatalf("export included superseded legacy row:\n%s", buf.String())
+	}
+}
+
 func TestImportCSV(t *testing.T) {
 	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {

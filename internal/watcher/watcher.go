@@ -2,7 +2,9 @@ package watcher
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	pathpkg "path"
@@ -198,6 +200,7 @@ func (w *Watcher) processFile(path string) {
 		lineBytes, err := reader.ReadBytes('\n')
 		if len(lineBytes) > 0 && lineBytes[len(lineBytes)-1] == '\n' {
 			// Complete line
+			lineStartOffset := newOffset
 			newOffset += int64(len(lineBytes))
 			line := string(lineBytes)
 			if project := ExtractProjectNameFromLine(line); project != "" {
@@ -208,6 +211,9 @@ func (w *Watcher) processFile(path string) {
 			}
 			if u, ok := ParseLine(line); ok {
 				u = WithProjectFallback(u, currentProject)
+				if u.Source == "Gemini CLI" && u.UUID == "" {
+					u.UUID = StableGeminiUUID(w.DeviceID, path, lineStartOffset)
+				}
 				w.UsageChan <- u
 				select {
 				case w.BroadcastChan <- u:
@@ -307,6 +313,12 @@ func ParseLine(line string) (TokenUsage, bool) {
 	}
 
 	return TokenUsage{}, false
+}
+
+func StableGeminiUUID(deviceID string, path string, lineStartOffset int64) string {
+	deviceHash := sha256.Sum256([]byte(deviceID))
+	pathHash := sha256.Sum256([]byte(filepath.ToSlash(path)))
+	return fmt.Sprintf("gemini:%x:%x:%d", deviceHash[:8], pathHash[:16], lineStartOffset)
 }
 
 func parseClaudeUsage(container map[string]interface{}, usage map[string]interface{}) TokenUsage {

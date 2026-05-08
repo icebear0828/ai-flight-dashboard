@@ -47,7 +47,13 @@ go build -o dashboard ./cmd/dashboard
 
 # Custom port + device ID
 ./dashboard --web --port 8080 --device-id my-mac
+
+# Replay local history with the current parser and pricing rules
+./dashboard repair-history
+./dashboard --data-dir ~/.ai-flight-dashboard repair-history
 ```
+
+`repair-history` rescans locally available Claude Code, Gemini CLI, and Codex history logs. It only marks replayable local Gemini legacy rows as superseded; it does not physically delete records and does not affect LAN/remote device records. Dashboard holds `dashboard.lock` in the data-dir to prevent a second local process from writing the same database at the same time.
 
 ### Simulate Radar Trigger
 

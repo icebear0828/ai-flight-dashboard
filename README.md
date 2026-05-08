@@ -51,7 +51,13 @@ go build -o dashboard ./cmd/dashboard
 
 # 自定义端口 + 设备标识
 ./dashboard --web --port 8080 --device-id my-mac
+
+# 重放本机历史日志并按当前解析/计费规则修复统计
+./dashboard repair-history
+./dashboard --data-dir ~/.ai-flight-dashboard repair-history
 ```
+
+`repair-history` 会重新扫描本机可访问的 Claude Code、Gemini CLI 和 Codex 历史日志。它只会将可从磁盘重放的本机 Gemini 旧记录标记为已替代，不会物理删除记录，也不会影响局域网/远端设备记录。Dashboard 会在 data-dir 下持有 `dashboard.lock`，防止第二个本地进程同时写入同一个数据库。
 
 ### 模拟触发雷达
 

@@ -1,6 +1,7 @@
 package db_test
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -193,6 +194,136 @@ func TestQueryStatsSince(t *testing.T) {
 	}
 }
 
+func TestQuerySinceHandlesMixedTimestampPrecision(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	err = database.RawExec(
+		"INSERT INTO usage_records (log_timestamp, source, model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd, file_path, device_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		"2026-05-07T11:13:02Z", "Claude Code", "claude-opus-4-7", 200, 0, 0, 20, 2.00, "/old.jsonl", "local",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = database.RawExec(
+		"INSERT INTO usage_records (log_timestamp, source, model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd, file_path, device_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		"2026-05-07T11:13:03.316Z", "Gemini CLI", "gemini-2.5-pro", 100, 0, 0, 10, 1.00, "/new.jsonl", "local",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	since := time.Date(2026, 5, 7, 11, 13, 3, 0, time.UTC)
+	cost, input, _, _, output, err := database.QueryPeriodStatsSince(since, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cost != 1.00 || input != 100 || output != 10 {
+		t.Fatalf("expected fractional same-second row only, got cost=%f input=%d output=%d", cost, input, output)
+	}
+
+	records, err := database.QuerySyncRecordsSince(time.Now().UTC().Add(-1 * time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("expected sync records to use updated_at cursor, got %+v", records)
+	}
+	var foundGemini bool
+	for _, record := range records {
+		if record.Timestamp.IsZero() || record.UpdatedAt.IsZero() {
+			t.Fatalf("expected parsed sync timestamps, got %+v", records)
+		}
+		if record.Source == "Gemini CLI" {
+			foundGemini = true
+		}
+	}
+	if !foundGemini {
+		t.Fatalf("expected parsed fractional Gemini sync record, got %+v", records)
+	}
+}
+
+func TestSupersededRowsAreExcludedFromDefaultQueries(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	now := time.Now().UTC()
+	path := "/Users/c/.gemini/tmp/wiki/chats/session.jsonl"
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Gemini CLI", Model: "gemini-3.1-pro-preview", InputTokens: 1000, OutputTokens: 300},
+		1.00, now, path, "local",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Gemini CLI", Model: "gemini-3.1-pro-preview", InputTokens: 2000, OutputTokens: 400, UUID: "gemini:active"},
+		2.00, now.Add(time.Second), path, "local",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Gemini CLI", Model: "gemini-3.1-pro-preview", InputTokens: 3000, OutputTokens: 500},
+		3.00, now, "/Users/c/.gemini/tmp/old/chats/session.jsonl", "old-device",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.SupersedeLegacyUsageBySourceFilePathsAndDevices("Gemini CLI", []string{path, "/Users/c/.gemini/tmp/old/chats/session.jsonl"}, []string{"local", "old-device"}); err != nil {
+		t.Fatal(err)
+	}
+
+	cost, input, _, _, output, err := database.QueryPeriodStatsAll("", "Gemini CLI")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cost != 2.00 || input != 2000 || output != 400 {
+		t.Fatalf("expected only active Gemini row in stats, got cost=%f input=%d output=%d", cost, input, output)
+	}
+
+	devices, err := database.QueryDevices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 || devices[0] != "local" {
+		t.Fatalf("expected only active local device, got %+v", devices)
+	}
+
+	usageRecords, err := database.QueryUsageRecords(time.Time{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(usageRecords) != 1 || usageRecords[0].InputTokens != 2000 {
+		t.Fatalf("expected one active usage record, got %+v", usageRecords)
+	}
+
+	syncRecords, err := database.QuerySyncRecordsSince(time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(syncRecords) != 3 {
+		t.Fatalf("expected active and superseded sync records, got %+v", syncRecords)
+	}
+	var active, superseded int
+	for _, r := range syncRecords {
+		if r.Superseded {
+			superseded++
+		} else {
+			active++
+		}
+		if r.UpdatedAt.IsZero() {
+			t.Fatalf("expected sync record updated_at, got %+v", r)
+		}
+	}
+	if active != 1 || superseded != 2 {
+		t.Fatalf("expected 1 active and 2 superseded sync records, active=%d superseded=%d records=%+v", active, superseded, syncRecords)
+	}
+}
+
 func TestQueryStatsSourceFilters(t *testing.T) {
 	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -255,6 +386,289 @@ func TestResetOffsetsLike(t *testing.T) {
 	}
 	if geminiOffset != 0 || claudeOffset != 200 {
 		t.Fatalf("unexpected offsets: gemini=%d claude=%d", geminiOffset, claudeOffset)
+	}
+}
+
+func TestResetOffset(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	database.SetOffset("/Users/c/.gemini/tmp/wiki/chats/session.jsonl", 100)
+	database.SetOffset("/Users/c/.gemini/tmp/wiki/chats/other.jsonl", 200)
+
+	changed, err := database.ResetOffset("/Users/c/.gemini/tmp/wiki/chats/session.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed != 1 {
+		t.Fatalf("expected 1 reset offset, got %d", changed)
+	}
+
+	geminiOffset, err := database.GetOffset("/Users/c/.gemini/tmp/wiki/chats/session.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherOffset, err := database.GetOffset("/Users/c/.gemini/tmp/wiki/chats/other.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if geminiOffset != 0 || otherOffset != 200 {
+		t.Fatalf("unexpected offsets: gemini=%d other=%d", geminiOffset, otherOffset)
+	}
+}
+
+func TestSupersedeLegacyUsageBySourceFilePathsAndDevices(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	now := time.Now().UTC()
+	replayableGeminiPath := "/Users/c/.gemini/tmp/wiki/chats/session.jsonl"
+	missingGeminiPath := "/Users/c/.gemini/tmp/wiki/chats/missing.jsonl"
+	database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Gemini CLI", Model: "gemini-3.1-pro-preview", InputTokens: 1000, OutputTokens: 300},
+		1.00, now, replayableGeminiPath, "local",
+	)
+	database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Gemini CLI", Model: "gemini-3.1-pro-preview", InputTokens: 2000, OutputTokens: 400},
+		2.00, now, replayableGeminiPath, "remote-mac",
+	)
+	database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Gemini CLI", Model: "gemini-3.1-pro-preview", InputTokens: 3000, OutputTokens: 500},
+		3.00, now, missingGeminiPath, "local",
+	)
+	database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 4000, OutputTokens: 600},
+		4.00, now, replayableGeminiPath, "local",
+	)
+	database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Gemini CLI", Model: "gemini-3.1-pro-preview", InputTokens: 5000, OutputTokens: 700, UUID: "gemini:new"},
+		5.00, now, replayableGeminiPath, "local",
+	)
+
+	superseded, err := database.SupersedeLegacyUsageBySourceFilePathsAndDevices("Gemini CLI", []string{replayableGeminiPath}, []string{"local", "test-device"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if superseded != 1 {
+		t.Fatalf("expected 1 local replayable Gemini row superseded, got %d", superseded)
+	}
+
+	geminiCost, geminiIn, _, _, geminiOut, err := database.QueryPeriodStatsAll("", "Gemini CLI")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if geminiCost != 10.00 || geminiIn != 10000 || geminiOut != 1600 {
+		t.Fatalf("unexpected remaining Gemini stats: cost=%f input=%d output=%d", geminiCost, geminiIn, geminiOut)
+	}
+	remoteGeminiCost, remoteGeminiIn, _, _, remoteGeminiOut, err := database.QueryPeriodStatsAll("remote-mac", "Gemini CLI")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remoteGeminiCost != 2.00 || remoteGeminiIn != 2000 || remoteGeminiOut != 400 {
+		t.Fatalf("unexpected remote Gemini stats: cost=%f input=%d output=%d", remoteGeminiCost, remoteGeminiIn, remoteGeminiOut)
+	}
+
+	claudeCost, claudeIn, _, _, claudeOut, err := database.QueryPeriodStatsAll("", "Claude Code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claudeCost != 4.00 || claudeIn != 4000 || claudeOut != 600 {
+		t.Fatalf("unexpected Claude stats: cost=%f input=%d output=%d", claudeCost, claudeIn, claudeOut)
+	}
+}
+
+func TestInsertUsageWithUUIDDoesNotHitLegacyDedupIndex(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ts := time.Date(2026, 4, 15, 7, 33, 41, 342_000_000, time.UTC)
+	first := model.TokenUsage{
+		Source:              "Claude Code",
+		Model:               "claude-opus-4-6",
+		InputTokens:         78442,
+		CachedTokens:        77912,
+		CacheCreationTokens: 529,
+		OutputTokens:        204,
+		UUID:                "uuid-1",
+	}
+	second := first
+	second.UUID = "uuid-2"
+
+	if err := database.InsertUsageWithTime(first, 1.00, ts, "/same-second.jsonl", "local"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.InsertUsageWithTime(second, 1.00, ts.Add(190*time.Millisecond), "/same-second.jsonl", "local"); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := database.QueryStatsSince(time.Time{}, "", "Claude Code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 || stats[0].Events != 2 {
+		t.Fatalf("expected both UUID records to be retained, got %+v", stats)
+	}
+}
+
+func TestInsertUsageWithUUIDIsScopedByDevice(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ts := time.Date(2026, 5, 7, 11, 13, 3, 0, time.UTC)
+	u := model.TokenUsage{
+		Source:       "Codex",
+		Model:        "gpt-5.5",
+		InputTokens:  1000,
+		OutputTokens: 100,
+		UUID:         "codex:1",
+	}
+	if err := database.InsertUsageWithTime(u, 1.00, ts, "/mac/logs.sqlite", "mac"); err != nil {
+		t.Fatal(err)
+	}
+	remote := u
+	remote.InputTokens = 2000
+	if err := database.InsertUsageWithTime(remote, 2.00, ts, "/linux/logs.sqlite", "linux"); err != nil {
+		t.Fatal(err)
+	}
+
+	cost, input, _, _, output, err := database.QueryPeriodStatsAll("", "Codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cost != 3.00 || input != 3000 || output != 200 {
+		t.Fatalf("expected same UUID on different devices to retain both rows, cost=%f input=%d output=%d", cost, input, output)
+	}
+
+	update := u
+	update.OutputTokens = 150
+	if err := database.InsertUsageWithTime(update, 1.50, ts.Add(time.Second), "/mac/logs.sqlite", "mac"); err != nil {
+		t.Fatal(err)
+	}
+	macCost, macInput, _, _, macOutput, err := database.QueryPeriodStatsAll("mac", "Codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if macCost != 1.50 || macInput != 1000 || macOutput != 150 {
+		t.Fatalf("expected same device UUID to upsert, cost=%f input=%d output=%d", macCost, macInput, macOutput)
+	}
+}
+
+func TestExistingDatabaseMigrationAddsUpdatedAt(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+	conn, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(`
+		CREATE TABLE usage_records (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+			log_timestamp DATETIME,
+			source TEXT NOT NULL,
+			model TEXT NOT NULL,
+			project TEXT DEFAULT 'Default',
+			input_tokens INTEGER NOT NULL,
+			cached_tokens INTEGER NOT NULL,
+			cache_creation_tokens INTEGER DEFAULT 0,
+			output_tokens INTEGER NOT NULL,
+			cost_usd REAL NOT NULL,
+			file_path TEXT DEFAULT '',
+			device_id TEXT DEFAULT 'local',
+			uuid TEXT,
+			superseded INTEGER DEFAULT 0
+		);
+		CREATE TABLE scan_offsets (file_path TEXT PRIMARY KEY, byte_offset INTEGER NOT NULL);
+		CREATE TABLE known_dirs (dir_path TEXT PRIMARY KEY, last_seen DATETIME DEFAULT CURRENT_TIMESTAMP);
+		CREATE TABLE device_aliases (device_id TEXT PRIMARY KEY, display_name TEXT NOT NULL);
+		INSERT INTO usage_records (log_timestamp, source, model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd, file_path, device_id)
+		VALUES ('2026-01-01T00:00:00Z', 'Claude Code', 'claude-opus-4-7', 100, 0, 0, 10, 1.00, '/old.jsonl', 'mac');
+	`); err != nil {
+		conn.Close()
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	database, err := db.New(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Codex", Model: "gpt-5.5", InputTokens: 200, OutputTokens: 20, UUID: "codex:1"},
+		2.00, time.Now().UTC(), "/codex.sqlite", "mac",
+	); err != nil {
+		t.Fatal(err)
+	}
+	records, err := database.QuerySyncRecordsSince(time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("expected migrated legacy and new sync records, got %+v", records)
+	}
+	for _, r := range records {
+		if r.UpdatedAt.IsZero() {
+			t.Fatalf("expected migrated updated_at, got %+v", records)
+		}
+	}
+}
+
+func TestSyncUsesUpdatedAtAndAppliesSupersededMarkers(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "source.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	oldLogTS := time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC)
+	path := "/Users/c/.gemini/tmp/wiki/chats/session.jsonl"
+	legacy := model.TokenUsage{Source: "Gemini CLI", Model: "gemini-3.1-pro-preview", InputTokens: 1000, OutputTokens: 100, Timestamp: oldLogTS}
+	if err := database.InsertUsageWithTime(legacy, 1.00, oldLogTS, path, "mac"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.SupersedeLegacyUsageBySourceFilePathsAndDevices("Gemini CLI", []string{path}, []string{"mac"}); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := database.QuerySyncRecordsSince(time.Now().UTC().Add(-1 * time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || !records[0].Superseded || records[0].UpdatedAt.IsZero() {
+		t.Fatalf("expected historical superseded record to sync by updated_at, got %+v", records)
+	}
+
+	peer, err := db.New(filepath.Join(t.TempDir(), "peer.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	if err := peer.InsertUsageWithTime(legacy, 1.00, oldLogTS, path, "mac"); err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.UpsertSyncRecord(records[0]); err != nil {
+		t.Fatal(err)
+	}
+	cost, input, _, _, _, err := peer.QueryPeriodStatsAll("mac", "Gemini CLI")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cost != 0 || input != 0 {
+		t.Fatalf("expected sync superseded marker to hide peer legacy row, cost=%f input=%d", cost, input)
 	}
 }
 
