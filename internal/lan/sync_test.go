@@ -102,6 +102,28 @@ func TestSyncWithPeerRecordsUnauthorizedStatus(t *testing.T) {
 	}
 }
 
+func TestRecordPeerWithoutHTTPPortIsDiscoveryOnly(t *testing.T) {
+	l := New("local", 19100)
+	l.RecordPeer("remote", "192.168.1.25", 0)
+
+	peers := l.GetActivePeerInfos()
+	if len(peers) != 1 {
+		t.Fatalf("expected one peer, got %+v", peers)
+	}
+	if peers[0].SyncStatus != "discovery_only" || peers[0].SyncError != "" {
+		t.Fatalf("expected discovery-only peer, got %+v", peers[0])
+	}
+
+	l.RecordPeer("remote", "192.168.1.25", 19100)
+	peers = l.GetActivePeerInfos()
+	if len(peers) != 1 {
+		t.Fatalf("expected one peer after update, got %+v", peers)
+	}
+	if peers[0].SyncStatus != "pending" {
+		t.Fatalf("expected peer to return to pending when sync port appears, got %+v", peers[0])
+	}
+}
+
 func TestSyncWithPeerFollowsPagination(t *testing.T) {
 	database, _ := testutil.NewTestDBAndCalc(t)
 	defer database.Close()

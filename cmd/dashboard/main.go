@@ -407,7 +407,7 @@ func main() {
 							continue
 						}
 					}
-					if isLocal && lanInst != nil {
+					if isLocal && lanInst != nil && *token != "" {
 						lanInst.AnnounceDirty()
 					}
 				}
