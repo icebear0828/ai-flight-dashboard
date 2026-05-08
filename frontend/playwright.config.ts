@@ -7,14 +7,14 @@ export default defineConfig({
     timeout: 5000,
   },
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL: 'http://127.0.0.1:19183',
     trace: 'on-first-retry',
   },
   webServer: {
-    command: 'npm run preview -- --host 127.0.0.1 --port 4173',
-    url: 'http://127.0.0.1:4173',
+    command: 'node ./tests/start-real-dashboard.mjs',
+    url: 'http://127.0.0.1:19183',
     reuseExistingServer: !process.env.CI,
-    timeout: 30000,
+    timeout: 60000,
   },
   projects: [
     {

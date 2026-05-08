@@ -3,13 +3,23 @@ import { useTranslation } from "react-i18next";
 import SettingsModal from "./SettingsModal";
 import Radar from "./components/Radar";
 
-const fmt = (n: number) => {
+const num = (value: unknown): number => {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const text = (value: unknown, fallback = ''): string => {
+  return typeof value === 'string' && value.trim() !== '' ? value : fallback;
+};
+
+const fmt = (value: unknown) => {
+  const n = num(value);
   if (n >= 1e9) return (n/1e9).toFixed(2) + 'B';
   if (n >= 1e6) return (n/1e6).toFixed(2) + 'M';
   if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
   return n.toString();
 };
-const fmtCost = (n: number) => '$' + n.toFixed(2);
+const fmtCost = (value: unknown) => '$' + num(value).toFixed(2);
 
 interface PeriodStats {
   label: string;
@@ -67,6 +77,59 @@ interface DashboardData {
   is_paused?: boolean;
 }
 
+const normalizeDashboardData = (raw: any): DashboardData => {
+  const periods = Array.isArray(raw?.periods) ? raw.periods : [];
+  const sources = Array.isArray(raw?.sources) ? raw.sources : [];
+  const devices = Array.isArray(raw?.devices) ? raw.devices : [];
+  const projects = Array.isArray(raw?.projects) ? raw.projects : [];
+
+  return {
+    periods: periods.map((p: any) => ({
+      label: text(p?.label, 'UNKNOWN'),
+      input_tokens: num(p?.input_tokens),
+      cached_tokens: num(p?.cached_tokens),
+      cache_creation_tokens: num(p?.cache_creation_tokens),
+      output_tokens: num(p?.output_tokens),
+      cost: num(p?.cost),
+    })),
+    sources: sources.map((src: any) => ({
+      name: text(src?.name, 'Unknown'),
+      total_input: num(src?.total_input),
+      total_cached: num(src?.total_cached),
+      total_cache_creation: num(src?.total_cache_creation),
+      total_output: num(src?.total_output),
+      total_cost: num(src?.total_cost),
+      models: (Array.isArray(src?.models) ? src.models : []).map((m: any) => ({
+        model: text(m?.model, 'unknown'),
+        input_tokens: num(m?.input_tokens),
+        cached_tokens: num(m?.cached_tokens),
+        cache_creation_tokens: num(m?.cache_creation_tokens),
+        output_tokens: num(m?.output_tokens),
+        input_price_per_m: num(m?.input_price_per_m),
+        cached_price_per_m: num(m?.cached_price_per_m),
+        cache_creation_price_per_m: num(m?.cache_creation_price_per_m),
+        output_price_per_m: num(m?.output_price_per_m),
+        events: num(m?.events),
+        total_cost: num(m?.total_cost),
+      })),
+    })),
+    devices: devices.map((d: any) => ({
+      id: text(d?.id ?? d, 'local'),
+      display_name: text(d?.display_name, text(d?.id ?? d, 'local')),
+    })),
+    projects: projects.map((p: any) => ({
+      project: text(p?.project, 'Default'),
+      events: num(p?.events),
+      input_tokens: num(p?.input_tokens),
+      cached_tokens: num(p?.cached_tokens),
+      cache_creation_tokens: num(p?.cache_creation_tokens),
+      output_tokens: num(p?.output_tokens),
+      total_cost: num(p?.total_cost),
+    })),
+    is_paused: Boolean(raw?.is_paused),
+  };
+};
+
 export default function App() {
   const { t, i18n } = useTranslation();
   const [data, setData] = useState<DashboardData | null>(null);
@@ -86,7 +149,7 @@ export default function App() {
            throw new Error(`HTTP ${res.status}: ${await res.text()}`);
         }
         const json = await res.json();
-        setData(json);
+        setData(normalizeDashboardData(json));
         setErrorMsg("");
       } catch (e: any) {
         console.error(e);
@@ -238,9 +301,9 @@ export default function App() {
               <div className="mb-4">
                 <h3 className="font-display text-xl xl:text-2xl leading-[1.1] uppercase mb-2">{p.label}</h3>
                 <div className="flex flex-col gap-1 font-mono text-xs xl:text-sm">
-                  <span>{t('labelIn')}: {fmt(Math.max(0, p.input_tokens - p.cached_tokens - (p.cache_creation_tokens || 0)))}</span>
+                  <span>{t('labelIn')}: {fmt(Math.max(0, num(p.input_tokens) - num(p.cached_tokens) - num(p.cache_creation_tokens)))}</span>
                   <span>{t('cacheRead')}: {fmt(p.cached_tokens)}</span>
-                  <span>{t('cacheWrite')}: {fmt(p.cache_creation_tokens || 0)}</span>
+                  <span>{t('cacheWrite')}: {fmt(p.cache_creation_tokens)}</span>
                   <span>{t('labelOut')}: {fmt(p.output_tokens)}</span>
                 </div>
               </div>
@@ -283,7 +346,7 @@ export default function App() {
                       <td className="px-3 py-3 sm:px-4 sm:py-4 font-bold group-hover:text-[#FFFFFF] truncate max-w-[300px]" title={p.project}>{p.project}</td>
                       <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">{p.events}</td>
                       <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
-                        {t('labelIn')}: {fmt(Math.max(0, p.input_tokens - p.cached_tokens - (p.cache_creation_tokens || 0)))} / {t('cacheRead')}: {fmt(p.cached_tokens)} / {t('cacheWrite')}: {fmt(p.cache_creation_tokens || 0)} / {t('labelOut')}: {fmt(p.output_tokens)}
+                        {t('labelIn')}: {fmt(Math.max(0, num(p.input_tokens) - num(p.cached_tokens) - num(p.cache_creation_tokens)))} / {t('cacheRead')}: {fmt(p.cached_tokens)} / {t('cacheWrite')}: {fmt(p.cache_creation_tokens)} / {t('labelOut')}: {fmt(p.output_tokens)}
                       </td>
                       <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-bold group-hover:text-[#FFFFFF]">{fmtCost(p.total_cost)}</td>
                     </tr>
@@ -298,20 +361,20 @@ export default function App() {
       {/* Source Stats Grid */}
       <section className="grid grid-cols-1 2xl:grid-cols-2 gap-6 lg:gap-10">
         {sources.map((src: SourceStats, si: number) => {
-           const baseInput = Math.max(0, src.total_input - src.total_cached - (src.total_cache_creation || 0));
-           const totalTokens = baseInput + src.total_cached + (src.total_cache_creation || 0) + src.total_output;
+           const baseInput = Math.max(0, num(src.total_input) - num(src.total_cached) - num(src.total_cache_creation));
+           const totalTokens = baseInput + num(src.total_cached) + num(src.total_cache_creation) + num(src.total_output);
            
            const inPct = totalTokens > 0 ? (baseInput / totalTokens) * 100 : 0;
-           const cachedPct = totalTokens > 0 ? (src.total_cached / totalTokens) * 100 : 0;
-           const cacheCreationPct = totalTokens > 0 ? ((src.total_cache_creation || 0) / totalTokens) * 100 : 0;
-           const outPct = totalTokens > 0 ? (src.total_output / totalTokens) * 100 : 0;
+           const cachedPct = totalTokens > 0 ? (num(src.total_cached) / totalTokens) * 100 : 0;
+           const cacheCreationPct = totalTokens > 0 ? (num(src.total_cache_creation) / totalTokens) * 100 : 0;
+           const outPct = totalTokens > 0 ? (num(src.total_output) / totalTokens) * 100 : 0;
 
            const formatPct = (pct: number) => {
              if (pct > 0 && pct < 1) return '<1%';
              return pct.toFixed(0) + '%';
            };
 
-           const sortedModels = [...(src.models || [])].sort((a: SourceModelStats, b: SourceModelStats) => b.total_cost - a.total_cost);
+           const sortedModels = [...(src.models || [])].sort((a: SourceModelStats, b: SourceModelStats) => num(b.total_cost) - num(a.total_cost));
 
            return (
             <article key={si} className="bg-[#FFFFFF] border-[5px] border-[#000000] rounded-none shadow-none flex flex-col">
@@ -340,7 +403,7 @@ export default function App() {
                   </div>
                   <div className="border-l-[5px] border-[#000000] pl-3">
                     <span className="font-display text-xs sm:text-sm uppercase block mb-1">{t('cacheWrite')}</span>
-                    <div className="font-mono text-xl sm:text-2xl">{fmt(src.total_cache_creation || 0)}</div>
+                    <div className="font-mono text-xl sm:text-2xl">{fmt(src.total_cache_creation)}</div>
                   </div>
                   <div className="border-l-[5px] border-[#000000] pl-3">
                     <span className="font-display text-xs sm:text-sm uppercase block mb-1">{t('outputTokens')}</span>
@@ -394,10 +457,10 @@ export default function App() {
                       <tr key={mi} className="border-b-[3px] border-[#000000] last:border-b-0 hover:bg-[#000000] hover:text-[#FFFFFF] transition-none group">
                         <td className="px-3 py-3 sm:px-4 sm:py-4 font-bold group-hover:text-[#FFFFFF] max-w-[200px] truncate" title={m.model}>{m.model}</td>
                         <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
-                          {t('labelIn')}: {fmtCost(m.input_price_per_m || 0)} / {t('cacheRead')}: {fmtCost(m.cached_price_per_m || 0)} / {t('cacheWrite')}: {fmtCost(m.cache_creation_price_per_m || 0)} / {t('labelOut')}: {fmtCost(m.output_price_per_m || 0)}
+                          {t('labelIn')}: {fmtCost(m.input_price_per_m)} / {t('cacheRead')}: {fmtCost(m.cached_price_per_m)} / {t('cacheWrite')}: {fmtCost(m.cache_creation_price_per_m)} / {t('labelOut')}: {fmtCost(m.output_price_per_m)}
                         </td>
                         <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
-                          {t('labelIn')}: {fmt(Math.max(0, m.input_tokens - m.cached_tokens - (m.cache_creation_tokens || 0)))} / {t('cacheRead')}: {fmt(m.cached_tokens)} / {t('cacheWrite')}: {fmt(m.cache_creation_tokens || 0)} / {t('labelOut')}: {fmt(m.output_tokens)}
+                          {t('labelIn')}: {fmt(Math.max(0, num(m.input_tokens) - num(m.cached_tokens) - num(m.cache_creation_tokens)))} / {t('cacheRead')}: {fmt(m.cached_tokens)} / {t('cacheWrite')}: {fmt(m.cache_creation_tokens)} / {t('labelOut')}: {fmt(m.output_tokens)}
                         </td>
                         <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">{m.events}</td>
                         <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-bold group-hover:text-[#FFFFFF]">{fmtCost(m.total_cost)}</td>
