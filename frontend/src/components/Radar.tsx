@@ -1,9 +1,40 @@
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+interface LanPeer {
+  id: string;
+  display_name?: string;
+  ip?: string;
+  http_port?: number;
+  sync_status?: string;
+  sync_error?: string;
+  tokens_24h?: number;
+  tokens_total?: number;
+  cost_total?: number;
+}
+
+const num = (value: unknown): number => {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const fmt = (value: unknown) => {
+  const n = num(value);
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return n.toString();
+};
+
+const statusClass = (status?: string) => {
+  if (status === 'ok') return 'text-[#008000]';
+  if (status === 'syncing' || status === 'pending') return 'text-[#0000FF]';
+  return 'text-[#FF0000]';
+};
+
 export default function Radar() {
   const { t } = useTranslation();
-  const [peers, setPeers] = useState<string[]>([]);
+  const [peers, setPeers] = useState<LanPeer[]>([]);
   const [joined, setJoined] = useState(false);
 
   useEffect(() => {
@@ -11,8 +42,10 @@ export default function Radar() {
       try {
         const res = await fetch('/api/lan/scan');
         const data = await res.json();
-        if (data.peers) {
-          setPeers(data.peers);
+        if (Array.isArray(data.peer_infos)) {
+          setPeers(data.peer_infos);
+        } else if (Array.isArray(data.peers)) {
+          setPeers(data.peers.map((id: string) => ({ id })));
         }
       } catch (e) {
         console.error(e);
@@ -64,9 +97,9 @@ export default function Radar() {
         <div className="absolute z-10 mt-10 text-[10px] sm:text-xs font-mono bg-[#FFFFFF] px-1 border-[1px] border-[#000000] uppercase">{t('local')}</div>
 
         {/* Peers */}
-        {peers.map((peer, i) => {
+        {peers.map((peer) => {
           // Calculate a random fixed position for each peer based on their string hash
-          const hash = peer.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
+          const hash = peer.id.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
           const angle = (hash % 360) * (Math.PI / 180);
           const distance = 50 + (hash % 80); // Distance between 50 and 130
           
@@ -74,7 +107,7 @@ export default function Radar() {
           const y = Math.sin(angle) * distance;
 
           return (
-            <React.Fragment key={peer}>
+            <React.Fragment key={peer.id}>
               <div 
                 className="absolute z-10 w-3 h-3 bg-[#FF0000] rounded-full border-[2px] border-[#FFFFFF] animate-pulse"
                 style={{ transform: `translate(${x}px, ${y}px)` }}
@@ -83,7 +116,7 @@ export default function Radar() {
                 className="absolute z-10 text-[10px] sm:text-xs font-mono bg-[#FFFFFF] px-1 border-[1px] border-[#000000]"
                 style={{ transform: `translate(${x}px, ${y + 20}px)` }}
               >
-                {peer}
+                {peer.display_name || peer.id}
               </div>
             </React.Fragment>
           );
@@ -93,6 +126,39 @@ export default function Radar() {
           <div className="absolute bottom-6 text-xs sm:text-sm font-mono text-[#666666]">{t('scanningForSignals')}</div>
         )}
       </div>
+
+      {peers.length > 0 && (
+        <div className="w-full mt-8 border-[3px] border-[#000000] overflow-x-auto">
+          <table className="w-full text-left min-w-[620px]">
+            <thead className="bg-[#000000] text-[#FFFFFF]">
+              <tr>
+                <th className="p-3 font-display uppercase text-xs">{t('deviceId')}</th>
+                <th className="p-3 font-display uppercase text-xs">{t('syncStatus')}</th>
+                <th className="p-3 font-display uppercase text-xs">{t('tokens24h')}</th>
+                <th className="p-3 font-display uppercase text-xs">{t('totalTokens')}</th>
+                <th className="p-3 font-display uppercase text-xs">{t('lanEndpoint')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {peers.map((peer) => (
+                <tr key={peer.id} className="border-b-[3px] border-[#000000] last:border-b-0">
+                  <td className="p-3 font-mono">
+                    <div className="font-bold">{peer.display_name || peer.id}</div>
+                    <div className="text-xs text-[#666666]">{peer.id}</div>
+                  </td>
+                  <td className={`p-3 font-mono uppercase ${statusClass(peer.sync_status)}`}>
+                    <div>{peer.sync_status || 'pending'}</div>
+                    {peer.sync_error && <div className="normal-case text-xs text-[#FF0000] max-w-[220px] truncate" title={peer.sync_error}>{peer.sync_error}</div>}
+                  </td>
+                  <td className="p-3 font-mono">{fmt(peer.tokens_24h)}</td>
+                  <td className="p-3 font-mono">{fmt(peer.tokens_total)}</td>
+                  <td className="p-3 font-mono text-xs">{peer.ip || '-'}{peer.http_port ? `:${peer.http_port}` : ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

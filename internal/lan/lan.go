@@ -3,9 +3,13 @@ package lan
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
+	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -21,9 +25,19 @@ const (
 )
 
 type PeerInfo struct {
-	IP       string
-	HTTPPort int
-	LastSeen time.Time
+	ID              string
+	IP              string
+	HTTPPort        int
+	LastSeen        time.Time
+	LastSync        time.Time
+	LastSyncAttempt time.Time
+	SyncStatus      string
+	SyncError       string
+}
+
+type syncCursor struct {
+	updatedAt time.Time
+	afterID   int64
 }
 
 // LAN manages LAN-based device discovery and usage broadcasting.
@@ -32,8 +46,10 @@ type LAN struct {
 	DeviceID string
 	HTTPPort int
 
-	mu          sync.RWMutex
-	activePeers map[string]PeerInfo
+	mu            sync.RWMutex
+	activePeers   map[string]PeerInfo
+	peerUpdates   chan struct{}
+	lastDirtySent time.Time
 }
 
 // New creates a new LAN instance for the given device.
@@ -42,6 +58,7 @@ func New(deviceID string, httpPort int) *LAN {
 		DeviceID:    deviceID,
 		HTTPPort:    httpPort,
 		activePeers: make(map[string]PeerInfo),
+		peerUpdates: make(chan struct{}, 1),
 	}
 }
 
@@ -64,19 +81,56 @@ func (l *LAN) GetActivePeers() []string {
 	return peers
 }
 
-// RecordPeer records a peer as active. Exposed for testing.
-func (l *LAN) RecordPeer(deviceID, ip string, httpPort int) {
+// GetActivePeerInfos returns recently seen remote peers with sync status.
+func (l *LAN) GetActivePeerInfos() []PeerInfo {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.activePeers[deviceID] = PeerInfo{
-		IP:       ip,
-		HTTPPort: httpPort,
-		LastSeen: time.Time{}, // handled below, but time.Now() is what we want
+
+	now := time.Now()
+	peers := make([]PeerInfo, 0, len(l.activePeers))
+	for id, peer := range l.activePeers {
+		if now.Sub(peer.LastSeen) >= PeerTTL {
+			delete(l.activePeers, id)
+			continue
+		}
+		if id == l.DeviceID {
+			continue
+		}
+		peer.ID = id
+		peers = append(peers, peer)
 	}
-	// Note: We'll set LastSeen correctly
-	p := l.activePeers[deviceID]
-	p.LastSeen = time.Now()
-	l.activePeers[deviceID] = p
+	sort.Slice(peers, func(i, j int) bool {
+		return peers[i].ID < peers[j].ID
+	})
+	return peers
+}
+
+// RecordPeer records a peer as active. Exposed for testing.
+func (l *LAN) RecordPeer(deviceID, ip string, httpPort int) {
+	l.recordPeer(deviceID, ip, httpPort, true)
+}
+
+func (l *LAN) recordPeer(deviceID, ip string, httpPort int, notify bool) {
+	l.mu.Lock()
+	peer := l.activePeers[deviceID]
+	wasNew := peer.ID == ""
+	endpointChanged := peer.IP != ip || peer.HTTPPort != httpPort
+	peer.ID = deviceID
+	peer.IP = ip
+	peer.HTTPPort = httpPort
+	peer.LastSeen = time.Now()
+	if peer.SyncStatus == "" {
+		peer.SyncStatus = "pending"
+	}
+	l.activePeers[deviceID] = peer
+	l.mu.Unlock()
+
+	if notify || wasNew || endpointChanged {
+		select {
+		case l.peerUpdates <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // RecordPeerAt records a peer with a specific timestamp. Exposed for testing.
@@ -84,10 +138,37 @@ func (l *LAN) RecordPeerAt(deviceID, ip string, httpPort int, at time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.activePeers[deviceID] = PeerInfo{
-		IP:       ip,
-		HTTPPort: httpPort,
-		LastSeen: at,
+		ID:         deviceID,
+		IP:         ip,
+		HTTPPort:   httpPort,
+		LastSeen:   at,
+		SyncStatus: "pending",
 	}
+}
+
+func (l *LAN) updatePeerSyncAttempt(id string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	peer := l.activePeers[id]
+	peer.ID = id
+	peer.LastSyncAttempt = time.Now()
+	if peer.SyncStatus == "" || peer.SyncStatus == "pending" {
+		peer.SyncStatus = "syncing"
+	}
+	l.activePeers[id] = peer
+}
+
+func (l *LAN) updatePeerSyncResult(id string, status string, errMsg string, syncedAt time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	peer := l.activePeers[id]
+	peer.ID = id
+	peer.SyncStatus = status
+	peer.SyncError = errMsg
+	if status == "ok" {
+		peer.LastSync = syncedAt
+	}
+	l.activePeers[id] = peer
 }
 
 // StartPinger periodically sends ping packets to the LAN.
@@ -112,6 +193,28 @@ func (l *LAN) Ping() {
 		DeviceID: l.DeviceID,
 		HTTPPort: l.HTTPPort,
 		Type:     "ping",
+	}
+	data, err := json.Marshal(payload)
+	if err == nil {
+		l.sendToAll(data)
+	}
+}
+
+// AnnounceDirty tells peers that local database content changed. Token data is
+// still pulled over HTTP; UDP is only a wake-up signal.
+func (l *LAN) AnnounceDirty() {
+	l.mu.Lock()
+	if time.Since(l.lastDirtySent) < 2*time.Second {
+		l.mu.Unlock()
+		return
+	}
+	l.lastDirtySent = time.Now()
+	l.mu.Unlock()
+
+	payload := model.TrackPayload{
+		DeviceID: l.DeviceID,
+		HTTPPort: l.HTTPPort,
+		Type:     "dirty",
 	}
 	data, err := json.Marshal(payload)
 	if err == nil {
@@ -188,47 +291,19 @@ func (l *LAN) sendToAll(data []byte) {
 	}
 }
 
-// StartBroadcaster listens to a channel and multicasts/broadcasts token usage to the LAN
+// StartBroadcaster listens to local usage events and broadcasts dirty signals.
+// Token records are synchronized over HTTP, not UDP.
 func (l *LAN) StartBroadcaster(usageChan <-chan model.TokenUsage) {
-	for usage := range usageChan {
-		payload := model.TrackPayload{
-			DeviceID: l.DeviceID,
-			HTTPPort: l.HTTPPort,
-			Type:     "track",
-			Usage:    usage,
-		}
-		data, err := json.Marshal(payload)
-		if err != nil {
-			continue
-		}
-
-		// Fire and forget to both addresses
-		l.sendToAll(data)
+	for range usageChan {
+		l.AnnounceDirty()
 	}
 }
 
-// StartListener joins the multicast group and forwards received usages to outChan
+// StartListener joins the multicast group and records discovered peers.
+// Token data is not trusted from UDP; peers pull records through HTTP sync.
 func (l *LAN) StartListener(outChan chan<- model.TokenUsage) {
+	_ = outChan
 	var wg sync.WaitGroup
-
-	seenUUIDs := make(map[string]time.Time)
-	var seenMu sync.Mutex
-
-	// Cleanup old UUIDs
-	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
-		defer ticker.Stop()
-		for range ticker.C {
-			seenMu.Lock()
-			now := time.Now()
-			for k, v := range seenUUIDs {
-				if now.Sub(v) > 10*time.Minute {
-					delete(seenUUIDs, k)
-				}
-			}
-			seenMu.Unlock()
-		}
-	}()
 
 	processPayload := func(buf []byte, n int, srcAddr *net.UDPAddr) {
 		var payload model.TrackPayload
@@ -247,36 +322,7 @@ func (l *LAN) StartListener(outChan chan<- model.TokenUsage) {
 		}
 
 		// Update active peers (remote only)
-		l.RecordPeer(payload.DeviceID, ipStr, payload.HTTPPort)
-
-		if payload.Type == "ping" {
-			return // just a presence announce
-		}
-
-		// Deduplicate incoming usage packets
-		// We use a combination of UUID and token counts to form a unique state hash.
-		// This ensures identical duplicate UDP packets (from multicast+broadcast) are dropped,
-		// but legitimate streaming updates (where tokens increase) are allowed through.
-		uuid := payload.Usage.UUID
-		if uuid != "" {
-			stateHash := uuid
-			// Append token counts to distinguish stream updates
-			if payload.Usage.OutputTokens > 0 || payload.Usage.InputTokens > 0 || payload.Usage.Thoughts > 0 {
-				stateHash = fmt.Sprintf("%s-%d-%d-%d", uuid, payload.Usage.InputTokens, payload.Usage.OutputTokens, payload.Usage.Thoughts)
-			}
-
-			seenMu.Lock()
-			if _, exists := seenUUIDs[stateHash]; exists {
-				seenMu.Unlock()
-				return
-			}
-			seenUUIDs[stateHash] = time.Now()
-			seenMu.Unlock()
-		}
-
-		// Push to the channel for processing (DB, TUI, etc.)
-		payload.Usage.DeviceID = payload.DeviceID
-		outChan <- payload.Usage
+		l.recordPeer(payload.DeviceID, ipStr, payload.HTTPPort, payload.Type == "dirty")
 	}
 
 	// Multicast Listener
@@ -332,10 +378,10 @@ func (l *LAN) StartAutoSync(database *db.DB, token string) {
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 
-	// Track the last time we synced with each peer
-	lastSync := make(map[string]time.Time)
+	// Track the last cursor we synced with each peer.
+	lastSync := make(map[string]syncCursor)
 
-	for range ticker.C {
+	syncOnce := func() {
 		l.mu.RLock()
 		peers := make(map[string]PeerInfo)
 		for id, peer := range l.activePeers {
@@ -347,55 +393,110 @@ func (l *LAN) StartAutoSync(database *db.DB, token string) {
 
 		for id, peer := range peers {
 			if peer.IP == "" || peer.HTTPPort == 0 {
+				l.updatePeerSyncResult(id, "unreachable", "missing peer address or HTTP port", time.Time{})
 				continue
 			}
 
 			l.syncWithPeer(id, peer, database, token, lastSync)
 		}
 	}
-}
 
-func (l *LAN) syncWithPeer(id string, peer PeerInfo, database *db.DB, token string, lastSync map[string]time.Time) {
-	since := lastSync[id]
-	url := fmt.Sprintf("http://%s:%d/api/sync/pull", peer.IP, peer.HTTPPort)
-	if !since.IsZero() {
-		url += fmt.Sprintf("?since=%s", since.Format(time.RFC3339Nano))
-	}
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return
-	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusOK {
-		var records []model.SyncRecord
-		if err := json.NewDecoder(resp.Body).Decode(&records); err == nil {
-			var maxUpdatedAt time.Time
-			for _, r := range records {
-				if err := database.UpsertSyncRecord(r); err != nil {
-					log.Printf("LAN sync DB insert error for device %s: %v", r.DeviceID, err)
-				}
-				if r.UpdatedAt.After(maxUpdatedAt) {
-					maxUpdatedAt = r.UpdatedAt
-				}
-			}
-			// Keep a small overlap so clock skew and same-second updates cannot
-			// strand repaired historical rows on peers.
-			if maxUpdatedAt.IsZero() {
-				lastSync[id] = time.Now().UTC().Add(-5 * time.Minute)
-			} else {
-				lastSync[id] = maxUpdatedAt.Add(-1 * time.Second)
-			}
+	syncOnce()
+	for {
+		select {
+		case <-ticker.C:
+			syncOnce()
+		case <-l.peerUpdates:
+			syncOnce()
 		}
 	}
+}
+
+func (l *LAN) syncWithPeer(id string, peer PeerInfo, database *db.DB, token string, lastSync map[string]syncCursor) {
+	baseURL := "http://" + net.JoinHostPort(peer.IP, strconv.Itoa(peer.HTTPPort)) + "/api/sync/pull"
+	cursor := lastSync[id]
+	l.updatePeerSyncAttempt(id)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	for {
+		values := url.Values{}
+		values.Set("limit", "1000")
+		if !cursor.updatedAt.IsZero() {
+			values.Set("since", cursor.updatedAt.Format(time.RFC3339Nano))
+		}
+		if cursor.afterID > 0 {
+			values.Set("after_id", strconv.FormatInt(cursor.afterID, 10))
+		}
+
+		req, err := http.NewRequest("GET", baseURL+"?"+values.Encode(), nil)
+		if err != nil {
+			l.updatePeerSyncResult(id, "error", err.Error(), time.Time{})
+			return
+		}
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			l.updatePeerSyncResult(id, "unreachable", err.Error(), time.Time{})
+			return
+		}
+
+		if resp.StatusCode == http.StatusUnauthorized {
+			resp.Body.Close()
+			l.updatePeerSyncResult(id, "unauthorized", "remote rejected sync token", time.Time{})
+			return
+		}
+		if resp.StatusCode != http.StatusOK {
+			status := resp.StatusCode
+			resp.Body.Close()
+			l.updatePeerSyncResult(id, "http_error", fmt.Sprintf("remote returned HTTP %d", status), time.Time{})
+			return
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			l.updatePeerSyncResult(id, "error", err.Error(), time.Time{})
+			return
+		}
+
+		var page model.SyncPullResponse
+		if err := json.Unmarshal(body, &page); err != nil {
+			var legacyRecords []model.SyncRecord
+			if legacyErr := json.Unmarshal(body, &legacyRecords); legacyErr != nil {
+				l.updatePeerSyncResult(id, "error", err.Error(), time.Time{})
+				return
+			}
+			page.Records = legacyRecords
+			page.HasMore = false
+		}
+
+		for _, r := range page.Records {
+			if err := database.UpsertSyncRecord(r); err != nil {
+				errMsg := fmt.Sprintf("DB insert error for device %s: %v", r.DeviceID, err)
+				log.Printf("LAN sync %s", errMsg)
+				l.updatePeerSyncResult(id, "error", errMsg, time.Time{})
+				return
+			}
+		}
+		if !page.NextUpdatedAt.IsZero() {
+			cursor.updatedAt = page.NextUpdatedAt
+			cursor.afterID = page.NextAfterID
+		}
+		if !page.HasMore {
+			break
+		}
+		if page.NextUpdatedAt.IsZero() || page.NextAfterID == 0 {
+			l.updatePeerSyncResult(id, "error", "remote returned incomplete sync cursor", time.Time{})
+			return
+		}
+	}
+
+	if cursor.updatedAt.IsZero() {
+		cursor.updatedAt = time.Now().UTC().Add(-5 * time.Minute)
+	}
+	lastSync[id] = cursor
+	l.updatePeerSyncResult(id, "ok", "", time.Now().UTC())
 }

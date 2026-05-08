@@ -1,5 +1,7 @@
 package model
 
+import "time"
+
 // --- Shared types used by both web/handler.go and desktop/app.go ---
 
 // ModelStats represents per-model aggregated usage and cost.
@@ -63,6 +65,29 @@ type StatsResponse struct {
 	Devices  []DeviceInfo  `json:"devices"`
 	Projects []ProjectStat `json:"projects"`
 	IsPaused bool          `json:"is_paused"`
+}
+
+// LANPeerInfo describes a discovered LAN peer and the local sync state for it.
+type LANPeerInfo struct {
+	ID              string    `json:"id"`
+	DisplayName     string    `json:"display_name"`
+	IP              string    `json:"ip"`
+	HTTPPort        int       `json:"http_port"`
+	LastSeen        time.Time `json:"last_seen"`
+	LastSync        time.Time `json:"last_sync"`
+	LastSyncAttempt time.Time `json:"last_sync_attempt"`
+	SyncStatus      string    `json:"sync_status"`
+	SyncError       string    `json:"sync_error"`
+	Tokens24h       int       `json:"tokens_24h"`
+	TokensTotal     int       `json:"tokens_total"`
+	CostTotal       float64   `json:"cost_total"`
+}
+
+// LANScanResponse is returned by /api/lan/scan. Peers is kept for older
+// clients; PeerInfos is the canonical structured payload.
+type LANScanResponse struct {
+	Peers     []string      `json:"peers"`
+	PeerInfos []LANPeerInfo `json:"peer_infos"`
 }
 
 // CacheSavingsResponse is the cache savings analysis response.

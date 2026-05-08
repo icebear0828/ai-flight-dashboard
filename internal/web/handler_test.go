@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"ai-flight-dashboard/internal/lan"
 	"ai-flight-dashboard/internal/model"
 	"ai-flight-dashboard/internal/testutil"
 	"ai-flight-dashboard/internal/web"
@@ -250,5 +252,152 @@ func TestAPICacheSavings(t *testing.T) {
 	}
 	if data.CacheHitRate < 0 || data.CacheHitRate > 100 {
 		t.Errorf("cache hit rate should be 0-100, got %f", data.CacheHitRate)
+	}
+}
+
+func TestLANScanIncludesPeerInfoAndTokenSummary(t *testing.T) {
+	database, calc := testutil.NewTestDBAndCalc(t)
+	defer database.Close()
+
+	now := time.Now().UTC()
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, OutputTokens: 200},
+		1.50, now.Add(-10*time.Minute), "/remote.jsonl", "remote-device",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	lanInst := lan.New("local-device", 19100)
+	lanInst.RecordPeer("remote-device", "192.168.1.25", 19100)
+
+	handler := web.NewHandler(database, calc, nil, lanInst, "", emptyFS)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/lan/scan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var data model.LANScanResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Peers) != 1 || data.Peers[0] != "remote-device" {
+		t.Fatalf("expected compatible peers list, got %+v", data.Peers)
+	}
+	if len(data.PeerInfos) != 1 {
+		t.Fatalf("expected one peer info, got %+v", data.PeerInfos)
+	}
+	peer := data.PeerInfos[0]
+	if peer.ID != "remote-device" || peer.IP != "192.168.1.25" || peer.HTTPPort != 19100 {
+		t.Fatalf("unexpected peer info: %+v", peer)
+	}
+	if peer.SyncStatus != "pending" {
+		t.Fatalf("expected pending sync status, got %q", peer.SyncStatus)
+	}
+	if peer.Tokens24h != 1200 || peer.TokensTotal != 1200 {
+		t.Fatalf("expected token summaries to include synced DB data, got %+v", peer)
+	}
+}
+
+func TestSyncPullPaginates(t *testing.T) {
+	database, calc := testutil.NewTestDBAndCalc(t)
+	defer database.Close()
+
+	now := time.Now().UTC()
+	for i, uuid := range []string{"sync-pull-1", "sync-pull-2"} {
+		if err := database.InsertUsageWithTime(
+			model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 100 + i, OutputTokens: 10, UUID: uuid},
+			1.00, now.Add(time.Duration(i)*time.Second), "/sync.jsonl", "remote",
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	handler := web.NewHandler(database, calc, nil, nil, "secret-token", emptyFS)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/sync/pull?limit=1", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var first model.SyncPullResponse
+	if err := json.NewDecoder(resp.Body).Decode(&first); err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Records) != 1 || !first.HasMore || first.NextUpdatedAt.IsZero() || first.NextAfterID == 0 {
+		t.Fatalf("unexpected first sync page: %+v", first)
+	}
+
+	nextURL := srv.URL + "/api/sync/pull?limit=1&since=" + first.NextUpdatedAt.Format(time.RFC3339Nano) + "&after_id=" + strconv.FormatInt(first.NextAfterID, 10)
+	req, _ = http.NewRequest(http.MethodGet, nextURL, nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var second model.SyncPullResponse
+	if err := json.NewDecoder(resp.Body).Decode(&second); err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Records) != 1 || second.Records[0].UUID == first.Records[0].UUID {
+		t.Fatalf("expected cursor to advance, first=%+v second=%+v", first, second)
+	}
+}
+
+func TestLANHandlerExposesOnlySyncSurface(t *testing.T) {
+	database, _ := testutil.NewTestDBAndCalc(t)
+	defer database.Close()
+
+	handler := web.NewLANHandler(database, "secret-token")
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected minimal LAN handler to hide dashboard API, got %d", resp.StatusCode)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/sync/pull?limit=1", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected authorized sync pull, got %d", resp.StatusCode)
+	}
+}
+
+func TestSyncPullRequiresToken(t *testing.T) {
+	database, calc := testutil.NewTestDBAndCalc(t)
+	defer database.Close()
+
+	handler := web.NewHandler(database, calc, nil, nil, "", emptyFS)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/sync/pull")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected sync pull to require token, got %d", resp.StatusCode)
 	}
 }
