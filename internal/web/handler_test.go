@@ -305,6 +305,44 @@ func TestLANScanIncludesPeerInfoAndTokenSummary(t *testing.T) {
 	}
 }
 
+func TestLANScanAndJoinRemainAvailableWithSyncToken(t *testing.T) {
+	database, calc := testutil.NewTestDBAndCalc(t)
+	defer database.Close()
+
+	lanInst := lan.New("local-device", 19100)
+	lanInst.RecordPeer("remote-device", "192.168.1.25", 0)
+
+	handler := web.NewHandler(database, calc, nil, lanInst, "secret-token", emptyFS)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/lan/scan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected unauthenticated UI LAN scan to remain available with sync token, got %d", resp.StatusCode)
+	}
+
+	var data model.LANScanResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		t.Fatal(err)
+	}
+	if len(data.PeerInfos) != 1 || data.PeerInfos[0].ID != "remote-device" {
+		t.Fatalf("expected LAN peer info, got %+v", data)
+	}
+
+	resp, err = http.Post(srv.URL+"/api/lan/join", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected unauthenticated UI LAN join to remain available with sync token, got %d", resp.StatusCode)
+	}
+}
+
 func TestSyncPullPaginates(t *testing.T) {
 	database, calc := testutil.NewTestDBAndCalc(t)
 	defer database.Close()

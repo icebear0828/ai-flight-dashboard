@@ -119,6 +119,12 @@ func (l *LAN) recordPeer(deviceID, ip string, httpPort int, notify bool) {
 	peer.IP = ip
 	peer.HTTPPort = httpPort
 	peer.LastSeen = time.Now()
+	if httpPort == 0 {
+		peer.SyncStatus = "discovery_only"
+		peer.SyncError = ""
+	} else if peer.SyncStatus == "discovery_only" {
+		peer.SyncStatus = "pending"
+	}
 	if peer.SyncStatus == "" {
 		peer.SyncStatus = "pending"
 	}
@@ -179,6 +185,7 @@ func (l *LAN) StartPinger() {
 		Type:     "ping",
 	}
 	data, _ := json.Marshal(payload)
+	l.sendToAll(data)
 
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -393,7 +400,7 @@ func (l *LAN) StartAutoSync(database *db.DB, token string) {
 
 		for id, peer := range peers {
 			if peer.IP == "" || peer.HTTPPort == 0 {
-				l.updatePeerSyncResult(id, "unreachable", "missing peer address or HTTP port", time.Time{})
+				l.updatePeerSyncResult(id, "discovery_only", "", time.Time{})
 				continue
 			}
 

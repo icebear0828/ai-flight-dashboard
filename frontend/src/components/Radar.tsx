@@ -28,7 +28,7 @@ const fmt = (value: unknown) => {
 
 const statusClass = (status?: string) => {
   if (status === 'ok') return 'text-[#008000]';
-  if (status === 'syncing' || status === 'pending') return 'text-[#0000FF]';
+  if (status === 'syncing' || status === 'pending' || status === 'discovery_only') return 'text-[#0000FF]';
   return 'text-[#FF0000]';
 };
 
