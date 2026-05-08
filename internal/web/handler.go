@@ -190,7 +190,9 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		// Acknowledge join
+		if lanInst != nil {
+			lanInst.Ping()
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 
