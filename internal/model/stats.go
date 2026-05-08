@@ -4,16 +4,17 @@ package model
 
 // ModelStats represents per-model aggregated usage and cost.
 type ModelStats struct {
-	Model               string  `json:"model"`
-	Events              int     `json:"events"`
-	InputTokens         int     `json:"input_tokens"`
-	CachedTokens        int     `json:"cached_tokens"`
-	CacheCreationTokens int     `json:"cache_creation_tokens"`
-	OutputTokens        int     `json:"output_tokens"`
-	TotalCost           float64 `json:"total_cost"`
-	InputPricePerM      float64 `json:"input_price_per_m"`
-	CachedPricePerM     float64 `json:"cached_price_per_m"`
-	OutputPricePerM     float64 `json:"output_price_per_m"`
+	Model                  string  `json:"model"`
+	Events                 int     `json:"events"`
+	InputTokens            int     `json:"input_tokens"`
+	CachedTokens           int     `json:"cached_tokens"`
+	CacheCreationTokens    int     `json:"cache_creation_tokens"`
+	OutputTokens           int     `json:"output_tokens"`
+	TotalCost              float64 `json:"total_cost"`
+	InputPricePerM         float64 `json:"input_price_per_m"`
+	CachedPricePerM        float64 `json:"cached_price_per_m"`
+	CacheCreationPricePerM float64 `json:"cache_creation_price_per_m"`
+	OutputPricePerM        float64 `json:"output_price_per_m"`
 }
 
 // SourceStats represents per-source (e.g., "Claude Code") aggregated usage.
@@ -57,11 +58,11 @@ type ProjectStat struct {
 
 // StatsResponse is the full stats API response.
 type StatsResponse struct {
-	Periods  []PeriodCost   `json:"periods"`
-	Sources  []SourceStats  `json:"sources"`
-	Devices  []DeviceInfo   `json:"devices"`
-	Projects []ProjectStat  `json:"projects"`
-	IsPaused bool           `json:"is_paused"`
+	Periods  []PeriodCost  `json:"periods"`
+	Sources  []SourceStats `json:"sources"`
+	Devices  []DeviceInfo  `json:"devices"`
+	Projects []ProjectStat `json:"projects"`
+	IsPaused bool          `json:"is_paused"`
 }
 
 // CacheSavingsResponse is the cache savings analysis response.

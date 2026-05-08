@@ -95,16 +95,17 @@ func (a *App) GetStats(deviceID string) (*model.StatsResponse, error) {
 		}
 		price, _ := a.calc.GetModelPrice(s.Model)
 		src.Models = append(src.Models, model.ModelStats{
-			Model:               s.Model,
-			Events:              s.Events,
-			InputTokens:         s.InputTokens,
-			CachedTokens:        s.CachedTokens,
-			CacheCreationTokens: s.CacheCreationTokens,
-			OutputTokens:        s.OutputTokens,
-			TotalCost:           s.TotalCost,
-			InputPricePerM:      price.InputPricePerM,
-			CachedPricePerM:     price.CachedPricePerM,
-			OutputPricePerM:     price.OutputPricePerM,
+			Model:                  s.Model,
+			Events:                 s.Events,
+			InputTokens:            s.InputTokens,
+			CachedTokens:           s.CachedTokens,
+			CacheCreationTokens:    s.CacheCreationTokens,
+			OutputTokens:           s.OutputTokens,
+			TotalCost:              s.TotalCost,
+			InputPricePerM:         price.InputPricePerM,
+			CachedPricePerM:        price.CachedPricePerM,
+			CacheCreationPricePerM: price.CacheCreationPricePerM,
+			OutputPricePerM:        price.OutputPricePerM,
 		})
 		src.TotalInput += s.InputTokens
 		src.TotalCached += s.CachedTokens

@@ -81,6 +81,15 @@ func TestAPIStats(t *testing.T) {
 	if len(claude.Models) != 1 {
 		t.Errorf("expected 1 Claude model, got %d", len(claude.Models))
 	}
+	if len(claude.Models) == 1 {
+		modelStats := claude.Models[0]
+		if modelStats.InputTokens != 3000 || modelStats.CachedTokens != 13000 || modelStats.OutputTokens != 600 {
+			t.Errorf("Claude model token breakdown missing/wrong: %+v", modelStats)
+		}
+		if modelStats.CacheCreationPricePerM != 22.5 {
+			t.Errorf("Claude model cache creation price missing/wrong: %+v", modelStats)
+		}
+	}
 
 	// Should have devices list
 	if len(data.Devices) == 0 {

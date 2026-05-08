@@ -86,6 +86,7 @@ export namespace model {
 	    total_cost: number;
 	    input_price_per_m: number;
 	    cached_price_per_m: number;
+	    cache_creation_price_per_m: number;
 	    output_price_per_m: number;
 	
 	    static createFrom(source: any = {}) {
@@ -103,6 +104,7 @@ export namespace model {
 	        this.total_cost = source["total_cost"];
 	        this.input_price_per_m = source["input_price_per_m"];
 	        this.cached_price_per_m = source["cached_price_per_m"];
+	        this.cache_creation_price_per_m = source["cache_creation_price_per_m"];
 	        this.output_price_per_m = source["output_price_per_m"];
 	    }
 	}
@@ -291,4 +293,3 @@ export namespace updater {
 	}
 
 }
-
