@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"ai-flight-dashboard/internal/calculator"
@@ -77,9 +78,12 @@ func (s *Scanner) Scan(usageChan chan<- watcher.TokenUsage) (int, error) {
 		return 0, nil
 	}
 
-	threads, err := loadThreads(s.StatePath)
+	threads, ok, err := loadThreads(s.StatePath)
 	if err != nil {
 		return 0, err
+	}
+	if !ok {
+		return 0, nil
 	}
 
 	offset, err := s.db.GetOffset(OffsetKey)
@@ -92,6 +96,16 @@ func (s *Scanner) Scan(usageChan chan<- watcher.TokenUsage) (int, error) {
 		return 0, err
 	}
 	defer logConn.Close()
+	hasLogs, err := hasTable(logConn, "logs")
+	if err != nil {
+		if isOptionalCodexDBError(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if !hasLogs {
+		return 0, nil
+	}
 
 	rows, err := logConn.Query(`
 		SELECT id, ts, ts_nanos, feedback_log_body
@@ -104,6 +118,9 @@ func (s *Scanner) Scan(usageChan chan<- watcher.TokenUsage) (int, error) {
 		ORDER BY id ASC
 	`, offset)
 	if err != nil {
+		if isOptionalCodexDBError(err) {
+			return 0, nil
+		}
 		return 0, err
 	}
 	defer rows.Close()
@@ -114,6 +131,9 @@ func (s *Scanner) Scan(usageChan chan<- watcher.TokenUsage) (int, error) {
 		var logID, tsSec, tsNanos int64
 		var body string
 		if err := rows.Scan(&logID, &tsSec, &tsNanos, &body); err != nil {
+			if isOptionalCodexDBError(err) {
+				return count, nil
+			}
 			return count, err
 		}
 		event, ok := parseCodexEvent(logID, tsSec, tsNanos, body)
@@ -162,6 +182,9 @@ func (s *Scanner) Scan(usageChan chan<- watcher.TokenUsage) (int, error) {
 		count++
 	}
 	if err := rows.Err(); err != nil {
+		if isOptionalCodexDBError(err) {
+			return count, nil
+		}
 		return count, err
 	}
 	if maxOffset > offset {
@@ -172,16 +195,32 @@ func (s *Scanner) Scan(usageChan chan<- watcher.TokenUsage) (int, error) {
 	return count, nil
 }
 
-func loadThreads(statePath string) (map[string]threadInfo, error) {
+func loadThreads(statePath string) (map[string]threadInfo, bool, error) {
 	conn, err := openReadonlySQLite(statePath)
 	if err != nil {
-		return nil, err
+		if isOptionalCodexDBError(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
 	}
 	defer conn.Close()
+	hasThreads, err := hasTable(conn, "threads")
+	if err != nil {
+		if isOptionalCodexDBError(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if !hasThreads {
+		return nil, false, nil
+	}
 
 	rows, err := conn.Query("SELECT id, COALESCE(model, ''), cwd FROM threads")
 	if err != nil {
-		return nil, err
+		if isOptionalCodexDBError(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
 	}
 	defer rows.Close()
 
@@ -189,11 +228,20 @@ func loadThreads(statePath string) (map[string]threadInfo, error) {
 	for rows.Next() {
 		var id, modelName, cwd string
 		if err := rows.Scan(&id, &modelName, &cwd); err != nil {
-			return nil, err
+			if isOptionalCodexDBError(err) {
+				return nil, false, nil
+			}
+			return nil, false, err
 		}
 		threads[id] = threadInfo{model: modelName, cwd: cwd}
 	}
-	return threads, rows.Err()
+	if err := rows.Err(); err != nil {
+		if isOptionalCodexDBError(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return threads, true, nil
 }
 
 func parseCodexEvent(logID int64, tsSec int64, tsNanos int64, body string) (codexEvent, bool) {
@@ -248,4 +296,25 @@ func parseIntField(fields map[string]string, key string) int {
 
 func openReadonlySQLite(path string) (*sql.DB, error) {
 	return sql.Open("sqlite3", fmt.Sprintf("file:%s?mode=ro&_busy_timeout=5000", filepath.ToSlash(path)))
+}
+
+func hasTable(conn *sql.DB, name string) (bool, error) {
+	var tableName string
+	err := conn.QueryRow("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(&tableName)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func isOptionalCodexDBError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "file is not a database") ||
+		strings.Contains(msg, "database disk image is malformed") ||
+		strings.Contains(msg, "unable to open database file") ||
+		strings.Contains(msg, "no such table") ||
+		strings.Contains(msg, "no such column")
 }

@@ -2,6 +2,7 @@ package codexusage_test
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -86,6 +87,85 @@ func TestScanImportsCodexTelemetryEvents(t *testing.T) {
 	}
 }
 
+func TestScanSkipsMissingOptionalCodexFiles(t *testing.T) {
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
+
+	dir := t.TempDir()
+	s := codexusage.NewWithPaths(database, calc, "local", filepath.Join(dir, "missing-state.sqlite"), filepath.Join(dir, "missing-logs.sqlite"))
+	count, err := s.Scan(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expected missing optional Codex files to scan 0 rows, got %d", count)
+	}
+}
+
+func TestScanSkipsEmptyOptionalCodexDatabases(t *testing.T) {
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
+
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state_5.sqlite")
+	logsPath := filepath.Join(dir, "logs_2.sqlite")
+	createEmptySQLite(t, statePath)
+	createEmptySQLite(t, logsPath)
+
+	s := codexusage.NewWithPaths(database, calc, "local", statePath, logsPath)
+	count, err := s.Scan(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expected empty optional Codex DBs to scan 0 rows, got %d", count)
+	}
+}
+
+func TestScanSkipsMalformedOptionalCodexDatabases(t *testing.T) {
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
+
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state_5.sqlite")
+	logsPath := filepath.Join(dir, "logs_2.sqlite")
+	if err := os.WriteFile(statePath, []byte("not sqlite"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logsPath, []byte("not sqlite"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := codexusage.NewWithPaths(database, calc, "local", statePath, logsPath)
+	count, err := s.Scan(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expected malformed optional Codex DBs to scan 0 rows, got %d", count)
+	}
+}
+
+func TestScanSkipsIncompatibleOptionalCodexSchema(t *testing.T) {
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
+
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state_5.sqlite")
+	logsPath := filepath.Join(dir, "logs_2.sqlite")
+	createSQLiteWithSchema(t, statePath, "CREATE TABLE threads (unexpected TEXT)")
+	createSQLiteWithSchema(t, logsPath, "CREATE TABLE logs (unexpected TEXT)")
+
+	s := codexusage.NewWithPaths(database, calc, "local", statePath, logsPath)
+	count, err := s.Scan(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expected incompatible optional Codex schema to scan 0 rows, got %d", count)
+	}
+}
+
 func createCodexState(t *testing.T, path string) {
 	t.Helper()
 	conn, err := sql.Open("sqlite3", path)
@@ -101,6 +181,29 @@ func createCodexState(t *testing.T, path string) {
 		)
 	`)
 	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func createEmptySQLite(t *testing.T, path string) {
+	t.Helper()
+	createSQLiteWithSchema(t, path, "")
+}
+
+func createSQLiteWithSchema(t *testing.T, path string, schema string) {
+	t.Helper()
+	conn, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if schema == "" {
+		if err := conn.Ping(); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if _, err := conn.Exec(schema); err != nil {
 		t.Fatal(err)
 	}
 }
