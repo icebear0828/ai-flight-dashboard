@@ -1,0 +1,111 @@
+name: Tag Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version. Use vX.Y.Z, X.Y.Z, or leave empty to bump the latest patch tag.'
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: tag-release
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  create-tag:
+    name: Create Release Tag
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve release version
+        id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          requested="$REQUESTED_VERSION"
+
+          if [[ -z "$requested" ]]; then
+            latest="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
+            if [[ -z "$latest" ]]; then
+              requested="v0.1.0"
+            else
+              IFS=. read -r major minor patch <<< "${latest#v}"
+              requested="v${major}.${minor}.$((patch + 1))"
+            fi
+          fi
+
+          if [[ "$requested" != v* ]]; then
+            requested="v${requested}"
+          fi
+
+          if [[ ! "$requested" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release version must use vX.Y.Z or X.Y.Z format; got $requested"
+            exit 1
+          fi
+
+          if git rev-parse -q --verify "refs/tags/$requested" >/dev/null; then
+            echo "Tag $requested already exists"
+            exit 1
+          fi
+
+          if git tag --points-at HEAD | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "main HEAD is already release-tagged:"
+            git tag --points-at HEAD
+            exit 1
+          fi
+
+          echo "tag=$requested" >> "$GITHUB_OUTPUT"
+          echo "Resolved release tag: $requested"
+
+      - name: Verify main tests passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          target_sha="$(git rev-parse HEAD)"
+          conclusion="$(gh run list \
+            --workflow Test \
+            --branch main \
+            --commit "$target_sha" \
+            --event push \
+            --status completed \
+            --json conclusion \
+            --jq '.[0].conclusion // ""' \
+            --limit 1)"
+          url="$(gh run list \
+            --workflow Test \
+            --branch main \
+            --commit "$target_sha" \
+            --event push \
+            --status completed \
+            --json url \
+            --jq '.[0].url // ""' \
+            --limit 1)"
+
+          if [[ "$conclusion" != "success" ]]; then
+            echo "No successful Test workflow found for main commit $target_sha."
+            if [[ -n "$url" ]]; then
+              echo "Latest completed Test run: $url"
+            fi
+            exit 1
+          fi
+
+          echo "Verified Test workflow success for $target_sha: $url"
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
