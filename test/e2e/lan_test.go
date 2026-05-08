@@ -17,8 +17,8 @@ func TestLANPingDiscovery(t *testing.T) {
 
 	outChan := make(chan model.TokenUsage, 10)
 
-	listener := lan.New("local-test-device")
-	sender := lan.New("device-10-5")
+	listener := lan.New("local-test-device", 19100)
+	sender := lan.New("device-10-5", 19100)
 
 	// Start listener
 	go listener.StartListener(outChan)

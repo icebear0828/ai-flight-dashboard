@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"time"
 
 	"ai-flight-dashboard/internal/calculator"
@@ -20,21 +21,42 @@ import (
 	"ai-flight-dashboard/internal/watcher"
 )
 
+const (
+	defaultSyncLimit = 1000
+	maxSyncLimit     = 5000
+)
+
+func authMiddleware(token string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if token != "" {
+			authHeader := r.Header.Get("Authorization")
+			if authHeader != "Bearer "+token {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		next(w, r)
+	}
+}
+
+// NewLANHandler exposes only the endpoints needed by LAN peers.
+func NewLANHandler(database *db.DB, token string) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/api/sync/pull", authMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
+		handleSyncPull(w, r, database)
+	}))
+	return mux
+}
+
 func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Watcher, lanInst *lan.LAN, token string, distBinFS embed.FS) http.Handler {
 	mux := http.NewServeMux()
-
-	authMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			if token != "" {
-				authHeader := r.Header.Get("Authorization")
-				if authHeader != "Bearer "+token {
-					http.Error(w, "Unauthorized", http.StatusUnauthorized)
-					return
-				}
-			}
-			next(w, r)
-		}
-	}
 
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
 		handleStats(w, r, database, calc, wInst)
@@ -48,7 +70,7 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 		if r.Method == http.MethodGet {
 			handleGetPricing(w, r, calc)
 		} else if r.Method == http.MethodPut || r.Method == http.MethodPost {
-			authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+			authMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
 				handlePutPricing(w, r, calc)
 			})(w, r)
 		} else {
@@ -60,7 +82,7 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 		if r.Method == http.MethodGet {
 			handleGetConfig(w, r)
 		} else if r.Method == http.MethodPut {
-			authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+			authMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
 				handlePutConfig(w, r, wInst)
 			})(w, r)
 		} else {
@@ -68,7 +90,7 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 		}
 	})
 
-	mux.HandleFunc("/api/track", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/track", authMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -96,7 +118,7 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 		w.WriteHeader(http.StatusCreated)
 	}))
 
-	mux.HandleFunc("/api/device-alias", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/device-alias", authMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -116,22 +138,44 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	mux.HandleFunc("/api/lan/scan", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/lan/scan", authMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		var peers []string
+		peers := make([]string, 0)
+		peerInfos := make([]model.LANPeerInfo, 0)
 		if lanInst != nil {
 			peers = lanInst.GetActivePeers()
+			aliases, _ := database.GetDeviceAliases()
+			for _, peer := range lanInst.GetActivePeerInfos() {
+				_, in24h, _, _, out24h, _ := database.QueryPeriodStatsSince(time.Now().UTC().Add(-24*time.Hour), peer.ID, "")
+				totalCost, totalIn, _, _, totalOut, _ := database.QueryPeriodStatsAll(peer.ID, "")
+				displayName := peer.ID
+				if alias := aliases[peer.ID]; alias != "" {
+					displayName = alias
+				}
+				peerInfos = append(peerInfos, model.LANPeerInfo{
+					ID:              peer.ID,
+					DisplayName:     displayName,
+					IP:              peer.IP,
+					HTTPPort:        peer.HTTPPort,
+					LastSeen:        peer.LastSeen,
+					LastSync:        peer.LastSync,
+					LastSyncAttempt: peer.LastSyncAttempt,
+					SyncStatus:      peer.SyncStatus,
+					SyncError:       peer.SyncError,
+					Tokens24h:       in24h + out24h,
+					TokensTotal:     totalIn + totalOut,
+					CostTotal:       totalCost,
+				})
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"peers": peers,
-		})
+		json.NewEncoder(w).Encode(model.LANScanResponse{Peers: peers, PeerInfos: peerInfos})
 	}))
 
-	mux.HandleFunc("/api/lan/join", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/lan/join", authMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -140,31 +184,11 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	mux.HandleFunc("/api/sync/pull", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		sinceStr := r.URL.Query().Get("since")
-		var since time.Time
-		if sinceStr != "" {
-			t, err := time.Parse(time.RFC3339Nano, sinceStr)
-			if err != nil {
-				http.Error(w, "Invalid since format, expected RFC3339", http.StatusBadRequest)
-				return
-			}
-			since = t
-		}
-		records, err := database.QuerySyncRecordsSince(since)
-		if err != nil {
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(records)
+	mux.HandleFunc("/api/sync/pull", authMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
+		handleSyncPull(w, r, database)
 	}))
 
-	mux.HandleFunc("/api/pause", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/pause", authMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -234,6 +258,54 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 	mux.Handle("/", http.FileServer(http.FS(staticFS)))
 
 	return mux
+}
+
+func handleSyncPull(w http.ResponseWriter, r *http.Request, database *db.DB) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	sinceStr := r.URL.Query().Get("since")
+	var since time.Time
+	if sinceStr != "" {
+		t, err := time.Parse(time.RFC3339Nano, sinceStr)
+		if err != nil {
+			http.Error(w, "Invalid since format, expected RFC3339", http.StatusBadRequest)
+			return
+		}
+		since = t
+	}
+
+	var afterID int64
+	if afterStr := r.URL.Query().Get("after_id"); afterStr != "" {
+		id, err := strconv.ParseInt(afterStr, 10, 64)
+		if err != nil || id < 0 {
+			http.Error(w, "Invalid after_id", http.StatusBadRequest)
+			return
+		}
+		afterID = id
+	}
+
+	limit := defaultSyncLimit
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		parsed, err := strconv.Atoi(limitStr)
+		if err != nil || parsed <= 0 {
+			http.Error(w, "Invalid limit", http.StatusBadRequest)
+			return
+		}
+		limit = parsed
+	}
+	if limit > maxSyncLimit {
+		limit = maxSyncLimit
+	}
+
+	page, err := database.QuerySyncRecordsPage(since, afterID, limit)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(page)
 }
 
 func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *calculator.Calculator, wInst *watcher.Watcher) {

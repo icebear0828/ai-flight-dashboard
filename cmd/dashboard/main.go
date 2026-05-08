@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -62,6 +63,39 @@ func fetchDynamicPricing(url string, timeout time.Duration) ([]byte, error) {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+}
+
+func startLANGoroutines(lanInst *lan.LAN, database *db.DB, token string, broadcastChan <-chan model.TokenUsage, usageChan chan<- model.TokenUsage) {
+	fmt.Printf("📡 LAN discovery enabled. Multicast: %s\n", lan.MulticastAddr)
+	go lanInst.StartBroadcaster(broadcastChan)
+	go lanInst.StartListener(usageChan)
+	go lanInst.StartPinger()
+	go lanInst.StartAutoSync(database, token)
+}
+
+func startLANHTTPServer(ctx context.Context, port string, handler http.Handler) bool {
+	addr := "0.0.0.0:" + port
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Printf("LAN API server unavailable on port %s: %v", port, err)
+		return false
+	}
+	srv := &http.Server{Handler: handler}
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+
+	go func() {
+		fmt.Printf("🌐 LAN API server: http://0.0.0.0:%s\n", port)
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("LAN API server unavailable on port %s: %v", port, err)
+		}
+	}()
+	return true
 }
 
 func main() {
@@ -260,11 +294,6 @@ func main() {
 	if *lanMode && appConfig.EnableLAN != nil && *appConfig.EnableLAN {
 		portInt, _ := strconv.Atoi(*port)
 		lanInst = lan.New(*deviceID, portInt)
-		fmt.Printf("📡 LAN discovery enabled. Multicast: %s\n", lan.MulticastAddr)
-		go lanInst.StartBroadcaster(w.BroadcastChan)
-		go lanInst.StartListener(w.UsageChan)
-		go lanInst.StartPinger()
-		go lanInst.StartAutoSync(database, *token)
 	} else {
 		fmt.Println("📡 LAN discovery is disabled in settings.")
 	}
@@ -346,8 +375,8 @@ func main() {
 					}
 					isLocal := (u.DeviceID == "" || u.DeviceID == *deviceID)
 
-					// If it's a remote packet from LAN, ALWAYS save it regardless of syncMode
-					// If it's a local packet, ONLY save it if fsnotify (poll mode saves it directly in ScanAll)
+					// fsnotify events are inserted here; poll scanners already inserted
+					// their records before sending usage notifications.
 					if !isLocal || *syncMode == "fsnotify" {
 						cost, _ := calc.CalculateCost(u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens)
 
@@ -356,7 +385,13 @@ func main() {
 							effectiveDevice = *deviceID
 						}
 
-						database.InsertUsage(u, cost, effectiveDevice)
+						if err := database.InsertUsage(u, cost, effectiveDevice); err != nil {
+							log.Printf("Failed to insert usage for device %s: %v", effectiveDevice, err)
+							continue
+						}
+					}
+					if isLocal && lanInst != nil {
+						lanInst.AnnounceDirty()
 					}
 				}
 			}
@@ -391,7 +426,15 @@ func main() {
 			log.Fatalf("Failed to create asset FS: %v", err)
 		}
 
-		// Reuse the existing HTTP handler to serve /api/* routes inside Wails
+		if lanInst != nil {
+			if startLANHTTPServer(ctx, *port, web.NewLANHandler(database, *token)) {
+				startLANGoroutines(lanInst, database, *token, w.BroadcastChan, w.UsageChan)
+			} else {
+				lanInst = nil
+			}
+		}
+
+		// Reuse the existing HTTP handler inside Wails.
 		apiHandler := web.NewHandler(database, calc, w, lanInst, *token, root.DistBinFS)
 
 		err = wailsrun.Run(&options.App{
@@ -437,6 +480,13 @@ func main() {
 		// Web dashboard mode with graceful shutdown
 		handler := web.NewHandler(database, calc, w, lanInst, *token, root.DistBinFS)
 		srv := &http.Server{Addr: "0.0.0.0:" + *port, Handler: handler}
+		ln, err := net.Listen("tcp", srv.Addr)
+		if err != nil {
+			log.Fatalf("Web server error: %v", err)
+		}
+		if lanInst != nil {
+			startLANGoroutines(lanInst, database, *token, w.BroadcastChan, w.UsageChan)
+		}
 
 		go func() {
 			sigCh := make(chan os.Signal, 1)
@@ -447,7 +497,7 @@ func main() {
 		}()
 
 		fmt.Printf("🌐 Web dashboard: http://localhost:%s\n", *port)
-		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+		if err := srv.Serve(ln); err != http.ErrServerClosed {
 			log.Fatalf("Web server error: %v", err)
 		}
 		return
@@ -469,6 +519,13 @@ func main() {
 	if billingMode == model.BillingAPI && *budgetDaily > 0 {
 		budgetAlert = alert.NewBudgetAlert(database, *budgetDaily)
 		fmt.Printf("💰 Budget mode: $%.2f/day limit\n", *budgetDaily)
+	}
+	if lanInst != nil {
+		if startLANHTTPServer(ctx, *port, web.NewLANHandler(database, *token)) {
+			startLANGoroutines(lanInst, database, *token, w.BroadcastChan, w.UsageChan)
+		} else {
+			lanInst = nil
+		}
 	}
 
 	skipDBWrite := (*syncMode != "fsnotify")

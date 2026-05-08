@@ -35,3 +35,11 @@ type SyncRecord struct {
 	Superseded bool      `json:"superseded,omitempty"`
 	UpdatedAt  time.Time `json:"updated_at,omitempty"`
 }
+
+// SyncPullResponse is a paginated LAN sync response.
+type SyncPullResponse struct {
+	Records       []SyncRecord `json:"records"`
+	NextUpdatedAt time.Time    `json:"next_updated_at,omitempty"`
+	NextAfterID   int64        `json:"next_after_id,omitempty"`
+	HasMore       bool         `json:"has_more"`
+}
