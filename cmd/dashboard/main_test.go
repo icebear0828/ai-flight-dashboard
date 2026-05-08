@@ -109,3 +109,24 @@ func TestRunRepairHistorySupersedesLocalGeminiLegacyRows(t *testing.T) {
 		t.Fatalf("expected remote legacy row to remain active, cost=%f input=%d output=%d", remoteCost, remoteIn, remoteOut)
 	}
 }
+
+func TestRunRepairHistoryWithNoOptionalSources(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
+
+	runRepairHistory(database, calc, "local", nil)
+
+	for _, source := range []string{"Claude Code", "Gemini CLI", "Codex"} {
+		cost, input, cached, cacheCreation, output, err := database.QueryPeriodStatsAll("", source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cost != 0 || input != 0 || cached != 0 || cacheCreation != 0 || output != 0 {
+			t.Fatalf("expected no %s rows, cost=%f input=%d cached=%d cacheCreation=%d output=%d", source, cost, input, cached, cacheCreation, output)
+		}
+	}
+}
