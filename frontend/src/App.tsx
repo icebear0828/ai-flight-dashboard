@@ -22,6 +22,10 @@ interface PeriodStats {
 
 interface SourceModelStats {
   model: string;
+  input_tokens: number;
+  cached_tokens: number;
+  cache_creation_tokens?: number;
+  output_tokens: number;
   input_price_per_m?: number;
   cached_price_per_m?: number;
   cache_creation_price_per_m?: number;
@@ -375,11 +379,12 @@ export default function App() {
 
               {/* Model Table */}
               <div className="overflow-x-auto">
-                <table className="w-full text-left font-mono text-xs sm:text-sm min-w-[600px]">
+                <table className="w-full text-left font-mono text-xs sm:text-sm min-w-[760px]">
                   <thead>
                     <tr className="border-b-[5px] border-[#000000] bg-[#F0F0F0]">
                       <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('modelIdentifier')}</th>
                       <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('rates1M')}</th>
+                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('tokens')}</th>
                       <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('events')}</th>
                       <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase text-right">{t('subtotal')}</th>
                     </tr>
@@ -390,6 +395,9 @@ export default function App() {
                         <td className="px-3 py-3 sm:px-4 sm:py-4 font-bold group-hover:text-[#FFFFFF] max-w-[200px] truncate" title={m.model}>{m.model}</td>
                         <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
                           {t('labelIn')}: {fmtCost(m.input_price_per_m || 0)} / {t('cacheRead')}: {fmtCost(m.cached_price_per_m || 0)} / {t('cacheWrite')}: {fmtCost(m.cache_creation_price_per_m || 0)} / {t('labelOut')}: {fmtCost(m.output_price_per_m || 0)}
+                        </td>
+                        <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
+                          {t('labelIn')}: {fmt(Math.max(0, m.input_tokens - m.cached_tokens - (m.cache_creation_tokens || 0)))} / {t('cacheRead')}: {fmt(m.cached_tokens)} / {t('cacheWrite')}: {fmt(m.cache_creation_tokens || 0)} / {t('labelOut')}: {fmt(m.output_tokens)}
                         </td>
                         <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">{m.events}</td>
                         <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-bold group-hover:text-[#FFFFFF]">{fmtCost(m.total_cost)}</td>
