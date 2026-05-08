@@ -148,7 +148,7 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	mux.HandleFunc("/api/lan/scan", authMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/lan/scan", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -183,16 +183,16 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(model.LANScanResponse{Peers: peers, PeerInfos: peerInfos})
-	}))
+	})
 
-	mux.HandleFunc("/api/lan/join", authMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/lan/join", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		// Acknowledge join
 		w.WriteHeader(http.StatusOK)
-	}))
+	})
 
 	mux.HandleFunc("/api/sync/pull", syncAuthMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
 		handleSyncPull(w, r, database)
