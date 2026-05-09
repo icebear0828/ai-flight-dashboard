@@ -127,52 +127,24 @@ func BuildTokenSummary(database *db.DB, deviceID string) (model.TokenSummary, er
 	}
 
 	now := time.Now().UTC()
-	_, in24h, _, _, out24h, err := database.QueryPeriodStatsSince(now.Add(-24*time.Hour), deviceID, "")
-	if err != nil {
-		return model.TokenSummary{}, err
-	}
-	totalCost, totalIn, _, _, totalOut, err := database.QueryPeriodStatsAll(deviceID, "")
+	sources, err := database.QueryTokenSourceSummaries(now.Add(-24*time.Hour), deviceID)
 	if err != nil {
 		return model.TokenSummary{}, err
 	}
 
-	stats, err := database.QueryStatsSince(time.Time{}, deviceID, "")
-	if err != nil {
-		return model.TokenSummary{}, err
-	}
-	sourceSet := make(map[string]bool)
-	for _, stat := range stats {
-		sourceSet[stat.Source] = true
-	}
-
-	sourceNames := make([]string, 0, len(sourceSet))
-	for source := range sourceSet {
-		sourceNames = append(sourceNames, source)
-	}
-	sort.Strings(sourceNames)
-
-	sources := make([]model.TokenSourceSummary, 0, len(sourceNames))
-	for _, source := range sourceNames {
-		_, sourceIn24h, _, _, sourceOut24h, err := database.QueryPeriodStatsSince(now.Add(-24*time.Hour), deviceID, source)
-		if err != nil {
-			return model.TokenSummary{}, err
-		}
-		sourceCost, sourceIn, _, _, sourceOut, err := database.QueryPeriodStatsAll(deviceID, source)
-		if err != nil {
-			return model.TokenSummary{}, err
-		}
-		sources = append(sources, model.TokenSourceSummary{
-			Source:      source,
-			Tokens24h:   sourceIn24h + sourceOut24h,
-			TokensTotal: sourceIn + sourceOut,
-			CostTotal:   sourceCost,
-		})
+	var tokens24h int
+	var tokensTotal int
+	var costTotal float64
+	for _, source := range sources {
+		tokens24h += source.Tokens24h
+		tokensTotal += source.TokensTotal
+		costTotal += source.CostTotal
 	}
 
 	return model.TokenSummary{
-		Tokens24h:   in24h + out24h,
-		TokensTotal: totalIn + totalOut,
-		CostTotal:   totalCost,
+		Tokens24h:   tokens24h,
+		TokensTotal: tokensTotal,
+		CostTotal:   costTotal,
 		Sources:     sources,
 	}, nil
 }

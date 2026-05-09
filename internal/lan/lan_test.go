@@ -5,12 +5,38 @@ import (
 	"time"
 
 	"ai-flight-dashboard/internal/lan"
+	"ai-flight-dashboard/internal/model"
 )
 
 func TestNew(t *testing.T) {
 	l := lan.New("test-device", 19100)
 	if l.DeviceID != "test-device" {
 		t.Errorf("expected device ID 'test-device', got %q", l.DeviceID)
+	}
+}
+
+func TestCurrentSummaryCachesProvider(t *testing.T) {
+	l := lan.New("local", 19100)
+	calls := 0
+	l.SetSummaryProvider(func() model.TokenSummary {
+		calls++
+		return model.TokenSummary{TokensTotal: calls}
+	})
+
+	first, ok := l.CurrentSummary()
+	if !ok {
+		t.Fatal("expected summary provider to be available")
+	}
+	second, ok := l.CurrentSummary()
+	if !ok {
+		t.Fatal("expected cached summary to be available")
+	}
+
+	if calls != 1 {
+		t.Fatalf("expected provider to be called once, got %d", calls)
+	}
+	if first.TokensTotal != 1 || second.TokensTotal != 1 {
+		t.Fatalf("expected cached summary value, got first=%+v second=%+v", first, second)
 	}
 }
 

@@ -406,6 +406,40 @@ func (d *DB) QueryPeriodStatsAll(deviceID string, source string) (float64, int, 
 	return cost.Float64, int(inTok.Int64), int(cacheTok.Int64), int(cacheCreationTok.Int64), int(outTok.Int64), nil
 }
 
+// QueryTokenSourceSummaries returns per-source token totals in one aggregate query.
+func (d *DB) QueryTokenSourceSummaries(since time.Time, deviceID string) ([]model.TokenSourceSummary, error) {
+	query := `SELECT source,
+		COALESCE(SUM(CASE WHEN julianday(log_timestamp) >= julianday(?) THEN input_tokens + output_tokens ELSE 0 END), 0),
+		COALESCE(SUM(input_tokens + output_tokens), 0),
+		COALESCE(SUM(cost_usd), 0)
+		FROM usage_records
+		WHERE ` + activeUsagePredicate
+	args := []interface{}{formatLogTimestamp(since)}
+
+	if deviceID != "" && deviceID != "all" {
+		query += " AND device_id = ?"
+		args = append(args, deviceID)
+	}
+
+	query += " GROUP BY source ORDER BY source"
+
+	rows, err := d.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var summaries []model.TokenSourceSummary
+	for rows.Next() {
+		var summary model.TokenSourceSummary
+		if err := rows.Scan(&summary.Source, &summary.Tokens24h, &summary.TokensTotal, &summary.CostTotal); err != nil {
+			return nil, err
+		}
+		summaries = append(summaries, summary)
+	}
+	return summaries, rows.Err()
+}
+
 // QueryStatsSince returns per-model stats since the given time, sorted by cost descending.
 func (d *DB) QueryStatsSince(since time.Time, deviceID string, source string) ([]ModelStat, error) {
 	query := `

@@ -27,7 +27,8 @@ const (
 	PeerTTL         = 30 * time.Second
 
 	HTTPDiscoveryInterval    = 15 * time.Second
-	HTTPDiscoveryTimeout     = 300 * time.Millisecond
+	HTTPDiscoveryTimeout     = 2 * time.Second
+	SummaryCacheTTL          = 20 * time.Second
 	httpDiscoveryConcurrency = 32
 )
 
@@ -55,22 +56,28 @@ type LAN struct {
 	DeviceID string
 	HTTPPort int
 
-	mu             sync.RWMutex
-	activePeers    map[string]PeerInfo
-	peerUpdates    chan struct{}
-	lastDirtySent  time.Time
-	summarySource  func() model.TokenSummary
-	httpProbePorts []int
+	mu              sync.RWMutex
+	activePeers     map[string]PeerInfo
+	peerUpdates     chan struct{}
+	lastDirtySent   time.Time
+	summarySource   func() model.TokenSummary
+	summaryVersion  uint64
+	summaryCacheTTL time.Duration
+	cachedSummary   model.TokenSummary
+	cachedSummaryAt time.Time
+	cachedSummaryOK bool
+	httpProbePorts  []int
 }
 
 // New creates a new LAN instance for the given device.
 func New(deviceID string, httpPort int) *LAN {
 	return &LAN{
-		DeviceID:       deviceID,
-		HTTPPort:       httpPort,
-		activePeers:    make(map[string]PeerInfo),
-		peerUpdates:    make(chan struct{}, 1),
-		httpProbePorts: normalizeHTTPDiscoveryPorts([]int{httpPort}),
+		DeviceID:        deviceID,
+		HTTPPort:        httpPort,
+		activePeers:     make(map[string]PeerInfo),
+		peerUpdates:     make(chan struct{}, 1),
+		summaryCacheTTL: SummaryCacheTTL,
+		httpProbePorts:  normalizeHTTPDiscoveryPorts([]int{httpPort}),
 	}
 }
 
@@ -122,17 +129,39 @@ func (l *LAN) SetSummaryProvider(provider func() model.TokenSummary) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.summarySource = provider
+	l.summaryVersion++
+	l.cachedSummaryOK = false
 }
 
 // CurrentSummary returns the current aggregate token summary, if configured.
 func (l *LAN) CurrentSummary() (model.TokenSummary, bool) {
+	now := time.Now()
 	l.mu.RLock()
 	provider := l.summarySource
+	version := l.summaryVersion
+	ttl := l.summaryCacheTTL
+	if ttl <= 0 {
+		ttl = SummaryCacheTTL
+	}
+	if l.cachedSummaryOK && now.Sub(l.cachedSummaryAt) < ttl {
+		summary := l.cachedSummary
+		l.mu.RUnlock()
+		return summary, true
+	}
 	l.mu.RUnlock()
 	if provider == nil {
 		return model.TokenSummary{}, false
 	}
-	return provider(), true
+	summary := provider()
+
+	l.mu.Lock()
+	if l.summaryVersion == version {
+		l.cachedSummary = summary
+		l.cachedSummaryAt = now
+		l.cachedSummaryOK = true
+	}
+	l.mu.Unlock()
+	return summary, true
 }
 
 // SetHTTPDiscoveryPorts configures local HTTP ports to probe for active peers.
@@ -230,11 +259,7 @@ func (l *LAN) newPayload(payloadType string) model.TrackPayload {
 		Type:     payloadType,
 	}
 
-	l.mu.RLock()
-	provider := l.summarySource
-	l.mu.RUnlock()
-	if provider != nil {
-		summary := provider()
+	if summary, ok := l.CurrentSummary(); ok {
 		payload.Summary = &summary
 	}
 	return payload
@@ -292,6 +317,7 @@ func (l *LAN) Ping() {
 // still pulled over HTTP; UDP is only a wake-up signal.
 func (l *LAN) AnnounceDirty() {
 	l.mu.Lock()
+	l.cachedSummaryOK = false
 	if time.Since(l.lastDirtySent) < 2*time.Second {
 		l.mu.Unlock()
 		return
