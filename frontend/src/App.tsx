@@ -185,6 +185,8 @@ export default function App() {
   const [selectedSource, setSelectedSource] = useState<string>("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string>("");
+  const [projectsCollapsed, setProjectsCollapsed] = useState(false);
+  const [collapsedModelSources, setCollapsedModelSources] = useState<Record<string, boolean>>({});
   
   useEffect(() => {
     const fetchData = async () => {
@@ -220,6 +222,13 @@ export default function App() {
 			console.error("Failed to toggle pause", e);
 		}
 	};
+
+  const toggleModelsCollapsed = (sourceName: string) => {
+    setCollapsedModelSources((prev) => ({
+      ...prev,
+      [sourceName]: !prev[sourceName],
+    }));
+  };
 
   // Detect if we are running inside the Wails desktop app
   const isDesktop = typeof window !== 'undefined' && wailsWindow().go !== undefined;
@@ -377,31 +386,42 @@ export default function App() {
                   {t('projects') || 'PROJECT STATS'}
                 </h2>
               </div>
+              <button
+                type="button"
+                aria-label={projectsCollapsed ? t('expandProjects') : t('collapseProjects')}
+                onClick={() => setProjectsCollapsed((collapsed) => !collapsed)}
+                style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}
+                className="shrink-0 border-[3px] border-[#FFFFFF] bg-[#000000] px-3 py-2 font-display text-xs sm:text-sm uppercase text-[#FFFFFF] hover:bg-[#FFFFFF] hover:text-[#000000] cursor-pointer"
+              >
+                {projectsCollapsed ? t('expand') : t('collapse')}
+              </button>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left font-mono text-xs sm:text-sm min-w-[600px]">
-                <thead>
-                  <tr className="border-b-[5px] border-[#000000] bg-[#F0F0F0]">
-                    <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('project')}</th>
-                    <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('events')}</th>
-                    <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('tokens')}</th>
-                    <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase text-right">{t('subtotal')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.projects.map((p) => (
-                    <tr key={p.project} className="border-b-[3px] border-[#000000] last:border-b-0 hover:bg-[#000000] hover:text-[#FFFFFF] transition-none group">
-                      <td className="px-3 py-3 sm:px-4 sm:py-4 font-bold group-hover:text-[#FFFFFF] truncate max-w-[300px]" title={p.project}>{p.project}</td>
-                      <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">{p.events}</td>
-                      <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
-                        {t('labelIn')}: {fmt(Math.max(0, num(p.input_tokens) - num(p.cached_tokens) - num(p.cache_creation_tokens)))} / {t('cacheRead')}: {fmt(p.cached_tokens)} / {t('cacheWrite')}: {fmt(p.cache_creation_tokens)} / {t('labelOut')}: {fmt(p.output_tokens)} / {t('cacheHitRate')}: {fmtPercent(p.cache_hit_rate)}
-                      </td>
-                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-bold group-hover:text-[#FFFFFF]">{fmtCost(p.total_cost)}</td>
+            {!projectsCollapsed && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left font-mono text-xs sm:text-sm min-w-[600px]">
+                  <thead>
+                    <tr className="border-b-[5px] border-[#000000] bg-[#F0F0F0]">
+                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('project')}</th>
+                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('events')}</th>
+                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('tokens')}</th>
+                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase text-right">{t('subtotal')}</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {data.projects.map((p) => (
+                      <tr key={p.project} className="border-b-[3px] border-[#000000] last:border-b-0 hover:bg-[#000000] hover:text-[#FFFFFF] transition-none group">
+                        <td className="px-3 py-3 sm:px-4 sm:py-4 font-bold group-hover:text-[#FFFFFF] truncate max-w-[300px]" title={p.project}>{p.project}</td>
+                        <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">{p.events}</td>
+                        <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
+                          {t('labelIn')}: {fmt(Math.max(0, num(p.input_tokens) - num(p.cached_tokens) - num(p.cache_creation_tokens)))} / {t('cacheRead')}: {fmt(p.cached_tokens)} / {t('cacheWrite')}: {fmt(p.cache_creation_tokens)} / {t('labelOut')}: {fmt(p.output_tokens)} / {t('cacheHitRate')}: {fmtPercent(p.cache_hit_rate)}
+                        </td>
+                        <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-bold group-hover:text-[#FFFFFF]">{fmtCost(p.total_cost)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </article>
         </section>
       )}
@@ -423,6 +443,7 @@ export default function App() {
            };
 
            const sortedModels = [...(src.models || [])].sort((a: SourceModelStats, b: SourceModelStats) => num(b.total_cost) - num(a.total_cost));
+           const modelsCollapsed = Boolean(collapsedModelSources[src.name]);
 
            return (
             <article key={si} className="bg-[#FFFFFF] border-[5px] border-[#000000] rounded-none shadow-none flex flex-col">
@@ -493,33 +514,51 @@ export default function App() {
               </div>
 
               {/* Model Table */}
-              <div className="overflow-x-auto">
-                <table className="w-full text-left font-mono text-xs sm:text-sm min-w-[760px]">
-                  <thead>
-                    <tr className="border-b-[5px] border-[#000000] bg-[#F0F0F0]">
-                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('modelIdentifier')}</th>
-                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('rates1M')}</th>
-                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('tokens')}</th>
-                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('events')}</th>
-                      <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase text-right">{t('subtotal')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sortedModels.map((m: SourceModelStats, mi: number) => (
-                      <tr key={mi} className="border-b-[3px] border-[#000000] last:border-b-0 hover:bg-[#000000] hover:text-[#FFFFFF] transition-none group">
-                        <td className="px-3 py-3 sm:px-4 sm:py-4 font-bold group-hover:text-[#FFFFFF] max-w-[200px] truncate" title={m.model}>{m.model}</td>
-                        <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
-                          {t('labelIn')}: {fmtCost(m.input_price_per_m)} / {t('cacheRead')}: {fmtCost(m.cached_price_per_m)} / {t('cacheWrite')}: {fmtCost(m.cache_creation_price_per_m)} / {t('labelOut')}: {fmtCost(m.output_price_per_m)}
-                        </td>
-                        <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
-                          {t('labelIn')}: {fmt(Math.max(0, num(m.input_tokens) - num(m.cached_tokens) - num(m.cache_creation_tokens)))} / {t('cacheRead')}: {fmt(m.cached_tokens)} / {t('cacheWrite')}: {fmt(m.cache_creation_tokens)} / {t('labelOut')}: {fmt(m.output_tokens)} / {t('cacheHitRate')}: {fmtPercent(m.cache_hit_rate)}
-                        </td>
-                        <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">{m.events}</td>
-                        <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-bold group-hover:text-[#FFFFFF]">{fmtCost(m.total_cost)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div>
+                <div className="flex items-center justify-between gap-4 bg-[#F0F0F0] px-3 py-3 sm:px-4 sm:py-4">
+                  <h3 className="font-display text-xs sm:text-sm uppercase">
+                    {t('models')} ({sortedModels.length})
+                  </h3>
+                  <button
+                    type="button"
+                    aria-label={modelsCollapsed ? t('expandModels') : t('collapseModels')}
+                    onClick={() => toggleModelsCollapsed(src.name)}
+                    style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}
+                    className="shrink-0 border-[3px] border-[#000000] bg-[#FFFFFF] px-3 py-2 font-display text-xs sm:text-sm uppercase text-[#000000] hover:bg-[#000000] hover:text-[#FFFFFF] cursor-pointer"
+                  >
+                    {modelsCollapsed ? t('expand') : t('collapse')}
+                  </button>
+                </div>
+                {!modelsCollapsed && (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left font-mono text-xs sm:text-sm min-w-[760px]">
+                      <thead>
+                        <tr className="border-y-[5px] border-[#000000] bg-[#F0F0F0]">
+                          <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('modelIdentifier')}</th>
+                          <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('rates1M')}</th>
+                          <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('tokens')}</th>
+                          <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase">{t('events')}</th>
+                          <th className="px-3 py-3 sm:px-4 sm:py-4 font-display text-xs sm:text-sm uppercase text-right">{t('subtotal')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortedModels.map((m: SourceModelStats, mi: number) => (
+                          <tr key={mi} className="border-b-[3px] border-[#000000] last:border-b-0 hover:bg-[#000000] hover:text-[#FFFFFF] transition-none group">
+                            <td className="px-3 py-3 sm:px-4 sm:py-4 font-bold group-hover:text-[#FFFFFF] max-w-[200px] truncate" title={m.model}>{m.model}</td>
+                            <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
+                              {t('labelIn')}: {fmtCost(m.input_price_per_m)} / {t('cacheRead')}: {fmtCost(m.cached_price_per_m)} / {t('cacheWrite')}: {fmtCost(m.cache_creation_price_per_m)} / {t('labelOut')}: {fmtCost(m.output_price_per_m)}
+                            </td>
+                            <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
+                              {t('labelIn')}: {fmt(Math.max(0, num(m.input_tokens) - num(m.cached_tokens) - num(m.cache_creation_tokens)))} / {t('cacheRead')}: {fmt(m.cached_tokens)} / {t('cacheWrite')}: {fmt(m.cache_creation_tokens)} / {t('labelOut')}: {fmt(m.output_tokens)} / {t('cacheHitRate')}: {fmtPercent(m.cache_hit_rate)}
+                            </td>
+                            <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">{m.events}</td>
+                            <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-bold group-hover:text-[#FFFFFF]">{fmtCost(m.total_cost)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </article>
            );

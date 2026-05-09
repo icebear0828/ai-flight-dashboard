@@ -217,3 +217,104 @@ test('dashboard shows cache hit rate in stats tables', async ({ page }) => {
   await expect(page.getByText('缓存命中率').first()).toBeVisible();
   await expect(page.getByText('25.0%').first()).toBeVisible();
 });
+
+test('dashboard can collapse project and model tables', async ({ page }) => {
+  await page.route('**/api/stats?*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        periods,
+        sources: [{
+          name: 'Codex',
+          total_input: 1000,
+          total_cached: 250,
+          total_cache_creation: 100,
+          total_output: 50,
+          total_cost: 1.23,
+          total_events: 2,
+          cache_hit_rate: 25,
+          models: [
+            {
+              model: 'gpt-5.5',
+              events: 1,
+              input_tokens: 1000,
+              cached_tokens: 250,
+              cache_creation_tokens: 100,
+              output_tokens: 50,
+              total_cost: 1.23,
+              input_price_per_m: 2,
+              cached_price_per_m: 0.5,
+              cache_creation_price_per_m: 5,
+              output_price_per_m: 10,
+              cache_hit_rate: 25,
+            },
+            {
+              model: 'gpt-5.4',
+              events: 1,
+              input_tokens: 500,
+              cached_tokens: 100,
+              cache_creation_tokens: 50,
+              output_tokens: 25,
+              total_cost: 0.42,
+              input_price_per_m: 1,
+              cached_price_per_m: 0.25,
+              cache_creation_price_per_m: 2,
+              output_price_per_m: 5,
+              cache_hit_rate: 20,
+            },
+          ],
+        }],
+        devices: [{ id: 'local', display_name: 'local' }],
+        projects: [
+          {
+            project: 'token',
+            events: 1,
+            input_tokens: 1000,
+            cached_tokens: 250,
+            cache_creation_tokens: 100,
+            output_tokens: 50,
+            total_cost: 1.23,
+            cache_hit_rate: 25,
+          },
+          {
+            project: 'codex-proxy',
+            events: 1,
+            input_tokens: 500,
+            cached_tokens: 100,
+            cache_creation_tokens: 50,
+            output_tokens: 25,
+            total_cost: 0.42,
+            cache_hit_rate: 20,
+          },
+        ],
+        is_paused: false,
+      }),
+    });
+  });
+  await page.route('**/api/lan/scan', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ peers: [] }),
+    });
+  });
+
+  await page.goto('/');
+
+  await expect(page.getByText('token', { exact: true })).toBeVisible();
+  await expect(page.getByText('gpt-5.5', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: '收起项目统计' }).click();
+  await expect(page.getByText('token', { exact: true })).toBeHidden();
+  await expect(page.getByRole('button', { name: '展开项目统计' })).toBeVisible();
+
+  await page.getByRole('button', { name: '收起模型列表' }).click();
+  await expect(page.getByText('gpt-5.5', { exact: true })).toBeHidden();
+  await expect(page.getByRole('button', { name: '展开模型列表' })).toBeVisible();
+
+  await page.getByRole('button', { name: '展开项目统计' }).click();
+  await page.getByRole('button', { name: '展开模型列表' }).click();
+  await expect(page.getByText('token', { exact: true })).toBeVisible();
+  await expect(page.getByText('gpt-5.5', { exact: true })).toBeVisible();
+});
