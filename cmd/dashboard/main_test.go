@@ -1,12 +1,18 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 
+	"ai-flight-dashboard/internal/db"
+	"ai-flight-dashboard/internal/lan"
 	"ai-flight-dashboard/internal/model"
 	"ai-flight-dashboard/internal/testutil"
 )
@@ -76,6 +82,16 @@ func TestNewLANInstanceAllowsDiscoveryWithoutSyncToken(t *testing.T) {
 	}
 }
 
+func TestNewLANInstanceDefaultsMissingSettingToEnabled(t *testing.T) {
+	lanInst := newLANInstance(true, nil, "", "local-device", "19100")
+	if lanInst == nil {
+		t.Fatal("expected LAN discovery to default on when setting is missing")
+	}
+	if lanInst.DeviceID != "local-device" {
+		t.Fatalf("unexpected device ID: %q", lanInst.DeviceID)
+	}
+}
+
 func TestNewLANInstanceAdvertisesSyncPortWithToken(t *testing.T) {
 	enabled := true
 	lanInst := newLANInstance(true, &enabled, "secret-token", "local-device", "19100")
@@ -91,6 +107,68 @@ func TestNewLANInstanceDisabledBySettings(t *testing.T) {
 	disabled := false
 	if lanInst := newLANInstance(true, &disabled, "", "local-device", "19100"); lanInst != nil {
 		t.Fatalf("expected LAN instance to be disabled, got %+v", lanInst)
+	}
+}
+
+func TestStartLocalLANServicesStartsHTTPWithoutSyncToken(t *testing.T) {
+	lanInst := lan.New("local-device", 0)
+	broadcastChan := make(chan model.TokenUsage)
+	usageChan := make(chan model.TokenUsage)
+	var capturedHandler http.Handler
+	httpStarts := 0
+	runtimeStarts := 0
+
+	ok := startLocalLANServices(
+		context.Background(),
+		lanInst,
+		nil,
+		"",
+		"19100",
+		broadcastChan,
+		usageChan,
+		func(_ context.Context, port string, handler http.Handler) bool {
+			httpStarts++
+			if port != "19100" {
+				t.Fatalf("expected LAN HTTP port 19100, got %q", port)
+			}
+			capturedHandler = handler
+			return true
+		},
+		func(_ context.Context, gotLAN *lan.LAN, _ *db.DB, token string, gotBroadcast <-chan model.TokenUsage, gotUsage chan<- model.TokenUsage) {
+			runtimeStarts++
+			if gotLAN != lanInst {
+				t.Fatalf("unexpected LAN instance: %+v", gotLAN)
+			}
+			if token != "" {
+				t.Fatalf("expected empty sync token, got %q", token)
+			}
+			if gotBroadcast != broadcastChan {
+				t.Fatal("unexpected broadcast channel")
+			}
+			if gotUsage != usageChan {
+				t.Fatal("unexpected usage channel")
+			}
+		},
+	)
+	if !ok {
+		t.Fatal("expected LAN services to start")
+	}
+	if httpStarts != 1 || runtimeStarts != 1 {
+		t.Fatalf("expected one HTTP start and one runtime start, got http=%d runtime=%d", httpStarts, runtimeStarts)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/lan/self", nil)
+	rec := httptest.NewRecorder()
+	capturedHandler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected LAN self endpoint to be available without token, got %d", rec.Code)
+	}
+	var self model.LANSelfResponse
+	if err := json.NewDecoder(rec.Body).Decode(&self); err != nil {
+		t.Fatal(err)
+	}
+	if self.DeviceID != "local-device" || self.HTTPPort != 0 {
+		t.Fatalf("unexpected LAN self response: %+v", self)
 	}
 }
 

@@ -65,16 +65,29 @@ func fetchDynamicPricing(url string, timeout time.Duration) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 }
 
-func startLANGoroutines(lanInst *lan.LAN, database *db.DB, token string, broadcastChan <-chan model.TokenUsage, usageChan chan<- model.TokenUsage) {
+func startLANGoroutines(ctx context.Context, lanInst *lan.LAN, database *db.DB, token string, broadcastChan <-chan model.TokenUsage, usageChan chan<- model.TokenUsage) {
 	fmt.Printf("📡 LAN discovery enabled. Multicast: %s\n", lan.MulticastAddr)
-	go lanInst.StartListener(usageChan)
+	lanInst.SetSummaryProvider(func() model.TokenSummary {
+		_, in24h, _, _, out24h, err24h := database.QueryPeriodStatsSince(time.Now().UTC().Add(-24*time.Hour), lanInst.DeviceID, "")
+		totalCost, totalIn, _, _, totalOut, errTotal := database.QueryPeriodStatsAll(lanInst.DeviceID, "")
+		if err24h != nil || errTotal != nil {
+			return model.TokenSummary{}
+		}
+		return model.TokenSummary{
+			Tokens24h:   in24h + out24h,
+			TokensTotal: totalIn + totalOut,
+			CostTotal:   totalCost,
+		}
+	})
+	go lanInst.StartListenerContext(ctx, usageChan)
 	go lanInst.StartPinger()
+	go lanInst.StartHTTPDiscovery(ctx)
 	if token == "" {
 		fmt.Println("🔒 LAN sync disabled: --token or DASHBOARD_TOKEN is required for authenticated database sync.")
 		return
 	}
 	go lanInst.StartBroadcaster(broadcastChan)
-	go lanInst.StartAutoSync(database, token)
+	go lanInst.StartAutoSyncContext(ctx, database, token)
 }
 
 func startLANHTTPServer(ctx context.Context, port string, handler http.Handler) bool {
@@ -102,15 +115,48 @@ func startLANHTTPServer(ctx context.Context, port string, handler http.Handler) 
 	return true
 }
 
+type lanHTTPServerStarter func(context.Context, string, http.Handler) bool
+type lanRuntimeStarter func(context.Context, *lan.LAN, *db.DB, string, <-chan model.TokenUsage, chan<- model.TokenUsage)
+
+func startLocalLANServices(
+	ctx context.Context,
+	lanInst *lan.LAN,
+	database *db.DB,
+	token string,
+	port string,
+	broadcastChan <-chan model.TokenUsage,
+	usageChan chan<- model.TokenUsage,
+	startHTTP lanHTTPServerStarter,
+	startRuntime lanRuntimeStarter,
+) bool {
+	if lanInst == nil {
+		return false
+	}
+	if !startHTTP(ctx, port, web.NewLANHandler(database, token, lanInst)) {
+		return false
+	}
+	startRuntime(ctx, lanInst, database, token, broadcastChan, usageChan)
+	return true
+}
+
 func newLANInstance(lanMode bool, enableLAN *bool, token string, deviceID string, port string) *lan.LAN {
-	if !lanMode || enableLAN == nil || !*enableLAN {
+	if !lanMode {
+		return nil
+	}
+	if enableLAN != nil && !*enableLAN {
 		return nil
 	}
 	portInt, _ := strconv.Atoi(port)
-	if token == "" {
-		portInt = 0
+	if portInt == 0 {
+		portInt = lan.DefaultHTTPPort
 	}
-	return lan.New(deviceID, portInt)
+	syncPort := portInt
+	if token == "" {
+		syncPort = 0
+	}
+	lanInst := lan.New(deviceID, syncPort)
+	lanInst.SetHTTPDiscoveryPorts(portInt)
+	return lanInst
 }
 
 func main() {
@@ -444,11 +490,7 @@ func main() {
 		}
 
 		if lanInst != nil {
-			if *token == "" {
-				startLANGoroutines(lanInst, database, *token, w.BroadcastChan, w.UsageChan)
-			} else if startLANHTTPServer(ctx, *port, web.NewLANHandler(database, *token)) {
-				startLANGoroutines(lanInst, database, *token, w.BroadcastChan, w.UsageChan)
-			} else {
+			if !startLocalLANServices(ctx, lanInst, database, *token, *port, w.BroadcastChan, w.UsageChan, startLANHTTPServer, startLANGoroutines) {
 				lanInst = nil
 			}
 		}
@@ -504,7 +546,7 @@ func main() {
 			log.Fatalf("Web server error: %v", err)
 		}
 		if lanInst != nil {
-			startLANGoroutines(lanInst, database, *token, w.BroadcastChan, w.UsageChan)
+			startLANGoroutines(ctx, lanInst, database, *token, w.BroadcastChan, w.UsageChan)
 		}
 
 		go func() {
@@ -540,11 +582,7 @@ func main() {
 		fmt.Printf("💰 Budget mode: $%.2f/day limit\n", *budgetDaily)
 	}
 	if lanInst != nil {
-		if *token == "" {
-			startLANGoroutines(lanInst, database, *token, w.BroadcastChan, w.UsageChan)
-		} else if startLANHTTPServer(ctx, *port, web.NewLANHandler(database, *token)) {
-			startLANGoroutines(lanInst, database, *token, w.BroadcastChan, w.UsageChan)
-		} else {
+		if !startLocalLANServices(ctx, lanInst, database, *token, *port, w.BroadcastChan, w.UsageChan, startLANHTTPServer, startLANGoroutines) {
 			lanInst = nil
 		}
 	}

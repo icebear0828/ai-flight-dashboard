@@ -5,12 +5,24 @@
 package e2e
 
 import (
+	"context"
+	"embed"
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"testing"
 	"time"
 
 	"ai-flight-dashboard/internal/lan"
 	"ai-flight-dashboard/internal/model"
+	"ai-flight-dashboard/internal/testutil"
+	"ai-flight-dashboard/internal/web"
 )
+
+var emptyFS embed.FS
 
 func TestLANPingDiscovery(t *testing.T) {
 	t.Log("Starting E2E LAN Validation...")
@@ -21,7 +33,9 @@ func TestLANPingDiscovery(t *testing.T) {
 	sender := lan.New("device-10-5", 19100)
 
 	// Start listener
-	go listener.StartListener(outChan)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go listener.StartListenerContext(ctx, outChan)
 	time.Sleep(1 * time.Second) // wait for listen
 
 	// Try sending ping using current implementation
@@ -33,9 +47,210 @@ func TestLANPingDiscovery(t *testing.T) {
 	peers := listener.GetActivePeers()
 	t.Logf("Active peers detected: %v", peers)
 
-	if len(peers) > 0 && peers[0] == "device-10-5" {
+	if containsPeer(peers, "device-10-5") {
 		t.Log("E2E Test Passed! Listener received the ping.")
 	} else {
 		t.Errorf("E2E Test Failed! Expected peer 'device-10-5', got: %v", peers)
+	}
+}
+
+func containsPeer(peers []string, target string) bool {
+	for _, peer := range peers {
+		if peer == target {
+			return true
+		}
+	}
+	return false
+}
+
+func TestLANBroadcastSummaryAppearsInScan(t *testing.T) {
+	database, calc := testutil.NewTestDBAndCalc(t)
+	defer database.Close()
+
+	outChan := make(chan model.TokenUsage, 10)
+	listener := lan.New("local-e2e-scan", 0)
+	sender := lan.New("remote-e2e-broadcast", 0)
+	sender.SetSummaryProvider(func() model.TokenSummary {
+		return model.TokenSummary{
+			Tokens24h:   4321,
+			TokensTotal: 9876,
+			CostTotal:   2.75,
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go listener.StartListenerContext(ctx, outChan)
+
+	handler := web.NewHandler(database, calc, nil, listener, "", emptyFS)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	sender.Ping()
+
+	var data model.LANScanResponse
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(srv.URL + "/api/lan/scan")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+			resp.Body.Close()
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if len(data.PeerInfos) == 1 && data.PeerInfos[0].TokensTotal == 9876 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if len(data.PeerInfos) != 1 {
+		t.Fatalf("expected one peer from real LAN broadcast, got %+v", data)
+	}
+
+	peer := data.PeerInfos[0]
+	if peer.ID != "remote-e2e-broadcast" || peer.Tokens24h != 4321 || peer.TokensTotal != 9876 || peer.CostTotal != 2.75 {
+		t.Fatalf("expected broadcast token summary in scan response, got %+v", peer)
+	}
+
+	for i := 0; i < 3; i++ {
+		resp, err := http.Get(srv.URL + "/api/lan/scan")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var scan model.LANScanResponse
+		if err := json.NewDecoder(resp.Body).Decode(&scan); err != nil {
+			resp.Body.Close()
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if len(scan.PeerInfos) != 1 || scan.PeerInfos[0].TokensTotal != 9876 {
+			t.Fatalf("scan call %d: expected stable token summary, got %+v", i+1, scan)
+		}
+	}
+}
+
+func TestLegacyLANTrackPacketDoesNotForwardUsage(t *testing.T) {
+	outChan := make(chan model.TokenUsage, 10)
+	listener := lan.New("local-e2e-legacy", 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go listener.StartListenerContext(ctx, outChan)
+	time.Sleep(1 * time.Second)
+
+	sendLegacyTrackPacket(t, model.TrackPayload{
+		DeviceID: "remote-legacy-broadcast",
+		Type:     "track",
+		Usage: model.TokenUsage{
+			Source:       "Claude Code",
+			Model:        "claude-opus-4-7",
+			InputTokens:  1234,
+			OutputTokens: 56,
+			UUID:         "legacy-lan-track-1",
+			Timestamp:    time.Now().UTC(),
+		},
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	seenPeer := false
+	for time.Now().Before(deadline) {
+		if containsPeer(listener.GetActivePeers(), "remote-legacy-broadcast") {
+			seenPeer = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !seenPeer {
+		t.Fatal("expected legacy UDP track packet to still record peer discovery")
+	}
+
+	select {
+	case usage := <-outChan:
+		t.Fatalf("expected unauthenticated UDP track usage to be ignored, got %+v", usage)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestActiveHTTPDiscoveryAppearsInScan(t *testing.T) {
+	remoteDB, remoteCalc := testutil.NewTestDBAndCalc(t)
+	defer remoteDB.Close()
+
+	remoteLAN := lan.New("remote-e2e-http", 0)
+	remoteLAN.SetSummaryProvider(func() model.TokenSummary {
+		return model.TokenSummary{
+			Tokens24h:   1357,
+			TokensTotal: 2468,
+			CostTotal:   3.14,
+		}
+	})
+	remoteSrv := httptest.NewServer(web.NewHandler(remoteDB, remoteCalc, nil, remoteLAN, "", emptyFS))
+	defer remoteSrv.Close()
+	host, port := splitServerURL(t, remoteSrv.URL)
+
+	localDB, localCalc := testutil.NewTestDBAndCalc(t)
+	defer localDB.Close()
+	localLAN := lan.New("local-e2e-http", 0)
+	localLAN.ScanHTTPPeers(context.Background(), []string{host}, []int{port})
+
+	localSrv := httptest.NewServer(web.NewHandler(localDB, localCalc, nil, localLAN, "", emptyFS))
+	defer localSrv.Close()
+
+	for i := 0; i < 3; i++ {
+		resp, err := http.Get(localSrv.URL + "/api/lan/scan")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var scan model.LANScanResponse
+		if err := json.NewDecoder(resp.Body).Decode(&scan); err != nil {
+			resp.Body.Close()
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if len(scan.PeerInfos) != 1 {
+			t.Fatalf("scan call %d: expected active HTTP peer, got %+v", i+1, scan)
+		}
+		peer := scan.PeerInfos[0]
+		if peer.ID != "remote-e2e-http" || peer.SyncStatus != "discovery_only" || peer.Tokens24h != 1357 || peer.TokensTotal != 2468 || peer.CostTotal != 3.14 {
+			t.Fatalf("scan call %d: expected active HTTP summary, got %+v", i+1, peer)
+		}
+	}
+}
+
+func splitServerURL(t *testing.T, rawURL string) (string, int) {
+	t.Helper()
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, portStr, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return host, port
+}
+
+func sendLegacyTrackPacket(t *testing.T, payload model.TrackPayload) {
+	t.Helper()
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr, err := net.ResolveUDPAddr("udp", lan.MulticastAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.DialUDP("udp", nil, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write(data); err != nil {
+		t.Fatal(err)
 	}
 }

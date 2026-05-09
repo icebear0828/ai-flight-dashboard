@@ -1,6 +1,7 @@
 package lan
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -15,6 +16,12 @@ import (
 
 func testPeerFromServerURL(t *testing.T, rawURL string) PeerInfo {
 	t.Helper()
+	host, port := testHostPortFromServerURL(t, rawURL)
+	return PeerInfo{ID: "remote", IP: host, HTTPPort: port, LastSeen: time.Now()}
+}
+
+func testHostPortFromServerURL(t *testing.T, rawURL string) (string, int) {
+	t.Helper()
 	host, portStr, err := net.SplitHostPort(rawURL[len("http://"):])
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +30,87 @@ func testPeerFromServerURL(t *testing.T, rawURL string) PeerInfo {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return PeerInfo{ID: "remote", IP: host, HTTPPort: port, LastSeen: time.Now()}
+	return host, port
+}
+
+func TestScanHTTPPeersRecordsSelfEndpointSummary(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/lan/self" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(model.LANSelfResponse{
+			DeviceID: "remote-http",
+			HTTPPort: 19100,
+			Summary: &model.TokenSummary{
+				Tokens24h:   1200,
+				TokensTotal: 3400,
+				CostTotal:   1.23,
+			},
+		})
+	}))
+	defer server.Close()
+
+	host, port := testHostPortFromServerURL(t, server.URL)
+	l := New("local", 0)
+	l.ScanHTTPPeers(context.Background(), []string{host}, []int{port})
+
+	peers := l.GetActivePeerInfos()
+	if len(peers) != 1 {
+		t.Fatalf("expected one actively discovered peer, got %+v", peers)
+	}
+	peer := peers[0]
+	if peer.ID != "remote-http" || peer.IP != host || peer.HTTPPort != 19100 {
+		t.Fatalf("unexpected active peer identity: %+v", peer)
+	}
+	if !peer.HasSummary || peer.Summary.TokensTotal != 3400 || peer.Summary.Tokens24h != 1200 || peer.Summary.CostTotal != 1.23 {
+		t.Fatalf("expected active peer summary, got %+v", peer)
+	}
+}
+
+func TestScanHTTPPeersSkipsLocalDevice(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/lan/self" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(model.LANSelfResponse{DeviceID: "local", HTTPPort: 19100})
+	}))
+	defer server.Close()
+
+	host, port := testHostPortFromServerURL(t, server.URL)
+	l := New("local", 0)
+	l.ScanHTTPPeers(context.Background(), []string{host}, []int{port})
+
+	if peers := l.GetActivePeerInfos(); len(peers) != 0 {
+		t.Fatalf("expected local device to be ignored, got %+v", peers)
+	}
+}
+
+func TestProbeHostsForIPv4UsesLocalSubnet(t *testing.T) {
+	hosts := probeHostsForIPv4(net.ParseIP("192.168.10.6"), net.CIDRMask(30, 32))
+	if len(hosts) != 1 || hosts[0] != "192.168.10.5" {
+		t.Fatalf("expected /30 peer host only, got %+v", hosts)
+	}
+
+	hosts = probeHostsForIPv4(net.ParseIP("192.168.10.6"), net.CIDRMask(16, 32))
+	if len(hosts) != 253 {
+		t.Fatalf("expected broad subnet to be capped to local /24, got %d hosts", len(hosts))
+	}
+	if !hasHost(hosts, "192.168.10.5") || hasHost(hosts, "192.168.11.1") || hasHost(hosts, "192.168.10.6") {
+		t.Fatalf("expected local /24 peers excluding self, got %+v", hosts)
+	}
+}
+
+func hasHost(hosts []string, target string) bool {
+	for _, host := range hosts {
+		if host == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSyncWithPeerUpdatesDatabaseAndStatus(t *testing.T) {

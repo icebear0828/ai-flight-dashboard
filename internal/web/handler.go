@@ -50,7 +50,7 @@ func syncAuthMiddleware(token string, next http.HandlerFunc) http.HandlerFunc {
 }
 
 // NewLANHandler exposes only the endpoints needed by LAN peers.
-func NewLANHandler(database *db.DB, token string) http.Handler {
+func NewLANHandler(database *db.DB, token string, lanInst *lan.LAN) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -59,10 +59,34 @@ func NewLANHandler(database *db.DB, token string) http.Handler {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.HandleFunc("/api/lan/self", func(w http.ResponseWriter, r *http.Request) {
+		handleLANSelf(w, r, lanInst)
+	})
 	mux.HandleFunc("/api/sync/pull", syncAuthMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
 		handleSyncPull(w, r, database)
 	}))
 	return mux
+}
+
+func handleLANSelf(w http.ResponseWriter, r *http.Request, lanInst *lan.LAN) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if lanInst == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	resp := model.LANSelfResponse{
+		DeviceID: lanInst.DeviceID,
+		HTTPPort: lanInst.HTTPPort,
+	}
+	if summary, ok := lanInst.CurrentSummary(); ok {
+		resp.Summary = &summary
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Watcher, lanInst *lan.LAN, token string, distBinFS embed.FS) http.Handler {
@@ -148,6 +172,10 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 		w.WriteHeader(http.StatusOK)
 	}))
 
+	mux.HandleFunc("/api/lan/self", func(w http.ResponseWriter, r *http.Request) {
+		handleLANSelf(w, r, lanInst)
+	})
+
 	mux.HandleFunc("/api/lan/scan", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -161,6 +189,14 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 			for _, peer := range lanInst.GetActivePeerInfos() {
 				_, in24h, _, _, out24h, _ := database.QueryPeriodStatsSince(time.Now().UTC().Add(-24*time.Hour), peer.ID, "")
 				totalCost, totalIn, _, _, totalOut, _ := database.QueryPeriodStatsAll(peer.ID, "")
+				tokens24h := in24h + out24h
+				tokensTotal := totalIn + totalOut
+				costTotal := totalCost
+				if peer.HasSummary && (peer.SyncStatus != "ok" || tokensTotal == 0) {
+					tokens24h = peer.Summary.Tokens24h
+					tokensTotal = peer.Summary.TokensTotal
+					costTotal = peer.Summary.CostTotal
+				}
 				displayName := peer.ID
 				if alias := aliases[peer.ID]; alias != "" {
 					displayName = alias
@@ -175,9 +211,9 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 					LastSyncAttempt: peer.LastSyncAttempt,
 					SyncStatus:      peer.SyncStatus,
 					SyncError:       peer.SyncError,
-					Tokens24h:       in24h + out24h,
-					TokensTotal:     totalIn + totalOut,
-					CostTotal:       totalCost,
+					Tokens24h:       tokens24h,
+					TokensTotal:     tokensTotal,
+					CostTotal:       costTotal,
 				})
 			}
 		}

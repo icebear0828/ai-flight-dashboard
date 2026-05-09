@@ -305,6 +305,84 @@ func TestLANScanIncludesPeerInfoAndTokenSummary(t *testing.T) {
 	}
 }
 
+func TestLANScanUsesAdvertisedSummaryWhenPeerIsDiscoveryOnly(t *testing.T) {
+	database, calc := testutil.NewTestDBAndCalc(t)
+	defer database.Close()
+
+	lanInst := lan.New("local-device", 19100)
+	lanInst.RecordPeerSummary("remote-device", "192.168.1.25", 0, model.TokenSummary{
+		Tokens24h:   1200,
+		TokensTotal: 3400,
+		CostTotal:   1.23,
+	})
+
+	handler := web.NewHandler(database, calc, nil, lanInst, "", emptyFS)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/lan/scan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var data model.LANScanResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		t.Fatal(err)
+	}
+	if len(data.PeerInfos) != 1 {
+		t.Fatalf("expected one peer info, got %+v", data.PeerInfos)
+	}
+	peer := data.PeerInfos[0]
+	if peer.SyncStatus != "discovery_only" {
+		t.Fatalf("expected discovery_only sync status, got %+v", peer)
+	}
+	if peer.Tokens24h != 1200 || peer.TokensTotal != 3400 || peer.CostTotal != 1.23 {
+		t.Fatalf("expected advertised token summary, got %+v", peer)
+	}
+}
+
+func TestLANSelfEndpointIncludesDeviceAndSummary(t *testing.T) {
+	database, calc := testutil.NewTestDBAndCalc(t)
+	defer database.Close()
+
+	lanInst := lan.New("local-device", 19100)
+	lanInst.SetSummaryProvider(func() model.TokenSummary {
+		return model.TokenSummary{
+			Tokens24h:   222,
+			TokensTotal: 333,
+			CostTotal:   4.56,
+		}
+	})
+
+	handler := web.NewHandler(database, calc, nil, lanInst, "", emptyFS)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/lan/self")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var data model.LANSelfResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		t.Fatal(err)
+	}
+	if data.DeviceID != "local-device" || data.HTTPPort != 19100 {
+		t.Fatalf("unexpected LAN self identity: %+v", data)
+	}
+	if data.Summary == nil || data.Summary.Tokens24h != 222 || data.Summary.TokensTotal != 333 || data.Summary.CostTotal != 4.56 {
+		t.Fatalf("unexpected LAN self summary: %+v", data.Summary)
+	}
+}
+
 func TestLANScanAndJoinRemainAvailableWithSyncToken(t *testing.T) {
 	database, calc := testutil.NewTestDBAndCalc(t)
 	defer database.Close()
@@ -397,7 +475,8 @@ func TestLANHandlerExposesOnlySyncSurface(t *testing.T) {
 	database, _ := testutil.NewTestDBAndCalc(t)
 	defer database.Close()
 
-	handler := web.NewLANHandler(database, "secret-token")
+	lanInst := lan.New("local-device", 19100)
+	handler := web.NewLANHandler(database, "secret-token", lanInst)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 

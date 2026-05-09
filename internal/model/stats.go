@@ -83,6 +83,13 @@ type LANPeerInfo struct {
 	CostTotal       float64   `json:"cost_total"`
 }
 
+// LANSelfResponse identifies the local node for active LAN discovery.
+type LANSelfResponse struct {
+	DeviceID string        `json:"device_id"`
+	HTTPPort int           `json:"http_port"`
+	Summary  *TokenSummary `json:"summary,omitempty"`
+}
+
 // LANScanResponse is returned by /api/lan/scan. Peers is kept for older
 // clients; PeerInfos is the canonical structured payload.
 type LANScanResponse struct {
