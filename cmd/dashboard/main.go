@@ -82,12 +82,12 @@ func startLANGoroutines(ctx context.Context, lanInst *lan.LAN, database *db.DB, 
 	go lanInst.StartListenerContext(ctx, usageChan)
 	go lanInst.StartPinger()
 	go lanInst.StartHTTPDiscovery(ctx)
-	if token == "" {
-		fmt.Println("🔒 LAN sync disabled: --token or DASHBOARD_TOKEN is required for authenticated database sync.")
-		return
-	}
 	go lanInst.StartBroadcaster(broadcastChan)
 	go lanInst.StartAutoSyncContext(ctx, database, token)
+	if token == "" {
+		fmt.Println("🌐 Zero-config LAN sync enabled for private networks.")
+		return
+	}
 }
 
 func startLANHTTPServer(ctx context.Context, port string, handler http.Handler) bool {
@@ -150,11 +150,7 @@ func newLANInstance(lanMode bool, enableLAN *bool, token string, deviceID string
 	if portInt == 0 {
 		portInt = lan.DefaultHTTPPort
 	}
-	syncPort := portInt
-	if token == "" {
-		syncPort = 0
-	}
-	lanInst := lan.New(deviceID, syncPort)
+	lanInst := lan.New(deviceID, portInt)
 	lanInst.SetHTTPDiscoveryPorts(portInt)
 	return lanInst
 }
@@ -357,7 +353,7 @@ func main() {
 		fmt.Println("📡 LAN discovery is disabled in settings.")
 	} else {
 		if *token == "" {
-			fmt.Println("📡 LAN discovery is enabled without sync: --token or DASHBOARD_TOKEN is required for authenticated sync.")
+			fmt.Println("📡 LAN discovery and private-network sync are enabled by default.")
 		}
 	}
 
@@ -453,7 +449,7 @@ func main() {
 							continue
 						}
 					}
-					if isLocal && lanInst != nil && *token != "" {
+					if isLocal && lanInst != nil {
 						lanInst.AnnounceDirty()
 					}
 				}

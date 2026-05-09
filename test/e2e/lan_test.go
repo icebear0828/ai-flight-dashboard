@@ -218,6 +218,62 @@ func TestActiveHTTPDiscoveryAppearsInScan(t *testing.T) {
 	}
 }
 
+func TestZeroConfigHTTPDiscoveryPullsRecords(t *testing.T) {
+	remoteDB, remoteCalc := testutil.NewTestDBAndCalc(t)
+	defer remoteDB.Close()
+
+	now := time.Now().UTC()
+	if err := remoteDB.InsertUsageWithTime(
+		model.TokenUsage{
+			Source:       "Claude Code",
+			Model:        "claude-opus-4-7",
+			InputTokens:  1000,
+			OutputTokens: 250,
+			UUID:         "zero-config-e2e",
+			Timestamp:    now,
+		},
+		1.50,
+		now,
+		"/remote/session.jsonl",
+		"remote-zero-config",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	remoteLAN := lan.New("remote-zero-config", 0)
+	remoteSrv := httptest.NewServer(web.NewHandler(remoteDB, remoteCalc, nil, remoteLAN, "", emptyFS))
+	defer remoteSrv.Close()
+	host, port := splitServerURL(t, remoteSrv.URL)
+	remoteLAN.HTTPPort = port
+
+	localDB, _ := testutil.NewTestDBAndCalc(t)
+	defer localDB.Close()
+	localLAN := lan.New("local-zero-config", 19100)
+	localLAN.ScanHTTPPeers(context.Background(), []string{host}, []int{port})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go localLAN.StartAutoSyncContext(ctx, localDB, "")
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		_, input, _, _, output, err := localDB.QueryPeriodStatsAll("remote-zero-config", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if input == 1000 && output == 250 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	_, input, _, _, output, err := localDB.QueryPeriodStatsAll("remote-zero-config", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Fatalf("expected zero-config LAN sync to pull remote records, got input=%d output=%d", input, output)
+}
+
 func splitServerURL(t *testing.T, rawURL string) (string, int) {
 	t.Helper()
 	parsed, err := url.Parse(rawURL)
