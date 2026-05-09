@@ -84,9 +84,7 @@ func (a *App) GetCacheSavings(deviceID string) (*model.CacheSavingsResponse, err
 		savedPct = (saved / hypoTotal) * 100
 	}
 	hitRate := 0.0
-	if totalInput > 0 {
-		hitRate = (float64(totalCached) / float64(totalInput)) * 100
-	}
+	hitRate = model.CacheHitRatePercent(totalInput, totalCached)
 
 	return &model.CacheSavingsResponse{
 		ActualCost:       actualTotal,

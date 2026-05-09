@@ -531,6 +531,7 @@ func (d *DB) QueryProjectStatsSince(since time.Time, deviceID string, source str
 			&s.InputTokens, &s.CachedTokens, &s.CacheCreationTokens, &s.OutputTokens, &s.TotalCost); err != nil {
 			return nil, err
 		}
+		s.CacheHitRate = model.CacheHitRatePercent(s.InputTokens, s.CachedTokens)
 		stats = append(stats, s)
 	}
 	return stats, rows.Err()

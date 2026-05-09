@@ -84,6 +84,7 @@ export namespace model {
 	    cache_creation_tokens: number;
 	    output_tokens: number;
 	    total_cost: number;
+	    cache_hit_rate: number;
 	    input_price_per_m: number;
 	    cached_price_per_m: number;
 	    cache_creation_price_per_m: number;
@@ -102,6 +103,7 @@ export namespace model {
 	        this.cache_creation_tokens = source["cache_creation_tokens"];
 	        this.output_tokens = source["output_tokens"];
 	        this.total_cost = source["total_cost"];
+	        this.cache_hit_rate = source["cache_hit_rate"];
 	        this.input_price_per_m = source["input_price_per_m"];
 	        this.cached_price_per_m = source["cached_price_per_m"];
 	        this.cache_creation_price_per_m = source["cache_creation_price_per_m"];
@@ -115,6 +117,7 @@ export namespace model {
 	    cached_tokens: number;
 	    cache_creation_tokens: number;
 	    output_tokens: number;
+	    cache_hit_rate: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new PeriodCost(source);
@@ -128,6 +131,7 @@ export namespace model {
 	        this.cached_tokens = source["cached_tokens"];
 	        this.cache_creation_tokens = source["cache_creation_tokens"];
 	        this.output_tokens = source["output_tokens"];
+	        this.cache_hit_rate = source["cache_hit_rate"];
 	    }
 	}
 	export class ProjectStat {
@@ -138,6 +142,7 @@ export namespace model {
 	    cache_creation_tokens: number;
 	    output_tokens: number;
 	    total_cost: number;
+	    cache_hit_rate: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ProjectStat(source);
@@ -152,6 +157,7 @@ export namespace model {
 	        this.cache_creation_tokens = source["cache_creation_tokens"];
 	        this.output_tokens = source["output_tokens"];
 	        this.total_cost = source["total_cost"];
+	        this.cache_hit_rate = source["cache_hit_rate"];
 	    }
 	}
 	export class SourceStats {
@@ -162,6 +168,7 @@ export namespace model {
 	    total_output: number;
 	    total_cost: number;
 	    total_events: number;
+	    cache_hit_rate: number;
 	    models: ModelStats[];
 	
 	    static createFrom(source: any = {}) {
@@ -177,6 +184,7 @@ export namespace model {
 	        this.total_output = source["total_output"];
 	        this.total_cost = source["total_cost"];
 	        this.total_events = source["total_events"];
+	        this.cache_hit_rate = source["cache_hit_rate"];
 	        this.models = this.convertValues(source["models"], ModelStats);
 	    }
 	

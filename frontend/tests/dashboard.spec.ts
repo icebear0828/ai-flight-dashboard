@@ -7,6 +7,7 @@ const periods = ['1h', '24h', '7d', '30d', '3mo', '6mo', '1y', 'ALL'].map((label
   cache_creation_tokens: 0,
   output_tokens: 0,
   cost: 0,
+  cache_hit_rate: 0,
 }));
 
 test('CODEX tab stays usable against real backend on first install data', async ({ page }) => {
@@ -150,4 +151,69 @@ test('LAN radar shows per-source peer totals before full sync completes', async 
   await expect(lanTable.getByText('2.0K', { exact: true })).toBeVisible();
   await expect(lanTable.getByText('4.0K', { exact: true })).toBeVisible();
   await expect(lanTable.getByText('7.0K', { exact: true })).toBeVisible();
+});
+
+test('dashboard shows cache hit rate in stats tables', async ({ page }) => {
+  await page.route('**/api/stats?*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        periods: periods.map((period) => ({
+          ...period,
+          input_tokens: 1000,
+          cached_tokens: 250,
+          cache_hit_rate: 25,
+        })),
+        sources: [{
+          name: 'Codex',
+          total_input: 1000,
+          total_cached: 250,
+          total_cache_creation: 100,
+          total_output: 50,
+          total_cost: 1.23,
+          total_events: 1,
+          cache_hit_rate: 25,
+          models: [{
+            model: 'gpt-5.5',
+            events: 1,
+            input_tokens: 1000,
+            cached_tokens: 250,
+            cache_creation_tokens: 100,
+            output_tokens: 50,
+            total_cost: 1.23,
+            input_price_per_m: 2,
+            cached_price_per_m: 0.5,
+            cache_creation_price_per_m: 5,
+            output_price_per_m: 10,
+            cache_hit_rate: 25,
+          }],
+        }],
+        devices: [{ id: 'local', display_name: 'local' }],
+        projects: [{
+          project: 'token',
+          events: 1,
+          input_tokens: 1000,
+          cached_tokens: 250,
+          cache_creation_tokens: 100,
+          output_tokens: 50,
+          total_cost: 1.23,
+          cache_hit_rate: 25,
+        }],
+        is_paused: false,
+      }),
+    });
+  });
+  await page.route('**/api/lan/scan', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ peers: [] }),
+    });
+  });
+
+  await page.goto('/');
+
+  await expect(page.getByText('缓存命中率').first()).toBeVisible();
+  await expect(page.getByText('25.0%').first()).toBeVisible();
 });

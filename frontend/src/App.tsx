@@ -20,6 +20,25 @@ const fmt = (value: unknown) => {
   return n.toString();
 };
 const fmtCost = (value: unknown) => '$' + num(value).toFixed(2);
+const fmtPercent = (value: unknown) => num(value).toFixed(1) + '%';
+
+type JsonRecord = Record<string, unknown>;
+
+const asRecord = (value: unknown): JsonRecord => {
+  return value !== null && typeof value === 'object' ? value as JsonRecord : {};
+};
+
+type WailsWindow = Window & {
+  go?: {
+    desktop?: {
+      App?: {
+        OpenSystemLogs?: () => void;
+      };
+    };
+  };
+};
+
+const wailsWindow = (): WailsWindow => window as WailsWindow;
 
 interface PeriodStats {
   label: string;
@@ -28,6 +47,7 @@ interface PeriodStats {
   cache_creation_tokens?: number;
   output_tokens: number;
   cost: number;
+  cache_hit_rate: number;
 }
 
 interface SourceModelStats {
@@ -42,6 +62,7 @@ interface SourceModelStats {
   output_price_per_m?: number;
   events: number;
   total_cost: number;
+  cache_hit_rate: number;
 }
 
 interface SourceStats {
@@ -51,6 +72,8 @@ interface SourceStats {
   total_cache_creation?: number;
   total_output: number;
   total_cost: number;
+  total_events: number;
+  cache_hit_rate: number;
   models?: SourceModelStats[];
 }
 
@@ -67,6 +90,7 @@ interface ProjectStat {
   cache_creation_tokens?: number;
   output_tokens: number;
   total_cost: number;
+  cache_hit_rate: number;
 }
 
 interface DashboardData {
@@ -77,56 +101,80 @@ interface DashboardData {
   is_paused?: boolean;
 }
 
-const normalizeDashboardData = (raw: any): DashboardData => {
-  const periods = Array.isArray(raw?.periods) ? raw.periods : [];
-  const sources = Array.isArray(raw?.sources) ? raw.sources : [];
-  const devices = Array.isArray(raw?.devices) ? raw.devices : [];
-  const projects = Array.isArray(raw?.projects) ? raw.projects : [];
+const normalizeDashboardData = (raw: unknown): DashboardData => {
+  const root = asRecord(raw);
+  const periods = Array.isArray(root.periods) ? root.periods : [];
+  const sources = Array.isArray(root.sources) ? root.sources : [];
+  const devices = Array.isArray(root.devices) ? root.devices : [];
+  const projects = Array.isArray(root.projects) ? root.projects : [];
 
   return {
-    periods: periods.map((p: any) => ({
-      label: text(p?.label, 'UNKNOWN'),
-      input_tokens: num(p?.input_tokens),
-      cached_tokens: num(p?.cached_tokens),
-      cache_creation_tokens: num(p?.cache_creation_tokens),
-      output_tokens: num(p?.output_tokens),
-      cost: num(p?.cost),
-    })),
-    sources: sources.map((src: any) => ({
-      name: text(src?.name, 'Unknown'),
-      total_input: num(src?.total_input),
-      total_cached: num(src?.total_cached),
-      total_cache_creation: num(src?.total_cache_creation),
-      total_output: num(src?.total_output),
-      total_cost: num(src?.total_cost),
-      models: (Array.isArray(src?.models) ? src.models : []).map((m: any) => ({
-        model: text(m?.model, 'unknown'),
-        input_tokens: num(m?.input_tokens),
-        cached_tokens: num(m?.cached_tokens),
-        cache_creation_tokens: num(m?.cache_creation_tokens),
-        output_tokens: num(m?.output_tokens),
-        input_price_per_m: num(m?.input_price_per_m),
-        cached_price_per_m: num(m?.cached_price_per_m),
-        cache_creation_price_per_m: num(m?.cache_creation_price_per_m),
-        output_price_per_m: num(m?.output_price_per_m),
-        events: num(m?.events),
-        total_cost: num(m?.total_cost),
-      })),
-    })),
-    devices: devices.map((d: any) => ({
-      id: text(d?.id ?? d, 'local'),
-      display_name: text(d?.display_name, text(d?.id ?? d, 'local')),
-    })),
-    projects: projects.map((p: any) => ({
-      project: text(p?.project, 'Default'),
-      events: num(p?.events),
-      input_tokens: num(p?.input_tokens),
-      cached_tokens: num(p?.cached_tokens),
-      cache_creation_tokens: num(p?.cache_creation_tokens),
-      output_tokens: num(p?.output_tokens),
-      total_cost: num(p?.total_cost),
-    })),
-    is_paused: Boolean(raw?.is_paused),
+    periods: periods.map((period) => {
+      const p = asRecord(period);
+      return {
+        label: text(p.label, 'UNKNOWN'),
+        input_tokens: num(p.input_tokens),
+        cached_tokens: num(p.cached_tokens),
+        cache_creation_tokens: num(p.cache_creation_tokens),
+        output_tokens: num(p.output_tokens),
+        cost: num(p.cost),
+        cache_hit_rate: num(p.cache_hit_rate),
+      };
+    }),
+    sources: sources.map((source) => {
+      const src = asRecord(source);
+      const models = Array.isArray(src.models) ? src.models : [];
+      return {
+        name: text(src.name, 'Unknown'),
+        total_input: num(src.total_input),
+        total_cached: num(src.total_cached),
+        total_cache_creation: num(src.total_cache_creation),
+        total_output: num(src.total_output),
+        total_cost: num(src.total_cost),
+        total_events: num(src.total_events),
+        cache_hit_rate: num(src.cache_hit_rate),
+        models: models.map((model) => {
+          const m = asRecord(model);
+          return {
+            model: text(m.model, 'unknown'),
+            input_tokens: num(m.input_tokens),
+            cached_tokens: num(m.cached_tokens),
+            cache_creation_tokens: num(m.cache_creation_tokens),
+            output_tokens: num(m.output_tokens),
+            input_price_per_m: num(m.input_price_per_m),
+            cached_price_per_m: num(m.cached_price_per_m),
+            cache_creation_price_per_m: num(m.cache_creation_price_per_m),
+            output_price_per_m: num(m.output_price_per_m),
+            events: num(m.events),
+            total_cost: num(m.total_cost),
+            cache_hit_rate: num(m.cache_hit_rate),
+          };
+        }),
+      };
+    }),
+    devices: devices.map((device) => {
+      const d = asRecord(device);
+      const fallbackID = text(device, 'local');
+      const id = text(d.id, fallbackID);
+      return {
+        id,
+        display_name: text(d.display_name, id),
+      };
+    }),
+    projects: projects.map((project) => {
+      const p = asRecord(project);
+      return {
+        project: text(p.project, 'Default'),
+        events: num(p.events),
+        input_tokens: num(p.input_tokens),
+        cached_tokens: num(p.cached_tokens),
+        cache_creation_tokens: num(p.cache_creation_tokens),
+        output_tokens: num(p.output_tokens),
+        total_cost: num(p.total_cost),
+        cache_hit_rate: num(p.cache_hit_rate),
+      };
+    }),
+    is_paused: Boolean(root.is_paused),
   };
 };
 
@@ -151,9 +199,9 @@ export default function App() {
         const json = await res.json();
         setData(normalizeDashboardData(json));
         setErrorMsg("");
-      } catch (e: any) {
+      } catch (e: unknown) {
         console.error(e);
-        setErrorMsg(e.toString());
+        setErrorMsg(e instanceof Error ? e.toString() : String(e));
       }
     };
     fetchData();
@@ -174,7 +222,7 @@ export default function App() {
 	};
 
   // Detect if we are running inside the Wails desktop app
-  const isDesktop = typeof window !== 'undefined' && (window as any).go !== undefined;
+  const isDesktop = typeof window !== 'undefined' && wailsWindow().go !== undefined;
 
   if (errorMsg) return (
     <div className={`min-h-screen bg-[#FFFFFF] text-[#FF0000] p-4 sm:p-6 md:p-10 flex items-center justify-center font-display text-xl sm:text-2xl uppercase border-[12px] border-[#FF0000] m-3 ${isDesktop ? 'wails-drag' : ''}`}>
@@ -226,7 +274,7 @@ export default function App() {
               >
                 <option value="all">{t('allDevices')}</option>
                 {data.devices?.map((d: DeviceStats) => (
-                  <option key={d.id || (d as any)} value={d.id || (d as any)}>{(d.display_name || d.id || (d as any)).toUpperCase()}</option>
+                  <option key={d.id} value={d.id}>{(d.display_name || d.id).toUpperCase()}</option>
                 ))}
               </select>
             )}
@@ -251,10 +299,9 @@ export default function App() {
             </button>
             <div 
               onClick={() => {
-                // @ts-ignore
-                if (window.go?.desktop?.App?.OpenSystemLogs) {
-                  // @ts-ignore
-                  window.go.desktop.App.OpenSystemLogs();
+                const app = wailsWindow().go?.desktop?.App;
+                if (app?.OpenSystemLogs) {
+                  app.OpenSystemLogs();
                 } else {
                   console.log("OpenSystemLogs not available in web mode");
                 }
@@ -305,6 +352,7 @@ export default function App() {
                   <span>{t('cacheRead')}: {fmt(p.cached_tokens)}</span>
                   <span>{t('cacheWrite')}: {fmt(p.cache_creation_tokens)}</span>
                   <span>{t('labelOut')}: {fmt(p.output_tokens)}</span>
+                  <span>{t('cacheHitRate')}: {fmtPercent(p.cache_hit_rate)}</span>
                 </div>
               </div>
               <div className="font-mono text-2xl md:text-3xl leading-none mt-4 border-t-[3px] border-[#000000] pt-4 whitespace-nowrap overflow-hidden text-ellipsis">
@@ -346,7 +394,7 @@ export default function App() {
                       <td className="px-3 py-3 sm:px-4 sm:py-4 font-bold group-hover:text-[#FFFFFF] truncate max-w-[300px]" title={p.project}>{p.project}</td>
                       <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">{p.events}</td>
                       <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
-                        {t('labelIn')}: {fmt(Math.max(0, num(p.input_tokens) - num(p.cached_tokens) - num(p.cache_creation_tokens)))} / {t('cacheRead')}: {fmt(p.cached_tokens)} / {t('cacheWrite')}: {fmt(p.cache_creation_tokens)} / {t('labelOut')}: {fmt(p.output_tokens)}
+                        {t('labelIn')}: {fmt(Math.max(0, num(p.input_tokens) - num(p.cached_tokens) - num(p.cache_creation_tokens)))} / {t('cacheRead')}: {fmt(p.cached_tokens)} / {t('cacheWrite')}: {fmt(p.cache_creation_tokens)} / {t('labelOut')}: {fmt(p.output_tokens)} / {t('cacheHitRate')}: {fmtPercent(p.cache_hit_rate)}
                       </td>
                       <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-bold group-hover:text-[#FFFFFF]">{fmtCost(p.total_cost)}</td>
                     </tr>
@@ -413,6 +461,10 @@ export default function App() {
                     <span className="font-display text-xs sm:text-sm uppercase block mb-1">{t('totalTokens')}</span>
                     <div className="font-mono text-xl sm:text-2xl">{fmt(totalTokens)}</div>
                   </div>
+                  <div className="border-l-[5px] border-[#000000] pl-3">
+                    <span className="font-display text-xs sm:text-sm uppercase block mb-1">{t('cacheHitRate')}</span>
+                    <div className="font-mono text-xl sm:text-2xl">{fmtPercent(src.cache_hit_rate)}</div>
+                  </div>
                 </div>
 
                 {/* Brutalist Progress Bar Area */}
@@ -460,7 +512,7 @@ export default function App() {
                           {t('labelIn')}: {fmtCost(m.input_price_per_m)} / {t('cacheRead')}: {fmtCost(m.cached_price_per_m)} / {t('cacheWrite')}: {fmtCost(m.cache_creation_price_per_m)} / {t('labelOut')}: {fmtCost(m.output_price_per_m)}
                         </td>
                         <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
-                          {t('labelIn')}: {fmt(Math.max(0, num(m.input_tokens) - num(m.cached_tokens) - num(m.cache_creation_tokens)))} / {t('cacheRead')}: {fmt(m.cached_tokens)} / {t('cacheWrite')}: {fmt(m.cache_creation_tokens)} / {t('labelOut')}: {fmt(m.output_tokens)}
+                          {t('labelIn')}: {fmt(Math.max(0, num(m.input_tokens) - num(m.cached_tokens) - num(m.cache_creation_tokens)))} / {t('cacheRead')}: {fmt(m.cached_tokens)} / {t('cacheWrite')}: {fmt(m.cache_creation_tokens)} / {t('labelOut')}: {fmt(m.output_tokens)} / {t('cacheHitRate')}: {fmtPercent(m.cache_hit_rate)}
                         </td>
                         <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">{m.events}</td>
                         <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-bold group-hover:text-[#FFFFFF]">{fmtCost(m.total_cost)}</td>

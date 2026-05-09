@@ -1,6 +1,7 @@
 package dashboard_test
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -8,6 +9,52 @@ import (
 	"ai-flight-dashboard/internal/model"
 	"ai-flight-dashboard/internal/testutil"
 )
+
+func TestBuildStatsIncludesCacheHitRates(t *testing.T) {
+	database := testutil.NewTestDB(t)
+	defer database.Close()
+	calc := testutil.NewTestCalc(t)
+
+	now := time.Now().UTC()
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{
+			Source:              "Codex",
+			Model:               "gpt-5.5",
+			Project:             "token",
+			InputTokens:         1000,
+			CachedTokens:        250,
+			CacheCreationTokens: 100,
+			OutputTokens:        50,
+		},
+		1.00,
+		now.Add(-10*time.Minute),
+		"/codex.sqlite",
+		"local",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := dashboard.BuildStats(database, calc, "local", "Codex", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	allPeriod := stats.Periods[len(stats.Periods)-1]
+	assertApprox(t, stats.Periods[0].CacheHitRate, 25.0)
+	assertApprox(t, allPeriod.CacheHitRate, 25.0)
+	if len(stats.Sources) != 1 {
+		t.Fatalf("expected one source, got %+v", stats.Sources)
+	}
+	assertApprox(t, stats.Sources[0].CacheHitRate, 25.0)
+	if len(stats.Sources[0].Models) != 1 {
+		t.Fatalf("expected one model, got %+v", stats.Sources[0].Models)
+	}
+	assertApprox(t, stats.Sources[0].Models[0].CacheHitRate, 25.0)
+	if len(stats.Projects) != 1 {
+		t.Fatalf("expected one project, got %+v", stats.Projects)
+	}
+	assertApprox(t, stats.Projects[0].CacheHitRate, 25.0)
+}
 
 func TestBuildTokenSummaryIncludesPerSourceBreakdown(t *testing.T) {
 	database := testutil.NewTestDB(t)
@@ -56,5 +103,12 @@ func TestBuildTokenSummaryIncludesPerSourceBreakdown(t *testing.T) {
 	}
 	if summary.Sources[1].Source != "Codex" || summary.Sources[1].TokensTotal != 3400 {
 		t.Fatalf("unexpected second source summary: %+v", summary.Sources)
+	}
+}
+
+func assertApprox(t *testing.T, got float64, want float64) {
+	t.Helper()
+	if math.Abs(got-want) > 0.001 {
+		t.Fatalf("expected %.3f, got %.3f", want, got)
 	}
 }
