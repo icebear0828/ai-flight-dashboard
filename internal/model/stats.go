@@ -13,6 +13,7 @@ type ModelStats struct {
 	CacheCreationTokens    int     `json:"cache_creation_tokens"`
 	OutputTokens           int     `json:"output_tokens"`
 	TotalCost              float64 `json:"total_cost"`
+	CacheHitRate           float64 `json:"cache_hit_rate"`
 	InputPricePerM         float64 `json:"input_price_per_m"`
 	CachedPricePerM        float64 `json:"cached_price_per_m"`
 	CacheCreationPricePerM float64 `json:"cache_creation_price_per_m"`
@@ -28,6 +29,7 @@ type SourceStats struct {
 	TotalOutput        int          `json:"total_output"`
 	TotalCost          float64      `json:"total_cost"`
 	TotalEvents        int          `json:"total_events"`
+	CacheHitRate       float64      `json:"cache_hit_rate"`
 	Models             []ModelStats `json:"models"`
 }
 
@@ -39,6 +41,7 @@ type PeriodCost struct {
 	CachedTokens        int     `json:"cached_tokens"`
 	CacheCreationTokens int     `json:"cache_creation_tokens"`
 	OutputTokens        int     `json:"output_tokens"`
+	CacheHitRate        float64 `json:"cache_hit_rate"`
 }
 
 // DeviceInfo represents a device with its display name.
@@ -56,6 +59,19 @@ type ProjectStat struct {
 	CacheCreationTokens int     `json:"cache_creation_tokens"`
 	OutputTokens        int     `json:"output_tokens"`
 	TotalCost           float64 `json:"total_cost"`
+	CacheHitRate        float64 `json:"cache_hit_rate"`
+}
+
+// CacheHitRatePercent returns cached token share as a bounded 0-100 percentage.
+func CacheHitRatePercent(inputTokens int, cachedTokens int) float64 {
+	if inputTokens <= 0 || cachedTokens <= 0 {
+		return 0
+	}
+	rate := (float64(cachedTokens) / float64(inputTokens)) * 100
+	if rate > 100 {
+		return 100
+	}
+	return rate
 }
 
 // StatsResponse is the full stats API response.

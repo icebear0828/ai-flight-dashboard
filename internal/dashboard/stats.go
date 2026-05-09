@@ -37,13 +37,29 @@ func BuildStats(database *db.DB, calc *calculator.Calculator, deviceID string, s
 		if err != nil {
 			return nil, err
 		}
-		periods = append(periods, model.PeriodCost{Label: win.label, Cost: cost, InputTokens: inTok, CachedTokens: caTok, CacheCreationTokens: caWTok, OutputTokens: outTok})
+		periods = append(periods, model.PeriodCost{
+			Label:               win.label,
+			Cost:                cost,
+			InputTokens:         inTok,
+			CachedTokens:        caTok,
+			CacheCreationTokens: caWTok,
+			OutputTokens:        outTok,
+			CacheHitRate:        model.CacheHitRatePercent(inTok, caTok),
+		})
 	}
 	total, tIn, tCa, tCaW, tOut, err := database.QueryPeriodStatsAll(deviceID, source)
 	if err != nil {
 		return nil, err
 	}
-	periods = append(periods, model.PeriodCost{Label: "ALL", Cost: total, InputTokens: tIn, CachedTokens: tCa, CacheCreationTokens: tCaW, OutputTokens: tOut})
+	periods = append(periods, model.PeriodCost{
+		Label:               "ALL",
+		Cost:                total,
+		InputTokens:         tIn,
+		CachedTokens:        tCa,
+		CacheCreationTokens: tCaW,
+		OutputTokens:        tOut,
+		CacheHitRate:        model.CacheHitRatePercent(tIn, tCa),
+	})
 
 	stats, err := database.QueryStatsSince(time.Time{}, deviceID, source)
 	if err != nil {
@@ -66,6 +82,7 @@ func BuildStats(database *db.DB, calc *calculator.Calculator, deviceID string, s
 			CacheCreationTokens:    s.CacheCreationTokens,
 			OutputTokens:           s.OutputTokens,
 			TotalCost:              s.TotalCost,
+			CacheHitRate:           model.CacheHitRatePercent(s.InputTokens, s.CachedTokens),
 			InputPricePerM:         price.InputPricePerM,
 			CachedPricePerM:        price.CachedPricePerM,
 			CacheCreationPricePerM: price.CacheCreationPricePerM,
@@ -81,6 +98,7 @@ func BuildStats(database *db.DB, calc *calculator.Calculator, deviceID string, s
 
 	sources := make([]model.SourceStats, 0, len(sourceMap))
 	for _, s := range sourceMap {
+		s.CacheHitRate = model.CacheHitRatePercent(s.TotalInput, s.TotalCached)
 		sources = append(sources, *s)
 	}
 	sort.Slice(sources, func(i, j int) bool {

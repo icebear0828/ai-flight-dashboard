@@ -423,9 +423,7 @@ func handleCacheSavings(w http.ResponseWriter, r *http.Request, database *db.DB,
 		savedPct = (saved / hypoTotal) * 100
 	}
 	hitRate := 0.0
-	if totalInput > 0 {
-		hitRate = (float64(totalCached) / float64(totalInput)) * 100
-	}
+	hitRate = model.CacheHitRatePercent(totalInput, totalCached)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(model.CacheSavingsResponse{

@@ -49,6 +49,7 @@
   "baseInput": "基础输入",
   "cacheRead": "缓存读取",
   "cacheWrite": "缓存写入",
+  "cacheHitRate": "缓存命中率",
   "outputTokens": "输出",
   "totalTokens": "总计",
   "labelIn": "输入",

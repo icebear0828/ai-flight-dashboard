@@ -49,6 +49,7 @@
   "baseInput": "BASE IN",
   "cacheRead": "CA_R",
   "cacheWrite": "CA_W",
+  "cacheHitRate": "CACHE HIT",
   "outputTokens": "OUTPUT",
   "totalTokens": "TOTAL",
   "labelIn": "IN",
