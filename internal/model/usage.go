@@ -18,12 +18,20 @@ type TokenUsage struct {
 	UUID                string    `json:"uuid"` // for dedup: Claude writes snapshots with same uuid
 }
 
+// TokenSummary is the lightweight aggregate advertised in LAN discovery packets.
+type TokenSummary struct {
+	Tokens24h   int     `json:"tokens_24h"`
+	TokensTotal int     `json:"tokens_total"`
+	CostTotal   float64 `json:"cost_total"`
+}
+
 // TrackPayload is the JSON payload for sending telemetry data to the remote server.
 type TrackPayload struct {
-	DeviceID string     `json:"device_id"`
-	Type     string     `json:"type,omitempty"`      // "ping" or empty/"track"
-	HTTPPort int        `json:"http_port,omitempty"` // for LAN auto-sync
-	Usage    TokenUsage `json:"usage"`
+	DeviceID string        `json:"device_id"`
+	Type     string        `json:"type,omitempty"`      // "ping" or empty/"track"
+	HTTPPort int           `json:"http_port,omitempty"` // for LAN auto-sync
+	Summary  *TokenSummary `json:"summary,omitempty"`
+	Usage    TokenUsage    `json:"usage"`
 }
 
 // SyncRecord represents a full database row for LAN auto-sync.

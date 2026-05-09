@@ -1,6 +1,8 @@
 package lan
 
 import (
+	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,8 +22,13 @@ import (
 const (
 	MulticastAddr   = "224.0.0.123:9101"
 	BroadcastAddr   = "255.255.255.255:9101"
+	DefaultHTTPPort = 19100
 	MaxDatagramSize = 8192
 	PeerTTL         = 30 * time.Second
+
+	HTTPDiscoveryInterval    = 15 * time.Second
+	HTTPDiscoveryTimeout     = 300 * time.Millisecond
+	httpDiscoveryConcurrency = 32
 )
 
 type PeerInfo struct {
@@ -33,6 +40,8 @@ type PeerInfo struct {
 	LastSyncAttempt time.Time
 	SyncStatus      string
 	SyncError       string
+	Summary         model.TokenSummary
+	HasSummary      bool
 }
 
 type syncCursor struct {
@@ -46,19 +55,22 @@ type LAN struct {
 	DeviceID string
 	HTTPPort int
 
-	mu            sync.RWMutex
-	activePeers   map[string]PeerInfo
-	peerUpdates   chan struct{}
-	lastDirtySent time.Time
+	mu             sync.RWMutex
+	activePeers    map[string]PeerInfo
+	peerUpdates    chan struct{}
+	lastDirtySent  time.Time
+	summarySource  func() model.TokenSummary
+	httpProbePorts []int
 }
 
 // New creates a new LAN instance for the given device.
 func New(deviceID string, httpPort int) *LAN {
 	return &LAN{
-		DeviceID:    deviceID,
-		HTTPPort:    httpPort,
-		activePeers: make(map[string]PeerInfo),
-		peerUpdates: make(chan struct{}, 1),
+		DeviceID:       deviceID,
+		HTTPPort:       httpPort,
+		activePeers:    make(map[string]PeerInfo),
+		peerUpdates:    make(chan struct{}, 1),
+		httpProbePorts: normalizeHTTPDiscoveryPorts([]int{httpPort}),
 	}
 }
 
@@ -105,12 +117,67 @@ func (l *LAN) GetActivePeerInfos() []PeerInfo {
 	return peers
 }
 
-// RecordPeer records a peer as active. Exposed for testing.
-func (l *LAN) RecordPeer(deviceID, ip string, httpPort int) {
-	l.recordPeer(deviceID, ip, httpPort, true)
+// SetSummaryProvider sets the aggregate token summary advertised in LAN packets.
+func (l *LAN) SetSummaryProvider(provider func() model.TokenSummary) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.summarySource = provider
 }
 
-func (l *LAN) recordPeer(deviceID, ip string, httpPort int, notify bool) {
+// CurrentSummary returns the current aggregate token summary, if configured.
+func (l *LAN) CurrentSummary() (model.TokenSummary, bool) {
+	l.mu.RLock()
+	provider := l.summarySource
+	l.mu.RUnlock()
+	if provider == nil {
+		return model.TokenSummary{}, false
+	}
+	return provider(), true
+}
+
+// SetHTTPDiscoveryPorts configures local HTTP ports to probe for active peers.
+func (l *LAN) SetHTTPDiscoveryPorts(ports ...int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.httpProbePorts = normalizeHTTPDiscoveryPorts(ports)
+}
+
+func (l *LAN) httpDiscoveryPorts() []int {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return append([]int(nil), l.httpProbePorts...)
+}
+
+func normalizeHTTPDiscoveryPorts(ports []int) []int {
+	seen := make(map[int]bool)
+	normalized := make([]int, 0, len(ports)+1)
+	for _, port := range ports {
+		if port <= 0 || port > 65535 || seen[port] {
+			continue
+		}
+		seen[port] = true
+		normalized = append(normalized, port)
+	}
+	if len(normalized) == 0 {
+		normalized = append(normalized, DefaultHTTPPort)
+	}
+	return normalized
+}
+
+// RecordPeer records a peer as active. Exposed for testing.
+func (l *LAN) RecordPeer(deviceID, ip string, httpPort int) {
+	l.recordPeer(deviceID, ip, httpPort, nil, true)
+}
+
+// RecordPeerSummary records a peer and its advertised token summary.
+func (l *LAN) RecordPeerSummary(deviceID, ip string, httpPort int, summary model.TokenSummary) {
+	l.recordPeer(deviceID, ip, httpPort, &summary, true)
+}
+
+func (l *LAN) recordPeer(deviceID, ip string, httpPort int, summary *model.TokenSummary, notify bool) {
+	if deviceID == "" {
+		return
+	}
 	l.mu.Lock()
 	peer := l.activePeers[deviceID]
 	wasNew := peer.ID == ""
@@ -127,6 +194,10 @@ func (l *LAN) recordPeer(deviceID, ip string, httpPort int, notify bool) {
 	}
 	if peer.SyncStatus == "" {
 		peer.SyncStatus = "pending"
+	}
+	if summary != nil {
+		peer.Summary = *summary
+		peer.HasSummary = true
 	}
 	l.activePeers[deviceID] = peer
 	l.mu.Unlock()
@@ -150,6 +221,23 @@ func (l *LAN) RecordPeerAt(deviceID, ip string, httpPort int, at time.Time) {
 		LastSeen:   at,
 		SyncStatus: "pending",
 	}
+}
+
+func (l *LAN) newPayload(payloadType string) model.TrackPayload {
+	payload := model.TrackPayload{
+		DeviceID: l.DeviceID,
+		HTTPPort: l.HTTPPort,
+		Type:     payloadType,
+	}
+
+	l.mu.RLock()
+	provider := l.summarySource
+	l.mu.RUnlock()
+	if provider != nil {
+		summary := provider()
+		payload.Summary = &summary
+	}
+	return payload
 }
 
 func (l *LAN) updatePeerSyncAttempt(id string) {
@@ -179,29 +267,22 @@ func (l *LAN) updatePeerSyncResult(id string, status string, errMsg string, sync
 
 // StartPinger periodically sends ping packets to the LAN.
 func (l *LAN) StartPinger() {
-	payload := model.TrackPayload{
-		DeviceID: l.DeviceID,
-		HTTPPort: l.HTTPPort,
-		Type:     "ping",
+	if data, err := json.Marshal(l.newPayload("ping")); err == nil {
+		l.sendToAll(data)
 	}
-	data, _ := json.Marshal(payload)
-	l.sendToAll(data)
 
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
-		l.sendToAll(data)
+		if data, err := json.Marshal(l.newPayload("ping")); err == nil {
+			l.sendToAll(data)
+		}
 	}
 }
 
 // Ping sends a single ping packet to announce presence (for ad-hoc use).
 func (l *LAN) Ping() {
-	payload := model.TrackPayload{
-		DeviceID: l.DeviceID,
-		HTTPPort: l.HTTPPort,
-		Type:     "ping",
-	}
-	data, err := json.Marshal(payload)
+	data, err := json.Marshal(l.newPayload("ping"))
 	if err == nil {
 		l.sendToAll(data)
 	}
@@ -218,12 +299,7 @@ func (l *LAN) AnnounceDirty() {
 	l.lastDirtySent = time.Now()
 	l.mu.Unlock()
 
-	payload := model.TrackPayload{
-		DeviceID: l.DeviceID,
-		HTTPPort: l.HTTPPort,
-		Type:     "dirty",
-	}
-	data, err := json.Marshal(payload)
+	data, err := json.Marshal(l.newPayload("dirty"))
 	if err == nil {
 		l.sendToAll(data)
 	}
@@ -269,6 +345,177 @@ func getBroadcastAddresses() []string {
 	return addrs
 }
 
+func localHTTPDiscoveryHosts() []string {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+
+	seen := make(map[string]bool)
+	hosts := make([]string, 0)
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrsList, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrsList {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok || ipnet.IP.To4() == nil {
+				continue
+			}
+			for _, host := range probeHostsForIPv4(ipnet.IP, ipnet.Mask) {
+				if seen[host] {
+					continue
+				}
+				seen[host] = true
+				hosts = append(hosts, host)
+			}
+		}
+	}
+	sort.Strings(hosts)
+	return hosts
+}
+
+func probeHostsForIPv4(ip net.IP, mask net.IPMask) []string {
+	v4 := ip.To4()
+	if v4 == nil {
+		return nil
+	}
+	ones, bits := mask.Size()
+	if bits != 32 {
+		return nil
+	}
+	if ones < 24 {
+		mask = net.CIDRMask(24, 32)
+	}
+
+	ipInt := binary.BigEndian.Uint32(v4)
+	maskInt := binary.BigEndian.Uint32(mask)
+	network := ipInt & maskInt
+	broadcast := network | ^maskInt
+	if broadcast <= network+1 {
+		return nil
+	}
+
+	hosts := make([]string, 0, broadcast-network-1)
+	for candidate := network + 1; candidate < broadcast; candidate++ {
+		if candidate == ipInt {
+			continue
+		}
+		var buf [4]byte
+		binary.BigEndian.PutUint32(buf[:], candidate)
+		hosts = append(hosts, net.IP(buf[:]).String())
+	}
+	return hosts
+}
+
+// StartHTTPDiscovery periodically probes local subnet HTTP endpoints for peers.
+func (l *LAN) StartHTTPDiscovery(ctx context.Context) {
+	l.ScanHTTPPeers(ctx, nil, nil)
+
+	ticker := time.NewTicker(HTTPDiscoveryInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			l.ScanHTTPPeers(ctx, nil, nil)
+		}
+	}
+}
+
+// ScanHTTPPeers actively discovers LAN nodes by probing their self endpoint.
+func (l *LAN) ScanHTTPPeers(ctx context.Context, hosts []string, ports []int) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if len(hosts) == 0 {
+		hosts = localHTTPDiscoveryHosts()
+	}
+	if len(ports) == 0 {
+		ports = l.httpDiscoveryPorts()
+	} else {
+		ports = normalizeHTTPDiscoveryPorts(ports)
+	}
+	if len(hosts) == 0 || len(ports) == 0 {
+		return
+	}
+
+	type target struct {
+		host string
+		port int
+	}
+	totalTargets := len(hosts) * len(ports)
+	workers := httpDiscoveryConcurrency
+	if totalTargets < workers {
+		workers = totalTargets
+	}
+
+	client := &http.Client{Timeout: HTTPDiscoveryTimeout}
+	jobs := make(chan target)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				l.probeHTTPPeer(ctx, client, job.host, job.port)
+			}
+		}()
+	}
+
+sendJobs:
+	for _, host := range hosts {
+		for _, port := range ports {
+			select {
+			case <-ctx.Done():
+				break sendJobs
+			case jobs <- target{host: host, port: port}:
+			}
+		}
+	}
+	close(jobs)
+	wg.Wait()
+}
+
+func (l *LAN) probeHTTPPeer(ctx context.Context, client *http.Client, host string, port int) {
+	if port <= 0 || port > 65535 {
+		return
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, HTTPDiscoveryTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, "http://"+net.JoinHostPort(host, strconv.Itoa(port))+"/api/lan/self", nil)
+	if err != nil {
+		return
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+
+	var self model.LANSelfResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, MaxDatagramSize)).Decode(&self); err != nil {
+		return
+	}
+	if self.DeviceID == "" || self.DeviceID == l.DeviceID {
+		return
+	}
+	httpPort := self.HTTPPort
+	if httpPort < 0 || httpPort > 65535 {
+		httpPort = 0
+	}
+	l.recordPeer(self.DeviceID, host, httpPort, self.Summary, true)
+}
+
 func (l *LAN) sendToAll(data []byte) {
 	// Send to Multicast
 	mAddr, err := net.ResolveUDPAddr("udp", MulticastAddr)
@@ -309,6 +556,12 @@ func (l *LAN) StartBroadcaster(usageChan <-chan model.TokenUsage) {
 // StartListener joins the multicast group and records discovered peers.
 // Token data is not trusted from UDP; peers pull records through HTTP sync.
 func (l *LAN) StartListener(outChan chan<- model.TokenUsage) {
+	l.StartListenerContext(context.Background(), outChan)
+}
+
+// StartListenerContext joins the multicast group and records discovered peers
+// until ctx is canceled.
+func (l *LAN) StartListenerContext(ctx context.Context, outChan chan<- model.TokenUsage) {
 	_ = outChan
 	var wg sync.WaitGroup
 
@@ -329,7 +582,30 @@ func (l *LAN) StartListener(outChan chan<- model.TokenUsage) {
 		}
 
 		// Update active peers (remote only)
-		l.recordPeer(payload.DeviceID, ipStr, payload.HTTPPort, payload.Type == "dirty")
+		l.recordPeer(payload.DeviceID, ipStr, payload.HTTPPort, payload.Summary, payload.Type == "dirty")
+	}
+
+	readLoop := func(conn *net.UDPConn) {
+		defer conn.Close()
+		go func() {
+			<-ctx.Done()
+			_ = conn.Close()
+		}()
+		conn.SetReadBuffer(MaxDatagramSize)
+		buf := make([]byte, MaxDatagramSize)
+		for {
+			n, src, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				time.Sleep(1 * time.Second)
+				continue
+			}
+			processPayload(buf, n, src)
+		}
 	}
 
 	// Multicast Listener
@@ -339,17 +615,7 @@ func (l *LAN) StartListener(outChan chan<- model.TokenUsage) {
 		addr, err := net.ResolveUDPAddr("udp", MulticastAddr)
 		if err == nil {
 			if conn, err := net.ListenMulticastUDP("udp", nil, addr); err == nil {
-				defer conn.Close()
-				conn.SetReadBuffer(MaxDatagramSize)
-				buf := make([]byte, MaxDatagramSize)
-				for {
-					n, src, err := conn.ReadFromUDP(buf)
-					if err != nil {
-						time.Sleep(1 * time.Second)
-						continue
-					}
-					processPayload(buf, n, src)
-				}
+				readLoop(conn)
 			}
 		}
 	}()
@@ -361,17 +627,7 @@ func (l *LAN) StartListener(outChan chan<- model.TokenUsage) {
 		addr, err := net.ResolveUDPAddr("udp", "0.0.0.0:9101")
 		if err == nil {
 			if conn, err := net.ListenUDP("udp", addr); err == nil {
-				defer conn.Close()
-				conn.SetReadBuffer(MaxDatagramSize)
-				buf := make([]byte, MaxDatagramSize)
-				for {
-					n, src, err := conn.ReadFromUDP(buf)
-					if err != nil {
-						time.Sleep(1 * time.Second)
-						continue
-					}
-					processPayload(buf, n, src)
-				}
+				readLoop(conn)
 			}
 		}
 	}()
@@ -382,6 +638,11 @@ func (l *LAN) StartListener(outChan chan<- model.TokenUsage) {
 
 // StartAutoSync runs a background loop to pull DB records from active LAN peers via HTTP.
 func (l *LAN) StartAutoSync(database *db.DB, token string) {
+	l.StartAutoSyncContext(context.Background(), database, token)
+}
+
+// StartAutoSyncContext runs a background loop to pull DB records until ctx ends.
+func (l *LAN) StartAutoSyncContext(ctx context.Context, database *db.DB, token string) {
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 
@@ -411,6 +672,8 @@ func (l *LAN) StartAutoSync(database *db.DB, token string) {
 	syncOnce()
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-ticker.C:
 			syncOnce()
 		case <-l.peerUpdates:
