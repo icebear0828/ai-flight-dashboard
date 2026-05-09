@@ -578,6 +578,15 @@ func (d *DB) QuerySyncRecordsSince(since time.Time) ([]model.SyncRecord, error) 
 // QuerySyncRecordsPage returns a page of synchronization records. The cursor is
 // (updated_at, id), so rows with identical updated_at values cannot be skipped.
 func (d *DB) QuerySyncRecordsPage(since time.Time, afterID int64, limit int) (model.SyncPullResponse, error) {
+	return d.querySyncRecordsPage(since, afterID, limit, "")
+}
+
+// QuerySyncRecordsPageForDevice returns a page scoped to one device ID.
+func (d *DB) QuerySyncRecordsPageForDevice(since time.Time, afterID int64, limit int, deviceID string) (model.SyncPullResponse, error) {
+	return d.querySyncRecordsPage(since, afterID, limit, deviceID)
+}
+
+func (d *DB) querySyncRecordsPage(since time.Time, afterID int64, limit int, deviceID string) (model.SyncPullResponse, error) {
 	query := `SELECT uuid, log_timestamp, source, model, project, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd, file_path, device_id, COALESCE(superseded, 0), COALESCE(updated_at, timestamp, log_timestamp), id
 		FROM usage_records WHERE `
 	args := []interface{}{formatLogTimestamp(since)}
@@ -587,6 +596,10 @@ func (d *DB) QuerySyncRecordsPage(since time.Time, afterID int64, limit int) (mo
 		args = append(args, formatLogTimestamp(since), afterID)
 	} else {
 		query += `julianday(COALESCE(updated_at, timestamp, log_timestamp)) >= julianday(?)`
+	}
+	if deviceID != "" {
+		query += ` AND device_id = ?`
+		args = append(args, deviceID)
 	}
 	query += ` ORDER BY julianday(COALESCE(updated_at, timestamp, log_timestamp)), id`
 	if limit > 0 {

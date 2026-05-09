@@ -788,6 +788,39 @@ func TestQuerySyncRecordsPageUsesCursor(t *testing.T) {
 	}
 }
 
+func TestQuerySyncRecordsPageCanFilterDevice(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "source.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	now := time.Now().UTC()
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 100, OutputTokens: 10, UUID: "local-old"},
+		1.00, now, "/local.jsonl", "local",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 200, OutputTokens: 20, UUID: "remote-new"},
+		2.00, now.Add(time.Second), "/remote.jsonl", "remote",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := database.QuerySyncRecordsPageForDevice(time.Time{}, 0, 1, "remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Records) != 1 || page.Records[0].DeviceID != "remote" || page.Records[0].UUID != "remote-new" {
+		t.Fatalf("expected remote-only sync page, got %+v", page)
+	}
+	if page.HasMore {
+		t.Fatalf("expected no more remote records, got %+v", page)
+	}
+}
+
 func TestUpsertSyncRecordPreservesRemoteUpdatedAt(t *testing.T) {
 	database, err := db.New(filepath.Join(t.TempDir(), "peer.db"))
 	if err != nil {

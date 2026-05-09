@@ -11,6 +11,14 @@ interface LanPeer {
   tokens_24h?: number;
   tokens_total?: number;
   cost_total?: number;
+  sources?: LanSourceSummary[];
+}
+
+interface LanSourceSummary {
+  source: string;
+  tokens_24h?: number;
+  tokens_total?: number;
+  cost_total?: number;
 }
 
 const num = (value: unknown): number => {
@@ -129,13 +137,14 @@ export default function Radar() {
 
       {peers.length > 0 && (
         <div className="w-full mt-8 border-[3px] border-[#000000] overflow-x-auto">
-          <table className="w-full text-left min-w-[620px]">
+          <table className="w-full text-left min-w-[780px]">
             <thead className="bg-[#000000] text-[#FFFFFF]">
               <tr>
                 <th className="p-3 font-display uppercase text-xs">{t('deviceId')}</th>
                 <th className="p-3 font-display uppercase text-xs">{t('syncStatus')}</th>
                 <th className="p-3 font-display uppercase text-xs">{t('tokens24h')}</th>
                 <th className="p-3 font-display uppercase text-xs">{t('totalTokens')}</th>
+                <th className="p-3 font-display uppercase text-xs">{t('sourceBreakdown')}</th>
                 <th className="p-3 font-display uppercase text-xs">{t('lanEndpoint')}</th>
               </tr>
             </thead>
@@ -152,6 +161,20 @@ export default function Radar() {
                   </td>
                   <td className="p-3 font-mono">{fmt(peer.tokens_24h)}</td>
                   <td className="p-3 font-mono">{fmt(peer.tokens_total)}</td>
+                  <td className="p-3 font-mono text-xs">
+                    {Array.isArray(peer.sources) && peer.sources.length > 0 ? (
+                      <div className="flex flex-col gap-1 min-w-[150px]">
+                        {peer.sources.map((source) => (
+                          <div key={source.source} className="flex items-center justify-between gap-3 whitespace-nowrap">
+                            <span className="font-bold">{source.source}</span>
+                            <span>{fmt(source.tokens_total)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <span>-</span>
+                    )}
+                  </td>
                   <td className="p-3 font-mono text-xs">{peer.ip || '-'}{peer.http_port ? `:${peer.http_port}` : ''}</td>
                 </tr>
               ))}

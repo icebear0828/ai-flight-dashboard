@@ -20,6 +20,15 @@ type TokenUsage struct {
 
 // TokenSummary is the lightweight aggregate advertised in LAN discovery packets.
 type TokenSummary struct {
+	Tokens24h   int                  `json:"tokens_24h"`
+	TokensTotal int                  `json:"tokens_total"`
+	CostTotal   float64              `json:"cost_total"`
+	Sources     []TokenSourceSummary `json:"sources,omitempty"`
+}
+
+// TokenSourceSummary is a per-tool slice of a LAN token summary.
+type TokenSourceSummary struct {
+	Source      string  `json:"source"`
 	Tokens24h   int     `json:"tokens_24h"`
 	TokensTotal int     `json:"tokens_total"`
 	CostTotal   float64 `json:"cost_total"`
