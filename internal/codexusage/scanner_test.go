@@ -87,6 +87,68 @@ func TestScanImportsCodexTelemetryEvents(t *testing.T) {
 	}
 }
 
+func TestScanImportsPrefixedCodexSSECompletionEvents(t *testing.T) {
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
+
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state_5.sqlite")
+	logsPath := filepath.Join(dir, "logs_2.sqlite")
+	createCodexState(t, statePath)
+	createCodexLogs(t, logsPath)
+
+	insertThread(t, statePath, "thread-1", "gpt-5.5", "/Users/c/token")
+	insertLog(t, logsPath, 21, `session_loop{thread_id=thread-1}:turn{model=gpt-5.5}: event.name="codex.sse_event" event.kind=response.completed input_token_count=321 output_token_count=45 cached_token_count=123 reasoning_token_count=9 event.timestamp=2026-05-07T11:14:03.316Z conversation.id=thread-1 model=gpt-5.5 slug=gpt-5.5`)
+
+	s := codexusage.NewWithPaths(database, calc, "local", statePath, logsPath)
+	count, err := s.Scan(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected prefixed Codex SSE completion to import, got %d", count)
+	}
+
+	_, input, cached, _, output, err := database.QueryPeriodStatsAll("", "Codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input != 321 || cached != 123 || output != 45 {
+		t.Fatalf("unexpected prefixed event totals: input=%d cached=%d output=%d", input, cached, output)
+	}
+}
+
+func TestScanIgnoresToolResultTextThatMentionsCodexSSECompletion(t *testing.T) {
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
+
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state_5.sqlite")
+	logsPath := filepath.Join(dir, "logs_2.sqlite")
+	createCodexState(t, statePath)
+	createCodexLogs(t, logsPath)
+
+	insertThread(t, statePath, "thread-1", "gpt-5.5", "/Users/c/token")
+	insertLog(t, logsPath, 31, `session_loop{thread_id=thread-1}:turn{model=gpt-5.5}: event.name="codex.tool_result" tool_name=exec_command arguments={"cmd":"sqlite3 logs_2.sqlite \"select * from logs where event.name=\"codex.sse_event\" and event.kind=response.completed and input_token_count=777\""} duration_ms=10 success=true output=event.name="codex.sse_event" event.kind=response.completed input_token_count=777 output_token_count=88 cached_token_count=66 event.timestamp=2026-05-07T11:15:03.316Z conversation.id=thread-1 model=gpt-5.5 event.timestamp=2026-05-07T11:15:04.000Z conversation.id=thread-1 model=gpt-5.5`)
+
+	s := codexusage.NewWithPaths(database, calc, "local", statePath, logsPath)
+	count, err := s.Scan(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expected tool result text to be ignored, got %d imports", count)
+	}
+
+	_, input, cached, _, output, err := database.QueryPeriodStatsAll("", "Codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input != 0 || cached != 0 || output != 0 {
+		t.Fatalf("expected no Codex totals from tool result text, input=%d cached=%d output=%d", input, cached, output)
+	}
+}
+
 func TestScanSkipsMissingOptionalCodexFiles(t *testing.T) {
 	database := testutil.NewTestDB(t)
 	calc := testutil.NewTestCalc(t)

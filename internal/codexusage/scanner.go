@@ -108,15 +108,18 @@ func (s *Scanner) Scan(usageChan chan<- watcher.TokenUsage) (int, error) {
 	}
 
 	rows, err := logConn.Query(`
-		SELECT id, ts, ts_nanos, feedback_log_body
-		FROM logs
-		WHERE id > ?
-			AND target = 'codex_otel.log_only'
-			AND feedback_log_body LIKE 'event.name=%codex.sse_event%'
-			AND feedback_log_body LIKE '%event.kind=response.completed%'
-			AND feedback_log_body LIKE '%input_token_count=%'
-		ORDER BY id ASC
-	`, offset)
+			SELECT id, ts, ts_nanos, feedback_log_body
+			FROM logs
+			WHERE id > ?
+				AND target = 'codex_otel.log_only'
+				AND (
+					feedback_log_body LIKE 'event.name="codex.sse_event" event.kind=response.completed% input_token_count=%'
+					OR feedback_log_body LIKE 'event.name=codex.sse_event event.kind=response.completed% input_token_count=%'
+					OR feedback_log_body LIKE '%: event.name="codex.sse_event" event.kind=response.completed% input_token_count=%'
+					OR feedback_log_body LIKE '%: event.name=codex.sse_event event.kind=response.completed% input_token_count=%'
+				)
+			ORDER BY id ASC
+		`, offset)
 	if err != nil {
 		if isOptionalCodexDBError(err) {
 			return 0, nil
@@ -245,7 +248,14 @@ func loadThreads(statePath string) (map[string]threadInfo, bool, error) {
 }
 
 func parseCodexEvent(logID int64, tsSec int64, tsNanos int64, body string) (codexEvent, bool) {
-	fields := parseMetrics(body)
+	eventBody, ok := codexTelemetryEventBody(body)
+	if !ok {
+		return codexEvent{}, false
+	}
+	fields := parseMetrics(eventBody)
+	if fields["event.name"] != "codex.sse_event" || fields["event.kind"] != "response.completed" {
+		return codexEvent{}, false
+	}
 	input := parseIntField(fields, "input_token_count")
 	output := parseIntField(fields, "output_token_count")
 	cached := parseIntField(fields, "cached_token_count")
@@ -274,9 +284,24 @@ func parseCodexEvent(logID int64, tsSec int64, tsNanos int64, body string) (code
 	}, true
 }
 
+func codexTelemetryEventBody(body string) (string, bool) {
+	if strings.HasPrefix(body, "event.name=") {
+		return body, true
+	}
+	const prefixedEventMarker = ": event.name="
+	idx := strings.Index(body, prefixedEventMarker)
+	if idx == -1 {
+		return "", false
+	}
+	return body[idx+2:], true
+}
+
 func parseMetrics(body string) map[string]string {
 	fields := make(map[string]string)
 	for _, match := range metricPattern.FindAllStringSubmatch(body, -1) {
+		if _, exists := fields[match[1]]; exists {
+			continue
+		}
 		value := match[2]
 		if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
 			value = value[1 : len(value)-1]

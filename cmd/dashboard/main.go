@@ -114,6 +114,8 @@ func startLANHTTPServer(ctx context.Context, port string, handler http.Handler) 
 type lanHTTPServerStarter func(context.Context, string, http.Handler) bool
 type lanRuntimeStarter func(context.Context, *lan.LAN, *db.DB, string, <-chan model.TokenUsage, chan<- model.TokenUsage)
 
+const codexTelemetryBackfillMigrationKey = "migration:codex-telemetry-event-prefix-v1"
+
 func startLocalLANServices(
 	ctx context.Context,
 	lanInst *lan.LAN,
@@ -312,6 +314,7 @@ func main() {
 			log.Printf("Failed to mark project metadata migration complete: %v", err)
 		}
 	}
+	queueCodexTelemetryBackfill(database)
 	// Collect scan directories
 	var scanDirs []string
 
@@ -584,6 +587,24 @@ func main() {
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Alas, there's been an error: %v", err)
 		os.Exit(1)
+	}
+}
+
+func queueCodexTelemetryBackfill(database *db.DB) {
+	done, err := database.GetOffset(codexTelemetryBackfillMigrationKey)
+	if err != nil {
+		log.Printf("Failed to read Codex telemetry backfill migration state: %v", err)
+		return
+	}
+	if done == 1 {
+		return
+	}
+	if _, err := database.ResetOffset(codexusage.OffsetKey); err != nil {
+		log.Printf("Failed to queue Codex telemetry backfill: %v", err)
+		return
+	}
+	if err := database.SetOffset(codexTelemetryBackfillMigrationKey, 1); err != nil {
+		log.Printf("Failed to mark Codex telemetry backfill migration complete: %v", err)
 	}
 }
 
