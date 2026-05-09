@@ -68,17 +68,17 @@ func TestLocalRepairDeviceIDsIncludesCurrentAndLegacyLocalOnce(t *testing.T) {
 	}
 }
 
-func TestNewLANInstanceAllowsDiscoveryWithoutSyncToken(t *testing.T) {
+func TestNewLANInstanceAdvertisesSyncPortWithoutTokenForZeroConfigLAN(t *testing.T) {
 	enabled := true
 	lanInst := newLANInstance(true, &enabled, "", "local-device", "19100")
 	if lanInst == nil {
-		t.Fatal("expected LAN discovery instance without token")
+		t.Fatal("expected zero-config LAN instance without token")
 	}
 	if lanInst.DeviceID != "local-device" {
 		t.Fatalf("unexpected device ID: %q", lanInst.DeviceID)
 	}
-	if lanInst.HTTPPort != 0 {
-		t.Fatalf("expected no advertised sync port without token, got %d", lanInst.HTTPPort)
+	if lanInst.HTTPPort != 19100 {
+		t.Fatalf("expected advertised zero-config sync port without token, got %d", lanInst.HTTPPort)
 	}
 }
 
@@ -111,7 +111,7 @@ func TestNewLANInstanceDisabledBySettings(t *testing.T) {
 }
 
 func TestStartLocalLANServicesStartsHTTPWithoutSyncToken(t *testing.T) {
-	lanInst := lan.New("local-device", 0)
+	lanInst := lan.New("local-device", 19100)
 	broadcastChan := make(chan model.TokenUsage)
 	usageChan := make(chan model.TokenUsage)
 	var capturedHandler http.Handler
@@ -167,7 +167,7 @@ func TestStartLocalLANServicesStartsHTTPWithoutSyncToken(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&self); err != nil {
 		t.Fatal(err)
 	}
-	if self.DeviceID != "local-device" || self.HTTPPort != 0 {
+	if self.DeviceID != "local-device" || self.HTTPPort != 19100 {
 		t.Fatalf("unexpected LAN self response: %+v", self)
 	}
 }

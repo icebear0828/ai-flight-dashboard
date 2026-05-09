@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"ai-flight-dashboard/internal/calculator"
@@ -42,11 +44,30 @@ func authMiddleware(token string, next http.HandlerFunc) http.HandlerFunc {
 func syncAuthMiddleware(token string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if token == "" {
-			http.Error(w, "LAN sync token required", http.StatusUnauthorized)
+			if !isPrivateLANRemote(r.RemoteAddr) {
+				http.Error(w, "LAN sync token required", http.StatusUnauthorized)
+				return
+			}
+			next(w, r)
 			return
 		}
 		authMiddleware(token, next)(w, r)
 	}
+}
+
+func isPrivateLANRemote(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	if zoneAt := strings.IndexByte(host, '%'); zoneAt >= 0 {
+		host = host[:zoneAt]
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
 }
 
 // NewLANHandler exposes only the endpoints needed by LAN peers.

@@ -501,20 +501,48 @@ func TestLANHandlerExposesOnlySyncSurface(t *testing.T) {
 	}
 }
 
-func TestSyncPullRequiresToken(t *testing.T) {
+func TestSyncPullAllowsPrivateLANWithoutToken(t *testing.T) {
+	database, calc := testutil.NewTestDBAndCalc(t)
+	defer database.Close()
+
+	now := time.Now().UTC()
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, OutputTokens: 200, UUID: "zero-config-sync"},
+		1.50, now, "/remote.jsonl", "local-device",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := web.NewHandler(database, calc, nil, nil, "", emptyFS)
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/pull", nil)
+	req.RemoteAddr = "192.168.10.5:42310"
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected private LAN sync pull without token, got %d", rec.Code)
+	}
+
+	var data model.SyncPullResponse
+	if err := json.NewDecoder(rec.Body).Decode(&data); err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Records) != 1 || data.Records[0].UUID != "zero-config-sync" {
+		t.Fatalf("expected zero-config sync record, got %+v", data)
+	}
+}
+
+func TestSyncPullRejectsPublicRemoteWithoutToken(t *testing.T) {
 	database, calc := testutil.NewTestDBAndCalc(t)
 	defer database.Close()
 
 	handler := web.NewHandler(database, calc, nil, nil, "", emptyFS)
-	srv := httptest.NewServer(handler)
-	defer srv.Close()
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/pull", nil)
+	req.RemoteAddr = "203.0.113.5:42310"
+	rec := httptest.NewRecorder()
 
-	resp, err := http.Get(srv.URL + "/api/sync/pull")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("expected sync pull to require token, got %d", resp.StatusCode)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected public sync pull without token to be rejected, got %d", rec.Code)
 	}
 }
