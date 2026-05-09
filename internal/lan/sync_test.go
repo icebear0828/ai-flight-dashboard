@@ -70,6 +70,37 @@ func TestScanHTTPPeersRecordsSelfEndpointSummary(t *testing.T) {
 	}
 }
 
+func TestScanHTTPPeersAllowsModeratelySlowLANSelfEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/lan/self" {
+			http.NotFound(w, r)
+			return
+		}
+		time.Sleep(400 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(model.LANSelfResponse{
+			DeviceID: "remote-slow",
+			HTTPPort: 19100,
+			Summary: &model.TokenSummary{
+				TokensTotal: 1234,
+			},
+		})
+	}))
+	defer server.Close()
+
+	host, port := testHostPortFromServerURL(t, server.URL)
+	l := New("local", 0)
+	l.ScanHTTPPeers(context.Background(), []string{host}, []int{port})
+
+	peers := l.GetActivePeerInfos()
+	if len(peers) != 1 {
+		t.Fatalf("expected moderately slow LAN peer to be discovered, got %+v", peers)
+	}
+	if peers[0].ID != "remote-slow" || !peers[0].HasSummary || peers[0].Summary.TokensTotal != 1234 {
+		t.Fatalf("unexpected slow peer info: %+v", peers[0])
+	}
+}
+
 func TestScanHTTPPeersSkipsLocalDevice(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/lan/self" {

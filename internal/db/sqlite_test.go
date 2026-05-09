@@ -151,6 +151,71 @@ func TestQueryCostSince(t *testing.T) {
 	}
 }
 
+func TestQueryTokenSourceSummaries(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	now := time.Now().UTC()
+	for _, row := range []struct {
+		usage    model.TokenUsage
+		cost     float64
+		at       time.Time
+		filePath string
+		deviceID string
+	}{
+		{
+			usage:    model.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, OutputTokens: 50},
+			cost:     1.00,
+			at:       now.Add(-48 * time.Hour),
+			filePath: "/old.jsonl",
+			deviceID: "dev1",
+		},
+		{
+			usage:    model.TokenUsage{Source: "Claude Code", Model: "m2", InputTokens: 200, OutputTokens: 100},
+			cost:     2.00,
+			at:       now.Add(-30 * time.Minute),
+			filePath: "/claude.jsonl",
+			deviceID: "dev1",
+		},
+		{
+			usage:    model.TokenUsage{Source: "Codex", Model: "gpt-5.5", InputTokens: 400, OutputTokens: 50},
+			cost:     4.00,
+			at:       now.Add(-10 * time.Minute),
+			filePath: "/codex.jsonl",
+			deviceID: "dev1",
+		},
+		{
+			usage:    model.TokenUsage{Source: "Gemini CLI", Model: "gemini-2.5-pro", InputTokens: 1000, OutputTokens: 100},
+			cost:     5.00,
+			at:       now.Add(-5 * time.Minute),
+			filePath: "/other.jsonl",
+			deviceID: "dev2",
+		},
+	} {
+		if err := database.InsertUsageWithTime(row.usage, row.cost, row.at, row.filePath, row.deviceID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	summaries, err := database.QueryTokenSourceSummaries(now.Add(-24*time.Hour), "dev1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(summaries) != 2 {
+		t.Fatalf("expected two dev1 source summaries, got %+v", summaries)
+	}
+	if summaries[0].Source != "Claude Code" || summaries[0].Tokens24h != 300 || summaries[0].TokensTotal != 450 || summaries[0].CostTotal != 3.00 {
+		t.Fatalf("unexpected Claude summary: %+v", summaries[0])
+	}
+	if summaries[1].Source != "Codex" || summaries[1].Tokens24h != 450 || summaries[1].TokensTotal != 450 || summaries[1].CostTotal != 4.00 {
+		t.Fatalf("unexpected Codex summary: %+v", summaries[1])
+	}
+}
+
 func TestQueryStatsSince(t *testing.T) {
 	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
