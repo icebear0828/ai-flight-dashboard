@@ -260,11 +260,25 @@ func TestLANScanIncludesPeerInfoAndTokenSummary(t *testing.T) {
 	defer database.Close()
 
 	now := time.Now().UTC()
-	if err := database.InsertUsageWithTime(
-		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, OutputTokens: 200},
-		1.50, now.Add(-10*time.Minute), "/remote.jsonl", "remote-device",
-	); err != nil {
-		t.Fatal(err)
+	for _, row := range []struct {
+		usage model.TokenUsage
+		cost  float64
+		path  string
+	}{
+		{
+			usage: model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 1000, OutputTokens: 200},
+			cost:  1.50,
+			path:  "/remote-claude.jsonl",
+		},
+		{
+			usage: model.TokenUsage{Source: "Codex", Model: "gpt-5.5", InputTokens: 3000, OutputTokens: 400},
+			cost:  3.40,
+			path:  "/remote-codex.jsonl",
+		},
+	} {
+		if err := database.InsertUsageWithTime(row.usage, row.cost, now.Add(-10*time.Minute), row.path, "remote-device"); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	lanInst := lan.New("local-device", 19100)
@@ -300,8 +314,11 @@ func TestLANScanIncludesPeerInfoAndTokenSummary(t *testing.T) {
 	if peer.SyncStatus != "pending" {
 		t.Fatalf("expected pending sync status, got %q", peer.SyncStatus)
 	}
-	if peer.Tokens24h != 1200 || peer.TokensTotal != 1200 {
+	if peer.Tokens24h != 4600 || peer.TokensTotal != 4600 {
 		t.Fatalf("expected token summaries to include synced DB data, got %+v", peer)
+	}
+	if len(peer.Sources) != 2 || peer.Sources[0].Source != "Claude Code" || peer.Sources[1].Source != "Codex" {
+		t.Fatalf("expected LAN peer source summaries, got %+v", peer.Sources)
 	}
 }
 
@@ -314,6 +331,10 @@ func TestLANScanUsesAdvertisedSummaryWhenPeerIsDiscoveryOnly(t *testing.T) {
 		Tokens24h:   1200,
 		TokensTotal: 3400,
 		CostTotal:   1.23,
+		Sources: []model.TokenSourceSummary{
+			{Source: "Claude Code", Tokens24h: 700, TokensTotal: 2100, CostTotal: 0.80},
+			{Source: "Gemini CLI", Tokens24h: 500, TokensTotal: 1300, CostTotal: 0.43},
+		},
 	})
 
 	handler := web.NewHandler(database, calc, nil, lanInst, "", emptyFS)
@@ -343,6 +364,9 @@ func TestLANScanUsesAdvertisedSummaryWhenPeerIsDiscoveryOnly(t *testing.T) {
 	if peer.Tokens24h != 1200 || peer.TokensTotal != 3400 || peer.CostTotal != 1.23 {
 		t.Fatalf("expected advertised token summary, got %+v", peer)
 	}
+	if len(peer.Sources) != 2 || peer.Sources[0].Source != "Claude Code" || peer.Sources[1].Source != "Gemini CLI" {
+		t.Fatalf("expected advertised source summaries, got %+v", peer.Sources)
+	}
 }
 
 func TestLANSelfEndpointIncludesDeviceAndSummary(t *testing.T) {
@@ -355,6 +379,9 @@ func TestLANSelfEndpointIncludesDeviceAndSummary(t *testing.T) {
 			Tokens24h:   222,
 			TokensTotal: 333,
 			CostTotal:   4.56,
+			Sources: []model.TokenSourceSummary{
+				{Source: "Codex", Tokens24h: 222, TokensTotal: 333, CostTotal: 4.56},
+			},
 		}
 	})
 
@@ -380,6 +407,9 @@ func TestLANSelfEndpointIncludesDeviceAndSummary(t *testing.T) {
 	}
 	if data.Summary == nil || data.Summary.Tokens24h != 222 || data.Summary.TokensTotal != 333 || data.Summary.CostTotal != 4.56 {
 		t.Fatalf("unexpected LAN self summary: %+v", data.Summary)
+	}
+	if len(data.Summary.Sources) != 1 || data.Summary.Sources[0].Source != "Codex" {
+		t.Fatalf("unexpected LAN self source summary: %+v", data.Summary.Sources)
 	}
 }
 
@@ -468,6 +498,48 @@ func TestSyncPullPaginates(t *testing.T) {
 	}
 	if len(second.Records) != 1 || second.Records[0].UUID == first.Records[0].UUID {
 		t.Fatalf("expected cursor to advance, first=%+v second=%+v", first, second)
+	}
+}
+
+func TestSyncPullFiltersDeviceID(t *testing.T) {
+	database, calc := testutil.NewTestDBAndCalc(t)
+	defer database.Close()
+
+	now := time.Now().UTC()
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 100, OutputTokens: 10, UUID: "local-first"},
+		1.00, now, "/local.jsonl", "local",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 200, OutputTokens: 20, UUID: "remote-first"},
+		2.00, now.Add(time.Second), "/remote.jsonl", "remote",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := web.NewHandler(database, calc, nil, nil, "secret-token", emptyFS)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/sync/pull?limit=1&device_id=remote", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected sync pull OK, got %d", resp.StatusCode)
+	}
+
+	var page model.SyncPullResponse
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Records) != 1 || page.Records[0].DeviceID != "remote" || page.Records[0].UUID != "remote-first" {
+		t.Fatalf("expected filtered remote sync record, got %+v", page)
 	}
 }
 

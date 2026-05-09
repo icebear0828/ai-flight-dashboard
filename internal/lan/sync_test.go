@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,6 +167,63 @@ func TestSyncWithPeerUpdatesDatabaseAndStatus(t *testing.T) {
 	}
 }
 
+func TestSyncWithPeerPrioritizesPeerDeviceRecords(t *testing.T) {
+	database, _ := testutil.NewTestDBAndCalc(t)
+	defer database.Close()
+
+	now := time.Now().UTC()
+	var queries []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/sync/pull" {
+			http.NotFound(w, r)
+			return
+		}
+		queries = append(queries, r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("device_id") == "remote" {
+			_ = json.NewEncoder(w).Encode(model.SyncPullResponse{
+				Records: []model.SyncRecord{{
+					TokenUsage: model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 900, OutputTokens: 90, Timestamp: now, UUID: "remote-priority"},
+					CostUSD:    9.00,
+					DeviceID:   "remote",
+					UpdatedAt:  now,
+				}},
+				NextUpdatedAt: now,
+				NextAfterID:   1,
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(model.SyncPullResponse{
+			Records: []model.SyncRecord{{
+				TokenUsage: model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 100, OutputTokens: 10, Timestamp: now.Add(-time.Hour), UUID: "local-backfill"},
+				CostUSD:    1.00,
+				DeviceID:   "local",
+				UpdatedAt:  now.Add(-time.Hour),
+			}},
+			NextUpdatedAt: now.Add(-time.Hour),
+			NextAfterID:   2,
+		})
+	}))
+	defer server.Close()
+
+	l := New("local", 19100)
+	peer := testPeerFromServerURL(t, server.URL)
+	peer.ID = "remote"
+	l.RecordPeer(peer.ID, peer.IP, peer.HTTPPort)
+	l.syncWithPeer(peer.ID, peer, database, "", map[string]syncCursor{})
+
+	if len(queries) < 2 || !strings.Contains(queries[0], "device_id=remote") {
+		t.Fatalf("expected first sync request to prioritize peer device, got queries=%+v", queries)
+	}
+	_, input, _, _, output, err := database.QueryPeriodStatsAll("remote", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input != 900 || output != 90 {
+		t.Fatalf("expected prioritized peer records to sync, got input=%d output=%d", input, output)
+	}
+}
+
 func TestSyncWithPeerRecordsUnauthorizedStatus(t *testing.T) {
 	database, _ := testutil.NewTestDBAndCalc(t)
 	defer database.Close()
@@ -250,8 +308,8 @@ func TestSyncWithPeerFollowsPagination(t *testing.T) {
 	l.RecordPeer(peer.ID, peer.IP, peer.HTTPPort)
 	l.syncWithPeer(peer.ID, peer, database, "", map[string]syncCursor{})
 
-	if calls != 2 {
-		t.Fatalf("expected two paginated sync calls, got %d", calls)
+	if calls != 4 {
+		t.Fatalf("expected paginated priority and full sync calls, got %d", calls)
 	}
 	_, input, _, _, output, err := database.QueryPeriodStatsAll("remote", "")
 	if err != nil {

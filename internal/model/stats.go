@@ -69,18 +69,19 @@ type StatsResponse struct {
 
 // LANPeerInfo describes a discovered LAN peer and the local sync state for it.
 type LANPeerInfo struct {
-	ID              string    `json:"id"`
-	DisplayName     string    `json:"display_name"`
-	IP              string    `json:"ip"`
-	HTTPPort        int       `json:"http_port"`
-	LastSeen        time.Time `json:"last_seen"`
-	LastSync        time.Time `json:"last_sync"`
-	LastSyncAttempt time.Time `json:"last_sync_attempt"`
-	SyncStatus      string    `json:"sync_status"`
-	SyncError       string    `json:"sync_error"`
-	Tokens24h       int       `json:"tokens_24h"`
-	TokensTotal     int       `json:"tokens_total"`
-	CostTotal       float64   `json:"cost_total"`
+	ID              string               `json:"id"`
+	DisplayName     string               `json:"display_name"`
+	IP              string               `json:"ip"`
+	HTTPPort        int                  `json:"http_port"`
+	LastSeen        time.Time            `json:"last_seen"`
+	LastSync        time.Time            `json:"last_sync"`
+	LastSyncAttempt time.Time            `json:"last_sync_attempt"`
+	SyncStatus      string               `json:"sync_status"`
+	SyncError       string               `json:"sync_error"`
+	Tokens24h       int                  `json:"tokens_24h"`
+	TokensTotal     int                  `json:"tokens_total"`
+	CostTotal       float64              `json:"cost_total"`
+	Sources         []TokenSourceSummary `json:"sources,omitempty"`
 }
 
 // LANSelfResponse identifies the local node for active LAN discovery.

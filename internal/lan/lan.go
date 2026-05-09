@@ -683,14 +683,30 @@ func (l *LAN) StartAutoSyncContext(ctx context.Context, database *db.DB, token s
 }
 
 func (l *LAN) syncWithPeer(id string, peer PeerInfo, database *db.DB, token string, lastSync map[string]syncCursor) {
-	baseURL := "http://" + net.JoinHostPort(peer.IP, strconv.Itoa(peer.HTTPPort)) + "/api/sync/pull"
-	cursor := lastSync[id]
 	l.updatePeerSyncAttempt(id)
+
+	peerCursorKey := id + "\x00peer"
+	if !l.syncWithPeerScope(id, peer, database, token, lastSync, peerCursorKey, id) {
+		return
+	}
+	if !l.syncWithPeerScope(id, peer, database, token, lastSync, id, "") {
+		return
+	}
+
+	l.updatePeerSyncResult(id, "ok", "", time.Now().UTC())
+}
+
+func (l *LAN) syncWithPeerScope(id string, peer PeerInfo, database *db.DB, token string, lastSync map[string]syncCursor, cursorKey string, deviceID string) bool {
+	baseURL := "http://" + net.JoinHostPort(peer.IP, strconv.Itoa(peer.HTTPPort)) + "/api/sync/pull"
+	cursor := lastSync[cursorKey]
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	for {
 		values := url.Values{}
 		values.Set("limit", "1000")
+		if deviceID != "" {
+			values.Set("device_id", deviceID)
+		}
 		if !cursor.updatedAt.IsZero() {
 			values.Set("since", cursor.updatedAt.Format(time.RFC3339Nano))
 		}
@@ -701,7 +717,7 @@ func (l *LAN) syncWithPeer(id string, peer PeerInfo, database *db.DB, token stri
 		req, err := http.NewRequest("GET", baseURL+"?"+values.Encode(), nil)
 		if err != nil {
 			l.updatePeerSyncResult(id, "error", err.Error(), time.Time{})
-			return
+			return false
 		}
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
@@ -710,26 +726,26 @@ func (l *LAN) syncWithPeer(id string, peer PeerInfo, database *db.DB, token stri
 		resp, err := client.Do(req)
 		if err != nil {
 			l.updatePeerSyncResult(id, "unreachable", err.Error(), time.Time{})
-			return
+			return false
 		}
 
 		if resp.StatusCode == http.StatusUnauthorized {
 			resp.Body.Close()
 			l.updatePeerSyncResult(id, "unauthorized", "remote rejected sync token", time.Time{})
-			return
+			return false
 		}
 		if resp.StatusCode != http.StatusOK {
 			status := resp.StatusCode
 			resp.Body.Close()
 			l.updatePeerSyncResult(id, "http_error", fmt.Sprintf("remote returned HTTP %d", status), time.Time{})
-			return
+			return false
 		}
 
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
 			l.updatePeerSyncResult(id, "error", err.Error(), time.Time{})
-			return
+			return false
 		}
 
 		var page model.SyncPullResponse
@@ -737,7 +753,7 @@ func (l *LAN) syncWithPeer(id string, peer PeerInfo, database *db.DB, token stri
 			var legacyRecords []model.SyncRecord
 			if legacyErr := json.Unmarshal(body, &legacyRecords); legacyErr != nil {
 				l.updatePeerSyncResult(id, "error", err.Error(), time.Time{})
-				return
+				return false
 			}
 			page.Records = legacyRecords
 			page.HasMore = false
@@ -748,7 +764,7 @@ func (l *LAN) syncWithPeer(id string, peer PeerInfo, database *db.DB, token stri
 				errMsg := fmt.Sprintf("DB insert error for device %s: %v", r.DeviceID, err)
 				log.Printf("LAN sync %s", errMsg)
 				l.updatePeerSyncResult(id, "error", errMsg, time.Time{})
-				return
+				return false
 			}
 		}
 		if !page.NextUpdatedAt.IsZero() {
@@ -760,13 +776,13 @@ func (l *LAN) syncWithPeer(id string, peer PeerInfo, database *db.DB, token stri
 		}
 		if page.NextUpdatedAt.IsZero() || page.NextAfterID == 0 {
 			l.updatePeerSyncResult(id, "error", "remote returned incomplete sync cursor", time.Time{})
-			return
+			return false
 		}
 	}
 
 	if cursor.updatedAt.IsZero() {
 		cursor.updatedAt = time.Now().UTC().Add(-5 * time.Minute)
 	}
-	lastSync[id] = cursor
-	l.updatePeerSyncResult(id, "ok", "", time.Now().UTC())
+	lastSync[cursorKey] = cursor
+	return true
 }

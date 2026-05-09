@@ -208,15 +208,12 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 			peers = lanInst.GetActivePeers()
 			aliases, _ := database.GetDeviceAliases()
 			for _, peer := range lanInst.GetActivePeerInfos() {
-				_, in24h, _, _, out24h, _ := database.QueryPeriodStatsSince(time.Now().UTC().Add(-24*time.Hour), peer.ID, "")
-				totalCost, totalIn, _, _, totalOut, _ := database.QueryPeriodStatsAll(peer.ID, "")
-				tokens24h := in24h + out24h
-				tokensTotal := totalIn + totalOut
-				costTotal := totalCost
-				if peer.HasSummary && (peer.SyncStatus != "ok" || tokensTotal == 0) {
-					tokens24h = peer.Summary.Tokens24h
-					tokensTotal = peer.Summary.TokensTotal
-					costTotal = peer.Summary.CostTotal
+				summary, err := dashboard.BuildTokenSummary(database, peer.ID)
+				if err != nil {
+					summary = model.TokenSummary{}
+				}
+				if peer.HasSummary && (peer.SyncStatus != "ok" || summary.TokensTotal == 0) {
+					summary = peer.Summary
 				}
 				displayName := peer.ID
 				if alias := aliases[peer.ID]; alias != "" {
@@ -232,9 +229,10 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 					LastSyncAttempt: peer.LastSyncAttempt,
 					SyncStatus:      peer.SyncStatus,
 					SyncError:       peer.SyncError,
-					Tokens24h:       tokens24h,
-					TokensTotal:     tokensTotal,
-					CostTotal:       costTotal,
+					Tokens24h:       summary.Tokens24h,
+					TokensTotal:     summary.TokensTotal,
+					CostTotal:       summary.CostTotal,
+					Sources:         summary.Sources,
 				})
 			}
 		}
@@ -368,7 +366,8 @@ func handleSyncPull(w http.ResponseWriter, r *http.Request, database *db.DB) {
 		limit = maxSyncLimit
 	}
 
-	page, err := database.QuerySyncRecordsPage(since, afterID, limit)
+	deviceID := r.URL.Query().Get("device_id")
+	page, err := database.QuerySyncRecordsPageForDevice(since, afterID, limit, deviceID)
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return

@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -272,6 +273,70 @@ func TestZeroConfigHTTPDiscoveryPullsRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Fatalf("expected zero-config LAN sync to pull remote records, got input=%d output=%d", input, output)
+}
+
+func TestZeroConfigHTTPDiscoveryPrioritizesPeerDeviceRecords(t *testing.T) {
+	remoteDB, remoteCalc := testutil.NewTestDBAndCalc(t)
+	defer remoteDB.Close()
+
+	now := time.Now().UTC()
+	if err := remoteDB.InsertUsageWithTime(
+		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 100, OutputTokens: 10, UUID: "local-backfill-e2e", Timestamp: now.Add(-time.Hour)},
+		1.00,
+		now.Add(-time.Hour),
+		"/local/session.jsonl",
+		"local-zero-config-priority",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := remoteDB.InsertUsageWithTime(
+		model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 2000, OutputTokens: 500, UUID: "remote-priority-e2e", Timestamp: now},
+		2.00,
+		now,
+		"/remote/session.jsonl",
+		"remote-zero-config-priority",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	remoteLAN := lan.New("remote-zero-config-priority", 0)
+	remoteHandler := web.NewHandler(remoteDB, remoteCalc, nil, remoteLAN, "", emptyFS)
+	var syncQueries []string
+	remoteSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/sync/pull" {
+			syncQueries = append(syncQueries, r.URL.RawQuery)
+		}
+		remoteHandler.ServeHTTP(w, r)
+	}))
+	defer remoteSrv.Close()
+	host, port := splitServerURL(t, remoteSrv.URL)
+	remoteLAN.HTTPPort = port
+
+	localDB, _ := testutil.NewTestDBAndCalc(t)
+	defer localDB.Close()
+	localLAN := lan.New("local-zero-config-priority", 19100)
+	localLAN.ScanHTTPPeers(context.Background(), []string{host}, []int{port})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go localLAN.StartAutoSyncContext(ctx, localDB, "")
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		_, input, _, _, output, err := localDB.QueryPeriodStatsAll("remote-zero-config-priority", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if input == 2000 && output == 500 {
+			if len(syncQueries) == 0 || !strings.Contains(syncQueries[0], "device_id=remote-zero-config-priority") {
+				t.Fatalf("expected first sync query to prioritize peer device, got %+v", syncQueries)
+			}
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	t.Fatalf("expected prioritized zero-config sync to pull peer records, queries=%+v", syncQueries)
 }
 
 func splitServerURL(t *testing.T, rawURL string) (string, int) {

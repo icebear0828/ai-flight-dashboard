@@ -28,6 +28,7 @@ import (
 	"ai-flight-dashboard/internal/calculator"
 	"ai-flight-dashboard/internal/codexusage"
 	"ai-flight-dashboard/internal/config"
+	"ai-flight-dashboard/internal/dashboard"
 	"ai-flight-dashboard/internal/db"
 	"ai-flight-dashboard/internal/desktop"
 	"ai-flight-dashboard/internal/forwarder"
@@ -68,16 +69,11 @@ func fetchDynamicPricing(url string, timeout time.Duration) ([]byte, error) {
 func startLANGoroutines(ctx context.Context, lanInst *lan.LAN, database *db.DB, token string, broadcastChan <-chan model.TokenUsage, usageChan chan<- model.TokenUsage) {
 	fmt.Printf("📡 LAN discovery enabled. Multicast: %s\n", lan.MulticastAddr)
 	lanInst.SetSummaryProvider(func() model.TokenSummary {
-		_, in24h, _, _, out24h, err24h := database.QueryPeriodStatsSince(time.Now().UTC().Add(-24*time.Hour), lanInst.DeviceID, "")
-		totalCost, totalIn, _, _, totalOut, errTotal := database.QueryPeriodStatsAll(lanInst.DeviceID, "")
-		if err24h != nil || errTotal != nil {
+		summary, err := dashboard.BuildTokenSummary(database, lanInst.DeviceID)
+		if err != nil {
 			return model.TokenSummary{}
 		}
-		return model.TokenSummary{
-			Tokens24h:   in24h + out24h,
-			TokensTotal: totalIn + totalOut,
-			CostTotal:   totalCost,
-		}
+		return summary
 	})
 	go lanInst.StartListenerContext(ctx, usageChan)
 	go lanInst.StartPinger()

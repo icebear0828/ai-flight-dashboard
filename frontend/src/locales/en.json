@@ -15,6 +15,7 @@
   "scanningForSignals": "Scanning for signals...",
   "syncStatus": "SYNC STATUS",
   "tokens24h": "24H TOKENS",
+  "sourceBreakdown": "SOURCES",
   "lanEndpoint": "LAN ENDPOINT",
   "settingsPanel": "SETTINGS PANEL",
   "modelPricing": "MODEL PRICING",
