@@ -153,6 +153,112 @@ test('LAN radar shows per-source peer totals before full sync completes', async 
   await expect(lanTable.getByText('7.0K', { exact: true })).toBeVisible();
 });
 
+test('LAN radar can leave and rejoin the network', async ({ page }) => {
+  let lanEnabled = false;
+  const lanActions: string[] = [];
+
+  await page.route('**/api/stats?*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        periods,
+        sources: [],
+        devices: [{ id: 'local', display_name: 'local' }],
+        projects: [],
+        is_paused: false,
+      }),
+    });
+  });
+  await page.route('**/api/lan/status', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ enabled: lanEnabled }),
+    });
+  });
+  await page.route('**/api/lan/scan', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(lanEnabled ? { peers: ['peer-a'], peer_infos: [{ id: 'peer-a', display_name: 'peer-a' }] } : { peers: [] }),
+    });
+  });
+  await page.route('**/api/lan/join', async (route) => {
+    lanActions.push('join');
+    lanEnabled = true;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ enabled: true }),
+    });
+  });
+  await page.route('**/api/lan/leave', async (route) => {
+    lanActions.push('leave');
+    lanEnabled = false;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ enabled: false }),
+    });
+  });
+
+  await page.goto('/');
+
+  await expect(page.getByRole('button', { name: '加入网络' })).toBeVisible();
+  await page.getByRole('button', { name: '加入网络' }).click();
+  await expect(page.getByRole('button', { name: '退出网络' })).toBeVisible();
+
+  await page.getByRole('button', { name: '退出网络' }).click();
+  await expect(page.getByRole('button', { name: '加入网络' })).toBeVisible();
+
+  await page.getByRole('button', { name: '加入网络' }).click();
+  await expect(page.getByRole('button', { name: '退出网络' })).toBeVisible();
+  expect(lanActions).toEqual(['join', 'leave', 'join']);
+});
+
+test('system logs click shows a visible fallback in web mode', async ({ page }) => {
+  await page.route('**/api/stats?*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        periods,
+        sources: [],
+        devices: [{ id: 'local', display_name: 'local' }],
+        projects: [],
+        is_paused: false,
+      }),
+    });
+  });
+  await page.route('**/api/lan/scan', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ peers: [] }),
+    });
+  });
+  await page.route('**/api/lan/status', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ enabled: true }),
+    });
+  });
+  await page.route('**/api/system/logs', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ path: '/tmp/ai-flight-dashboard/stats' }),
+    });
+  });
+
+  await page.goto('/');
+
+  await page.getByText('[ 系统日志 ]').click();
+  await expect(page.getByText('系统日志路径: /tmp/ai-flight-dashboard/stats')).toBeVisible();
+});
+
 test('dashboard shows cache hit rate in stats tables', async ({ page }) => {
   await page.route('**/api/stats?*', async (route) => {
     await route.fulfill({

@@ -58,6 +58,14 @@ interface StatsResponse {
   devices: Array<{ id: string; display_name: string }>
   is_paused: boolean
 }
+
+interface LANStatusResponse {
+  enabled: boolean
+}
+
+interface SystemLogsResponse {
+  path: string
+}
 ```
 
 ## Endpoints
@@ -128,6 +136,50 @@ Response:
 ```
 
 `cache_hit_rate` is `cached_tokens / input_tokens * 100`, bounded to `0..100`.
+
+### 2. LAN Runtime Status
+```
+GET /api/lan/status
+```
+
+Response:
+```json
+{ "enabled": true }
+```
+
+### 3. Join LAN Runtime
+```
+POST /api/lan/join
+```
+
+Starts LAN discovery/sync when it is disabled, or sends an immediate LAN ping when it is already running.
+
+Response:
+```json
+{ "enabled": true }
+```
+
+### 4. Leave LAN Runtime
+```
+POST /api/lan/leave
+```
+
+Stops LAN discovery/sync for the running process and persists `enable_lan=false`.
+
+Response:
+```json
+{ "enabled": false }
+```
+
+### 5. Get System Logs Path
+```
+GET /api/system/logs
+```
+
+Response:
+```json
+{ "path": "/path/to/ai-flight-dashboard/stats" }
+```
 
 ## UI Data Flow
 

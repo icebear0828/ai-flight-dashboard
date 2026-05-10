@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"ai-flight-dashboard/internal/config"
 	"ai-flight-dashboard/internal/lan"
 	"ai-flight-dashboard/internal/model"
 	"ai-flight-dashboard/internal/testutil"
@@ -448,6 +450,95 @@ func TestLANScanAndJoinRemainAvailableWithSyncToken(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected unauthenticated UI LAN join to remain available with sync token, got %d", resp.StatusCode)
+	}
+}
+
+func TestLANStatusJoinAndLeave(t *testing.T) {
+	database, calc := testutil.NewTestDBAndCalc(t)
+	defer database.Close()
+
+	lanInst := lan.New("local-device", 19100)
+	handler := web.NewHandler(database, calc, nil, lanInst, "", emptyFS)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	client := http.Client{Timeout: 2 * time.Second}
+
+	resp, err := client.Get(srv.URL + "/api/lan/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected LAN status 200, got %d", resp.StatusCode)
+	}
+	var status model.LANStatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if !status.Enabled {
+		t.Fatalf("expected LAN enabled before leave, got %+v", status)
+	}
+
+	resp, err = client.Post(srv.URL+"/api/lan/leave", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected LAN leave 200, got %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Enabled {
+		t.Fatalf("expected LAN disabled after leave, got %+v", status)
+	}
+
+	resp, err = client.Post(srv.URL+"/api/lan/join", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected LAN join 200, got %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if !status.Enabled {
+		t.Fatalf("expected LAN enabled after join, got %+v", status)
+	}
+}
+
+func TestSystemLogsEndpointReturnsStatsDirectory(t *testing.T) {
+	dataDir := t.TempDir()
+	config.SetDataDir(dataDir)
+	defer config.SetDataDir("")
+
+	database, calc := testutil.NewTestDBAndCalc(t)
+	defer database.Close()
+
+	handler := web.NewHandler(database, calc, nil, nil, "", emptyFS)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/system/logs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected system logs endpoint 200, got %d", resp.StatusCode)
+	}
+
+	var data model.SystemLogsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dataDir, "stats")
+	if data.Path != want {
+		t.Fatalf("expected system logs path %q, got %q", want, data.Path)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	goruntime "runtime"
 	"syscall"
@@ -76,9 +77,9 @@ func startLANGoroutines(ctx context.Context, lanInst *lan.LAN, database *db.DB, 
 		return summary
 	})
 	go lanInst.StartListenerContext(ctx, usageChan)
-	go lanInst.StartPinger()
+	go lanInst.StartPingerContext(ctx)
 	go lanInst.StartHTTPDiscovery(ctx)
-	go lanInst.StartBroadcaster(broadcastChan)
+	go lanInst.StartBroadcasterContext(ctx, broadcastChan)
 	go lanInst.StartAutoSyncContext(ctx, database, token)
 	if token == "" {
 		fmt.Println("🌐 Zero-config LAN sync enabled for private networks.")
@@ -86,14 +87,19 @@ func startLANGoroutines(ctx context.Context, lanInst *lan.LAN, database *db.DB, 
 	}
 }
 
-func startLANHTTPServer(ctx context.Context, port string, handler http.Handler) bool {
+type lanHTTPServerHandle struct {
+	done <-chan struct{}
+}
+
+func startLANHTTPServer(ctx context.Context, port string, handler http.Handler) (*lanHTTPServerHandle, bool) {
 	addr := "0.0.0.0:" + port
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Printf("LAN API server unavailable on port %s: %v", port, err)
-		return false
+		return nil, false
 	}
 	srv := &http.Server{Handler: handler}
+	done := make(chan struct{})
 
 	go func() {
 		<-ctx.Done()
@@ -103,16 +109,169 @@ func startLANHTTPServer(ctx context.Context, port string, handler http.Handler) 
 	}()
 
 	go func() {
+		defer close(done)
 		fmt.Printf("🌐 LAN API server: http://0.0.0.0:%s\n", port)
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("LAN API server unavailable on port %s: %v", port, err)
 		}
 	}()
-	return true
+	return &lanHTTPServerHandle{done: done}, true
 }
 
-type lanHTTPServerStarter func(context.Context, string, http.Handler) bool
+type lanHTTPServerStarter func(context.Context, string, http.Handler) (*lanHTTPServerHandle, bool)
 type lanRuntimeStarter func(context.Context, *lan.LAN, *db.DB, string, <-chan model.TokenUsage, chan<- model.TokenUsage)
+
+const lanHTTPShutdownWait = 4 * time.Second
+
+type runtimeLANController struct {
+	mu            sync.RWMutex
+	parentCtx     context.Context
+	lanMode       bool
+	deviceID      string
+	port          string
+	token         string
+	database      *db.DB
+	broadcastChan <-chan model.TokenUsage
+	usageChan     chan<- model.TokenUsage
+	startHTTP     lanHTTPServerStarter
+	startRuntime  lanRuntimeStarter
+	cancel        context.CancelFunc
+	httpDone      <-chan struct{}
+	lanInst       *lan.LAN
+}
+
+func newRuntimeLANController(
+	parentCtx context.Context,
+	lanMode bool,
+	deviceID string,
+	port string,
+	token string,
+	database *db.DB,
+	broadcastChan <-chan model.TokenUsage,
+	usageChan chan<- model.TokenUsage,
+	startHTTP lanHTTPServerStarter,
+	startRuntime lanRuntimeStarter,
+) *runtimeLANController {
+	return &runtimeLANController{
+		parentCtx:     parentCtx,
+		lanMode:       lanMode,
+		deviceID:      deviceID,
+		port:          port,
+		token:         token,
+		database:      database,
+		broadcastChan: broadcastChan,
+		usageChan:     usageChan,
+		startHTTP:     startHTTP,
+		startRuntime:  startRuntime,
+	}
+}
+
+func (c *runtimeLANController) CurrentLAN() *lan.LAN {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.lanInst
+}
+
+func (c *runtimeLANController) Status() model.LANStatusResponse {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return model.LANStatusResponse{Enabled: c.lanInst != nil}
+}
+
+func (c *runtimeLANController) Join() (model.LANStatusResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.lanInst != nil {
+		c.lanInst.Ping()
+		if err := c.saveLANSetting(true); err != nil {
+			return model.LANStatusResponse{Enabled: true}, err
+		}
+		return model.LANStatusResponse{Enabled: true}, nil
+	}
+	enabled := true
+	lanInst := newLANInstance(c.lanMode, &enabled, c.token, c.deviceID, c.port)
+	if lanInst == nil {
+		return model.LANStatusResponse{Enabled: false}, fmt.Errorf("LAN is disabled by launch configuration")
+	}
+	if err := c.saveLANSetting(true); err != nil {
+		return model.LANStatusResponse{Enabled: false}, err
+	}
+
+	runtimeCtx, cancel := context.WithCancel(c.parentCtx)
+	var httpHandle *lanHTTPServerHandle
+	if c.startHTTP != nil {
+		var ok bool
+		httpHandle, ok = c.startHTTP(runtimeCtx, c.port, web.NewLANHandler(c.database, c.token, lanInst))
+		if !ok {
+			cancel()
+			if err := c.saveLANSetting(false); err != nil {
+				return model.LANStatusResponse{Enabled: false}, err
+			}
+			return model.LANStatusResponse{Enabled: false}, fmt.Errorf("failed to start LAN HTTP server")
+		}
+	}
+	c.startRuntime(runtimeCtx, lanInst, c.database, c.token, c.broadcastChan, c.usageChan)
+
+	c.lanInst = lanInst
+	c.cancel = cancel
+	if httpHandle != nil {
+		c.httpDone = httpHandle.done
+	} else {
+		c.httpDone = nil
+	}
+	return model.LANStatusResponse{Enabled: true}, nil
+}
+
+func (c *runtimeLANController) Leave() (model.LANStatusResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.lanInst == nil {
+		if err := c.saveLANSetting(false); err != nil {
+			return model.LANStatusResponse{Enabled: false}, err
+		}
+		return model.LANStatusResponse{Enabled: false}, nil
+	}
+	if err := c.saveLANSetting(false); err != nil {
+		return model.LANStatusResponse{Enabled: true}, err
+	}
+
+	if c.cancel != nil {
+		c.cancel()
+		c.cancel = nil
+	}
+	if err := waitForLANHTTPShutdown(c.httpDone); err != nil {
+		return model.LANStatusResponse{Enabled: true}, err
+	}
+	c.httpDone = nil
+	c.lanInst = nil
+	return model.LANStatusResponse{Enabled: false}, nil
+}
+
+func waitForLANHTTPShutdown(done <-chan struct{}) error {
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-time.After(lanHTTPShutdownWait):
+		return fmt.Errorf("timed out waiting for LAN HTTP server shutdown")
+	}
+}
+
+func (c *runtimeLANController) saveLANSetting(enabled bool) error {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load LAN config: %w", err)
+	}
+	cfg.EnableLAN = &enabled
+	if err := config.SaveConfig(cfg); err != nil {
+		return fmt.Errorf("failed to save LAN config: %w", err)
+	}
+	return nil
+}
 
 const codexTelemetryBackfillMigrationKey = "migration:codex-telemetry-event-prefix-v1"
 
@@ -130,7 +289,7 @@ func startLocalLANServices(
 	if lanInst == nil {
 		return false
 	}
-	if !startHTTP(ctx, port, web.NewLANHandler(database, token, lanInst)) {
+	if _, ok := startHTTP(ctx, port, web.NewLANHandler(database, token, lanInst)); !ok {
 		return false
 	}
 	startRuntime(ctx, lanInst, database, token, broadcastChan, usageChan)
@@ -356,6 +515,8 @@ func main() {
 		}
 	}
 
+	var lanController *runtimeLANController
+
 	// Fast path: register cached known directories (~1ms vs 134ms recursive)
 	knownDirs, _ := database.ListKnownDirs()
 	if *syncMode == "fsnotify" && len(knownDirs) > 0 {
@@ -448,8 +609,14 @@ func main() {
 							continue
 						}
 					}
-					if isLocal && lanInst != nil {
-						lanInst.AnnounceDirty()
+					var activeLAN *lan.LAN
+					if lanController != nil {
+						activeLAN = lanController.CurrentLAN()
+					} else {
+						activeLAN = lanInst
+					}
+					if isLocal && activeLAN != nil {
+						activeLAN.AnnounceDirty()
 					}
 				}
 			}
@@ -457,6 +624,7 @@ func main() {
 	}
 
 	if runGui {
+		lanController = newRuntimeLANController(ctx, *lanMode, *deviceID, *port, *token, database, w.BroadcastChan, w.UsageChan, startLANHTTPServer, startLANGoroutines)
 		startDBDrain()
 
 		app := desktop.NewApp(database, calc)
@@ -485,13 +653,13 @@ func main() {
 		}
 
 		if lanInst != nil {
-			if !startLocalLANServices(ctx, lanInst, database, *token, *port, w.BroadcastChan, w.UsageChan, startLANHTTPServer, startLANGoroutines) {
-				lanInst = nil
+			if _, err := lanController.Join(); err != nil {
+				log.Printf("Failed to start LAN services: %v", err)
 			}
 		}
 
 		// Reuse the existing HTTP handler inside Wails.
-		apiHandler := web.NewHandler(database, calc, w, lanInst, *token, root.DistBinFS)
+		apiHandler := web.NewHandlerWithLANController(database, calc, w, lanController, *token, root.DistBinFS)
 
 		err = wailsrun.Run(&options.App{
 			Title:     "AI Flight Dashboard",
@@ -531,17 +699,20 @@ func main() {
 	}
 
 	if *webMode {
+		lanController = newRuntimeLANController(ctx, *lanMode, *deviceID, *port, *token, database, w.BroadcastChan, w.UsageChan, nil, startLANGoroutines)
 		startDBDrain()
 
 		// Web dashboard mode with graceful shutdown
-		handler := web.NewHandler(database, calc, w, lanInst, *token, root.DistBinFS)
+		handler := web.NewHandlerWithLANController(database, calc, w, lanController, *token, root.DistBinFS)
 		srv := &http.Server{Addr: "0.0.0.0:" + *port, Handler: handler}
 		ln, err := net.Listen("tcp", srv.Addr)
 		if err != nil {
 			log.Fatalf("Web server error: %v", err)
 		}
 		if lanInst != nil {
-			startLANGoroutines(ctx, lanInst, database, *token, w.BroadcastChan, w.UsageChan)
+			if _, err := lanController.Join(); err != nil {
+				log.Printf("Failed to start LAN services: %v", err)
+			}
 		}
 
 		go func() {

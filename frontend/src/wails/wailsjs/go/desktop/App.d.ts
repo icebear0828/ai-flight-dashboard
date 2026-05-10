@@ -22,6 +22,8 @@ export function GetStats(arg1:string,arg2:string):Promise<model.StatsResponse>;
 
 export function MinimiseToTray():Promise<void>;
 
+export function OpenSystemLogs():Promise<void>;
+
 export function SaveConfig(arg1:config.AppConfig):Promise<void>;
 
 export function SetDeviceAlias(arg1:string,arg2:string):Promise<void>;
