@@ -4,10 +4,13 @@ import { emptyStatsPayload, fulfillEmptyLANScan, fulfillJSON, fulfillLANStatus, 
 
 test('settings device management can create edit clear and soft-delete devices', async ({ page }) => {
   const pageErrors: string[] = [];
+  const dialogs: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   page.on('dialog', async (dialog) => {
-    await dialog.accept();
+    dialogs.push(dialog.message());
+    await dialog.dismiss();
   });
+  await page.setViewportSize({ width: 390, height: 820 });
 
   type DeviceRow = {
     id: string;
@@ -93,14 +96,14 @@ test('settings device management can create edit clear and soft-delete devices',
   await page.getByRole('button', { name: /系统设置|SETTINGS/ }).click();
   await page.getByRole('button', { name: /设备管理|DEVICE MANAGEMENT/ }).click();
 
-  await expect(page.getByRole('row', { name: /nas\.local/ })).toBeVisible();
+  await expect(page.getByTestId('device-row').filter({ hasText: 'nas.local' })).toBeVisible();
 
   await page.getByPlaceholder(/设备 ID|DEVICE ID/).fill('probe-local');
   await page.getByPlaceholder(/显示名称|DISPLAY NAME/).fill('Probe Local');
   await page.getByRole('button', { name: /\+ 添加别名|\+ ADD ALIAS/ }).click();
   await expect(page.getByText('Probe Local', { exact: true })).toBeVisible();
 
-  const nasRow = page.locator('tr').filter({ hasText: 'nas.local' });
+  const nasRow = page.getByTestId('device-row').filter({ hasText: 'nas.local' });
   await nasRow.getByRole('button', { name: /编辑|EDIT/ }).click();
   await nasRow.getByRole('textbox').fill('NAS');
   await nasRow.getByRole('button', { name: /保存|SAVE/ }).click();
@@ -109,9 +112,14 @@ test('settings device management can create edit clear and soft-delete devices',
   await nasRow.getByRole('button', { name: /清除别名|CLEAR ALIAS/ }).click();
   await expect.poll(() => clearedAlias).toBe('nas.local');
 
-  const probeRow = page.locator('tr').filter({ hasText: 'probe-local' });
+  const probeRow = page.getByTestId('device-row').filter({ hasText: 'probe-local' });
   await probeRow.getByRole('button', { name: /软删除|SOFT DELETE/ }).click();
+  await expect(page.getByRole('button', { name: /确认软删除|CONFIRM DELETE/ })).toBeVisible();
+  await page.getByRole('button', { name: /确认软删除|CONFIRM DELETE/ }).click();
   await expect.poll(() => softDeletedDevice).toBe('probe-local');
   await expect(page.getByText('probe-local', { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId('device-management-list')).toBeVisible();
+  expect(await page.getByTestId('device-management-list').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  expect(dialogs).toEqual([]);
   expect(pageErrors).toEqual([]);
 });
