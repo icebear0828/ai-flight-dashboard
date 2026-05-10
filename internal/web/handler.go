@@ -201,24 +201,71 @@ func NewHandlerWithLANController(database *db.DB, calc *calculator.Calculator, w
 		w.WriteHeader(http.StatusCreated)
 	}))
 
+	mux.HandleFunc("/api/devices", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			devices, err := database.QueryDeviceSummaries()
+			if err != nil {
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(devices)
+			return
+		}
+		if r.Method == http.MethodDelete {
+			authMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
+				deviceID := strings.TrimSpace(r.URL.Query().Get("device_id"))
+				if deviceID == "" {
+					http.Error(w, "Bad request", http.StatusBadRequest)
+					return
+				}
+				changed, err := database.SupersedeDevice(deviceID)
+				if err != nil {
+					http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(model.DeviceSupersedeResponse{
+					DeviceID:        deviceID,
+					SupersededCount: changed,
+				})
+			})(w, r)
+			return
+		}
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	})
+
 	mux.HandleFunc("/api/device-alias", authMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		if r.Method == http.MethodPost {
+			var req struct {
+				DeviceID    string `json:"device_id"`
+				DisplayName string `json:"display_name"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.DeviceID) == "" || strings.TrimSpace(req.DisplayName) == "" {
+				http.Error(w, "Bad request", http.StatusBadRequest)
+				return
+			}
+			if err := database.SetDeviceAlias(req.DeviceID, req.DisplayName); err != nil {
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
 			return
 		}
-		var req struct {
-			DeviceID    string `json:"device_id"`
-			DisplayName string `json:"display_name"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.DeviceID == "" {
-			http.Error(w, "Bad request", http.StatusBadRequest)
+		if r.Method == http.MethodDelete {
+			deviceID := strings.TrimSpace(r.URL.Query().Get("device_id"))
+			if deviceID == "" {
+				http.Error(w, "Bad request", http.StatusBadRequest)
+				return
+			}
+			if _, err := database.DeleteDeviceAlias(deviceID); err != nil {
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
 			return
 		}
-		if err := database.SetDeviceAlias(req.DeviceID, req.DisplayName); err != nil {
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}))
 
 	mux.HandleFunc("/api/lan/self", func(w http.ResponseWriter, r *http.Request) {

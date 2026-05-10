@@ -431,9 +431,20 @@ func (d *DB) insertUsageWithTimeUpdatedAt(u model.TokenUsage, cost float64, logT
 			END,
 			device_id = excluded.device_id,
 			superseded = excluded.superseded
+		WHERE julianday(excluded.updated_at) >= julianday(COALESCE(usage_records.updated_at, usage_records.timestamp, usage_records.log_timestamp))
 		`
 		_, err := d.conn.Exec(query, u.UUID, logTimestamp, updatedAt, u.Source, u.Model, u.Project, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens, cost, filePath, deviceID, supersededValue)
 		return err
+	}
+
+	if !superseded {
+		newerSuperseded, err := d.hasNewerSupersededLegacyRecord(u, logTimestamp, filePath, deviceID, updatedAt)
+		if err != nil {
+			return err
+		}
+		if newerSuperseded {
+			return nil
+		}
 	}
 
 	query := `
@@ -442,6 +453,34 @@ func (d *DB) insertUsageWithTimeUpdatedAt(u model.TokenUsage, cost float64, logT
 	`
 	_, err := d.conn.Exec(query, logTimestamp, updatedAt, u.Source, u.Model, u.Project, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens, cost, filePath, deviceID, supersededValue)
 	return err
+}
+
+func (d *DB) hasNewerSupersededLegacyRecord(u model.TokenUsage, logTimestamp string, filePath string, deviceID string, updatedAt string) (bool, error) {
+	var exists int
+	err := d.conn.QueryRow(`
+		SELECT 1
+		FROM usage_records
+		WHERE log_timestamp = ?
+			AND source = ?
+			AND model = ?
+			AND input_tokens = ?
+			AND cached_tokens = ?
+			AND cache_creation_tokens = ?
+			AND output_tokens = ?
+			AND file_path = ?
+			AND device_id = ?
+			AND (uuid IS NULL OR uuid = '')
+			AND COALESCE(superseded, 0) != 0
+			AND julianday(COALESCE(updated_at, timestamp, log_timestamp)) >= julianday(?)
+		LIMIT 1
+	`, logTimestamp, u.Source, u.Model, u.InputTokens, u.CachedTokens, u.CacheCreationTokens, u.OutputTokens, filePath, deviceID, updatedAt).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return exists == 1, nil
 }
 
 // UpsertSyncRecord applies a LAN synchronization record, including tombstone-like
@@ -590,6 +629,39 @@ func (d *DB) SupersedeUsageBySourceFilePathDeviceUUIDPrefix(source string, fileP
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+// SupersedeDevice hides all active rows for a device ID without deleting them.
+func (d *DB) SupersedeDevice(deviceID string) (int64, error) {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return 0, errors.New("device id is required")
+	}
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return 0, err
+	}
+	result, err := tx.Exec(
+		"UPDATE usage_records SET superseded = 1, updated_at = ? WHERE device_id = ? AND "+activeUsagePredicate,
+		formatLogTimestamp(time.Now().UTC()), deviceID,
+	)
+	if err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	if _, err := tx.Exec("DELETE FROM device_aliases WHERE device_id = ?", deviceID); err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return changed, nil
 }
 
 // QueryPeriodStatsSince returns total cost and token breakdown since the given time.
@@ -969,6 +1041,83 @@ func (d *DB) QueryDevices() ([]string, error) {
 	return devices, rows.Err()
 }
 
+// QueryDeviceSummaries returns active device aggregates plus manual aliases.
+func (d *DB) QueryDeviceSummaries() ([]model.DeviceSummary, error) {
+	query := `
+		WITH device_ids AS (
+			SELECT DISTINCT device_id FROM usage_records WHERE ` + activeUsagePredicate + `
+			UNION
+			SELECT device_id FROM device_aliases
+		),
+		agg AS (
+			SELECT device_id,
+				COUNT(*) AS events,
+				COALESCE(SUM(input_tokens), 0) AS input_tokens,
+				COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+				COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
+				COALESCE(SUM(output_tokens), 0) AS output_tokens,
+				COALESCE(SUM(cost_usd), 0) AS total_cost,
+				MIN(log_timestamp) AS first_seen,
+				MAX(log_timestamp) AS last_seen
+			FROM usage_records
+			WHERE ` + activeUsagePredicate + `
+			GROUP BY device_id
+		)
+		SELECT device_ids.device_id,
+			COALESCE(device_aliases.display_name, device_ids.device_id) AS display_name,
+			COALESCE(agg.events, 0),
+			COALESCE(agg.input_tokens, 0),
+			COALESCE(agg.cached_tokens, 0),
+			COALESCE(agg.cache_creation_tokens, 0),
+			COALESCE(agg.output_tokens, 0),
+			COALESCE(agg.total_cost, 0),
+			agg.first_seen,
+			agg.last_seen
+		FROM device_ids
+		LEFT JOIN agg ON agg.device_id = device_ids.device_id
+		LEFT JOIN device_aliases ON device_aliases.device_id = device_ids.device_id
+		ORDER BY COALESCE(agg.total_cost, 0) DESC, device_ids.device_id
+	`
+	rows, err := d.conn.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var devices []model.DeviceSummary
+	for rows.Next() {
+		var summary model.DeviceSummary
+		var firstSeen sql.NullString
+		var lastSeen sql.NullString
+		if err := rows.Scan(
+			&summary.ID,
+			&summary.DisplayName,
+			&summary.Events,
+			&summary.InputTokens,
+			&summary.CachedTokens,
+			&summary.CacheCreationTokens,
+			&summary.OutputTokens,
+			&summary.TotalCost,
+			&firstSeen,
+			&lastSeen,
+		); err != nil {
+			return nil, err
+		}
+		if firstSeen.Valid {
+			if ts, err := parseLogTimestamp(firstSeen.String); err == nil {
+				summary.FirstSeen = ts
+			}
+		}
+		if lastSeen.Valid {
+			if ts, err := parseLogTimestamp(lastSeen.String); err == nil {
+				summary.LastSeen = ts
+			}
+		}
+		devices = append(devices, summary)
+	}
+	return devices, rows.Err()
+}
+
 // UsageRecord represents a single stored usage record for per-row analysis.
 type UsageRecord struct {
 	Model               string
@@ -1231,10 +1380,28 @@ func (d *DB) DeduplicateExisting() (int64, error) {
 
 // SetDeviceAlias sets or updates the display name for a device ID.
 func (d *DB) SetDeviceAlias(deviceID, displayName string) error {
+	deviceID = strings.TrimSpace(deviceID)
+	displayName = strings.TrimSpace(displayName)
+	if deviceID == "" || displayName == "" {
+		return errors.New("device id and display name are required")
+	}
 	query := `INSERT INTO device_aliases (device_id, display_name) VALUES (?, ?)
 	ON CONFLICT(device_id) DO UPDATE SET display_name = excluded.display_name`
 	_, err := d.conn.Exec(query, deviceID, displayName)
 	return err
+}
+
+// DeleteDeviceAlias removes a display name override for a device ID.
+func (d *DB) DeleteDeviceAlias(deviceID string) (int64, error) {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return 0, errors.New("device id is required")
+	}
+	result, err := d.conn.Exec("DELETE FROM device_aliases WHERE device_id = ?", deviceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // GetDeviceAliases returns a map of deviceID to displayName.
