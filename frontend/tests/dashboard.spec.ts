@@ -218,6 +218,41 @@ test('dashboard shows cache hit rate in stats tables', async ({ page }) => {
   await expect(page.getByText('25.0%').first()).toBeVisible();
 });
 
+test('dashboard period cards show raw input tokens without subtracting cache', async ({ page }) => {
+  await page.route('**/api/stats?*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        periods: periods.map((period) => ({
+          ...period,
+          input_tokens: 322_400_000,
+          cached_tokens: 304_900_000,
+          output_tokens: 1_100_000,
+          cache_hit_rate: 94.6,
+        })),
+        sources: [],
+        devices: [{ id: 'local', display_name: 'local' }],
+        projects: [],
+        is_paused: false,
+      }),
+    });
+  });
+  await page.route('**/api/lan/scan', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ peers: [] }),
+    });
+  });
+
+  await page.goto('/');
+
+  await expect(page.getByText('输入: 322.40M').first()).toBeVisible();
+  await expect(page.getByText('缓存读取: 304.90M').first()).toBeVisible();
+  await expect(page.getByText('输入: 17.50M')).toHaveCount(0);
+});
+
 test('dashboard can collapse project and model tables', async ({ page }) => {
   await page.route('**/api/stats?*', async (route) => {
     await route.fulfill({

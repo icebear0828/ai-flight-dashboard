@@ -118,6 +118,112 @@ func TestScanImportsPrefixedCodexSSECompletionEvents(t *testing.T) {
 	}
 }
 
+func TestScanImportsCodexSessionTokenTotals(t *testing.T) {
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
+
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state_5.sqlite")
+	logsPath := filepath.Join(dir, "logs_2.sqlite")
+	sessionsDir := filepath.Join(dir, "sessions")
+	createCodexState(t, statePath)
+	createCodexLogs(t, logsPath)
+
+	insertThread(t, statePath, "session-1", "gpt-5.5", "/Users/c/token")
+	sessionPath := writeCodexSession(t, sessionsDir, "session-1", "/Users/c/token",
+		`{"timestamp":"2026-05-07T11:13:03.316Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":800,"output_tokens":10,"reasoning_output_tokens":3,"total_tokens":1010},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":800,"output_tokens":10,"reasoning_output_tokens":3,"total_tokens":1010},"model_context_window":258400}}}`,
+		`{"timestamp":"2026-05-07T11:14:03.316Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":3000,"cached_input_tokens":2500,"output_tokens":50,"reasoning_output_tokens":7,"total_tokens":3050},"last_token_usage":{"input_tokens":2000,"cached_input_tokens":1700,"output_tokens":40,"reasoning_output_tokens":4,"total_tokens":2040},"model_context_window":258400}}}`,
+	)
+
+	s := codexusage.NewWithSessionPaths(database, calc, "local", statePath, logsPath, sessionsDir)
+	count, err := s.Scan(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 imported session total, got %d", count)
+	}
+
+	_, input, cached, _, output, err := database.QueryPeriodStatsAll("", "Codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input != 3000 || cached != 2500 || output != 50 {
+		t.Fatalf("unexpected session totals: input=%d cached=%d output=%d", input, cached, output)
+	}
+
+	projects, err := database.QueryProjectStatsSince(time.Time{}, "", "Codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].Project != "token" {
+		t.Fatalf("expected Codex session project token, got %+v", projects)
+	}
+
+	secondCount, err := s.Scan(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondCount != 0 {
+		t.Fatalf("expected unchanged session scan to import 0 rows, got %d", secondCount)
+	}
+
+	appendCodexSessionLine(t, sessionPath, `{"timestamp":"2026-05-07T11:15:03.316Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":4000,"cached_input_tokens":3000,"output_tokens":90,"reasoning_output_tokens":11,"total_tokens":4090},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":500,"output_tokens":40,"reasoning_output_tokens":4,"total_tokens":1040},"model_context_window":258400}}}`)
+
+	thirdCount, err := s.Scan(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thirdCount != 1 {
+		t.Fatalf("expected changed session scan to update 1 row, got %d", thirdCount)
+	}
+
+	_, input, cached, _, output, err = database.QueryPeriodStatsAll("", "Codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input != 4000 || cached != 3000 || output != 90 {
+		t.Fatalf("unexpected updated session totals: input=%d cached=%d output=%d", input, cached, output)
+	}
+}
+
+func TestScanSessionTotalsSupersedeCodexLogTelemetryRows(t *testing.T) {
+	database := testutil.NewTestDB(t)
+	calc := testutil.NewTestCalc(t)
+
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state_5.sqlite")
+	logsPath := filepath.Join(dir, "logs_2.sqlite")
+	sessionsDir := filepath.Join(dir, "sessions")
+	createCodexState(t, statePath)
+	createCodexLogs(t, logsPath)
+
+	insertThread(t, statePath, "session-1", "gpt-5.5", "/Users/c/token")
+	insertLog(t, logsPath, 11, `event.name="codex.sse_event" event.kind=response.completed input_token_count=100 output_token_count=10 cached_token_count=80 event.timestamp=2026-05-07T11:13:03.316Z conversation.id=session-1 model=gpt-5.5`)
+
+	logOnlyScanner := codexusage.NewWithPaths(database, calc, "local", statePath, logsPath)
+	if count, err := logOnlyScanner.Scan(nil); err != nil || count != 1 {
+		t.Fatalf("expected log-only scan to import 1 row, count=%d err=%v", count, err)
+	}
+
+	writeCodexSession(t, sessionsDir, "session-1", "/Users/c/token",
+		`{"timestamp":"2026-05-07T11:14:03.316Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":3000,"cached_input_tokens":2500,"output_tokens":50,"reasoning_output_tokens":7,"total_tokens":3050},"last_token_usage":{"input_tokens":3000,"cached_input_tokens":2500,"output_tokens":50,"reasoning_output_tokens":7,"total_tokens":3050},"model_context_window":258400}}}`,
+	)
+
+	sessionScanner := codexusage.NewWithSessionPaths(database, calc, "local", statePath, logsPath, sessionsDir)
+	if count, err := sessionScanner.Scan(nil); err != nil || count != 1 {
+		t.Fatalf("expected session scan to import 1 row, count=%d err=%v", count, err)
+	}
+
+	_, input, cached, _, output, err := database.QueryPeriodStatsAll("", "Codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input != 3000 || cached != 2500 || output != 50 {
+		t.Fatalf("expected session totals to supersede log telemetry, input=%d cached=%d output=%d", input, cached, output)
+	}
+}
+
 func TestScanIgnoresToolResultTextThatMentionsCodexSSECompletion(t *testing.T) {
 	database := testutil.NewTestDB(t)
 	calc := testutil.NewTestCalc(t)
@@ -316,6 +422,35 @@ func insertLog(t *testing.T, path string, id int64, body string) {
 		id, time.Date(2026, 5, 7, 11, 13, int(id), 0, time.UTC).Unix(), int64(0), "codex_otel.log_only", body,
 	)
 	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeCodexSession(t *testing.T, sessionsDir string, id string, cwd string, tokenLines ...string) string {
+	t.Helper()
+	dir := filepath.Join(sessionsDir, "2026", "05", "07")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "rollout-2026-05-07T11-13-03-"+id+".jsonl")
+	lines := []byte(`{"timestamp":"2026-05-07T11:13:00.000Z","type":"session_meta","payload":{"id":"` + id + `","cwd":"` + cwd + `","model_provider":"openai","source":"cli"}}` + "\n")
+	for _, line := range tokenLines {
+		lines = append(lines, []byte(line+"\n")...)
+	}
+	if err := os.WriteFile(path, lines, 0644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func appendCodexSessionLine(t *testing.T, path string, line string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(line + "\n"); err != nil {
 		t.Fatal(err)
 	}
 }
