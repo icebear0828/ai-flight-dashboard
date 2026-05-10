@@ -1,137 +1,241 @@
-# ✈️ AI Flight Dashboard
+# AI Flight Dashboard
 
-> Minimal, zero-dependency AI cost tracking terminal dashboard
+> Local-first AI token, cost, and device usage dashboard for Claude Code, Gemini CLI, and Codex.
 
 [中文](README.md)
 
-AI Flight Dashboard is a **TUI + Web dual-mode tool** built in Go. Using a **"passive radar"** approach, it non-invasively captures token usage from AI CLI tools (Claude Code, Gemini CLI) by watching their log files in real time, and presents live cost feedback with smooth terminal animations.
+AI Flight Dashboard is a Go + React + Wails app. It passively reads local AI CLI logs and databases to track tokens, cache hits, model costs, project attribution, and multi-device usage. It starts as a native desktop GUI by default, and can also run as a Web dashboard, legacy TUI, or remote forwarder.
 
-## ✨ Features
+It does not require patching Claude Code, Gemini CLI, or Codex, and it does not proxy real API traffic. Data is stored locally in SQLite under `~/.ai-flight-dashboard` by default. LAN mode can discover, sync, and deduplicate usage across nearby machines.
 
-- 🎯 **Passive Radar**: Uses `fsnotify` to watch incremental file streams — the moment a tool writes logs to disk (`~/.claude/projects/`, `~/.gemini/tmp/`), the dashboard captures them instantly.
-- ⚡ **Blazing Fast**: Built with Go + [Bubble Tea](https://github.com/charmbracelet/bubbletea). Single binary, zero runtime dependencies, instant startup.
-- 💰 **Real-time Cost Calculation**: Built-in pricing engine converts raw token counts into USD costs per model.
-- 📊 **Project Tracking**: Automatically parses Claude workspace hash prefixes to precisely attribute token costs to specific code projects.
-- 💾 **SQLite Persistence**: All captured usage is automatically upserted into `stats/usage.db` under the resolved data-dir for long-term analysis.
-- 🌐 **Web Dashboard**: Start an HTTP server with `--web` to view a React-powered visual dashboard.
-- 📡 **LAN P2P Sharing**: Enable zero-config decentralized UDP multicast with `--lan` to instantly share live token usage across local machines.
-- 📦 **Fat Server Distribution**: Cross-platform binaries embedded natively. Other machines can join simply by running `curl -sL http://<master-ip>:19100/install.sh | bash` to auto-fetch the correct OS version.
-- 🛰️ **Remote Telemetry**: Use `--forward-to` to aggregate logs from multiple remote server probes into a single control panel.
+## Capabilities
 
-For complete configuration and cluster deployment guides, please refer to the [📚 Usage Guide (usage.md)](usage.md).
+- Supports Claude Code, Gemini CLI, and Codex.
+- Defaults to a Wails desktop GUI; also supports Web, legacy TUI, and forwarder modes.
+- Tracks 1h, 24h, 7d, 30d, 3mo, 6mo, 1y, and ALL windows.
+- Switches stats by TOTAL, CLAUDE, GEMINI, and CODEX sources.
+- Shows project, model, device, token, cache read, cache creation, output, and cost metrics.
+- Shows cache hit rate as `cached_tokens / input_tokens * 100`.
+- Collapsible project and model tables for long-running datasets.
+- LAN radar for local peers, with join, leave, sync, and rejoin controls.
+- Settings UI for pricing, system config, extra watch directories, and device management.
+- Device aliases, alias deletion, and soft deletion of old device records.
+- REST API for local dashboards or a central receiver service.
 
-## 🚀 Quick Start
+## Quick Start
 
-### One-Click Deployment
+### Download The Desktop App
 
-For server or background environments, we provide a one-click deployment script that automatically compiles and registers a Systemd background service:
+Download the package for your platform from [GitHub Releases](https://github.com/icebear0828/ai-flight-dashboard/releases/latest). On macOS, if Gatekeeper blocks the first launch, right-click `AI Flight Dashboard.app` and choose "Open".
+
+### Build Locally
 
 ```bash
-chmod +x ./scripts/deploy.sh
-sudo ./scripts/deploy.sh
+go build -o dashboard ./cmd/dashboard
 ```
 
-> 💡 **Tip**: The script is interactive and allows you to choose between Receiver (Server) and Forwarder (Probe) modes.
-
-### Manual Build & Run
+Common run modes:
 
 ```bash
-# Build
-go build -o dashboard ./cmd/dashboard
-
-# GUI mode — default native desktop window
+# Default native desktop GUI
 ./dashboard
 
-# TUI mode — keep it in a terminal sidebar or Tmux split
-./dashboard --tui
-
-# Web mode — open http://localhost:19100 in your browser
+# Web mode, then open http://localhost:19100
 ./dashboard --web
 
-# Custom port + device ID
+# Legacy TUI mode
+./dashboard --tui
+
+# Custom port and device ID
 ./dashboard --web --port 8080 --device-id my-mac
 
-# Replay local history with the current parser and pricing rules
+# Remote probe mode, forwarding local usage to a receiver
+DASHBOARD_TOKEN=your-token ./dashboard \
+  --device-id server-a \
+  --forward-to http://master-ip:19100/api/track
+
+# Replay local history with current parser and pricing rules
 ./dashboard repair-history
-./dashboard --data-dir ~/.ai-flight-dashboard repair-history
 ```
 
-`repair-history` rescans locally available Claude Code, Gemini CLI, and Codex history logs. It only marks replayable local Gemini legacy rows as superseded; it does not physically delete records and does not affect LAN/remote device records. Dashboard holds `dashboard.lock` in the data-dir to prevent a second local process from writing the same database at the same time.
+See [usage.md](usage.md) for more deployment details.
 
-The default data-dir is `~/.ai-flight-dashboard`. For portable mode or test isolation, pass `--data-dir <dir>` explicitly or set `AI_FLIGHT_DASHBOARD_DATA_DIR`.
+## Data Sources
 
-### Simulate Radar Trigger
+| Source | Default location | Notes |
+|---|---|---|
+| Claude Code | `~/.claude/projects/**/*.jsonl` | Parses session JSONL, model, tokens, and workspace attribution. |
+| Gemini CLI | `~/.gemini/tmp/**/*.jsonl` | Supports streaming logs, `.project_root` attribution, and incremental offsets. |
+| Codex | `~/.codex/sessions/**/*.jsonl`, `~/.codex/logs_2.sqlite`, `~/.codex/state_5.sqlite` | Prefers accumulated token usage from session JSONL, falls back to telemetry SQLite, and uses state data for project paths. |
 
-While the dashboard is running, write a mock log line from another terminal:
+The default sync mode is `poll`: the app scans history on startup, then quickly polls known files and periodically discovers new files. `--sync-mode fsnotify` and `--sync-mode once` are also available.
+
+## Data Directory And Config
+
+Default data directory:
+
+```text
+~/.ai-flight-dashboard
+```
+
+Override it with a flag or environment variable:
 
 ```bash
-echo '{"type":"assistant", "model": "claude-sonnet-4-6", "usage": {"input_tokens": 1000, "output_tokens": 500, "cache_read_input_tokens": 200}}' >> session.jsonl
+./dashboard --data-dir /path/to/data
+AI_FLIGHT_DASHBOARD_DATA_DIR=/path/to/data ./dashboard
 ```
 
-> The HUD / Web dashboard will instantly pick up the new event and persist it to the database.
+Main files:
 
-## ⚙️ Pricing Configuration
-
-Model pricing is embedded into the binary via `cmd/dashboard/pricing_table.json` — no external files needed at runtime. To update prices, edit that file and rebuild:
-
-```json
-{
-  "models": {
-    "gemini-2.5-pro": {
-      "input_price_per_m": 1.25,
-      "cached_price_per_m": 0.31,
-      "output_price_per_m": 5.00
-    },
-    "claude-sonnet-4-6": {
-      "input_price_per_m": 3.00,
-      "cached_price_per_m": 0.30,
-      "output_price_per_m": 15.00
-    }
-  }
-}
+```text
+stats/usage.db          # SQLite usage database
+config.json             # App config
+custom_pricing.json     # User-defined model pricing
+dashboard.lock          # Single-writer process lock
 ```
 
-## 🏗 Architecture
+Only one Dashboard process may write to the same data-dir at a time.
 
-```
-cmd/dashboard/        CLI entry + wiring + embedded pricing_table.json
-internal/
-├── model/            Shared data types (TokenUsage)
-├── watcher/          fsnotify live watcher + JSONL parser
-├── scanner/          Historical log bulk/incremental scanner
-├── calculator/       Token → USD pricing engine
-├── db/               SQLite persistence (WAL mode)
-└── web/              HTTP API + embedded React SPA (go:embed)
-```
+## Pricing
 
+Pricing is merged in this order at startup:
 
-| Module | Purpose | Tests |
-|---|---|:---:|
-| `model` | Shared `TokenUsage` struct | — |
-| `watcher` | fsnotify watcher + Claude/Gemini log parsing | ✅ |
-| `scanner` | Historical log scanning with incremental offsets + truncation detection | ✅ |
-| `calculator` | Per-model cost calculation, supports file and byte-stream init | ✅ |
-| `db` | SQLite persistence with time-window and device-filtered queries | ✅ |
-| `web` | REST API (`/api/stats`) + static file serving | ✅ |
+1. Try to fetch the dynamic `pricing_table.json` from GitHub.
+2. Fall back to the embedded `cmd/dashboard/pricing_table.json`.
+3. Apply user overrides from `custom_pricing.json` in the data-dir.
 
-## 📡 API
+The Web/GUI settings screen saves custom prices through `/api/pricing`. The CLI also supports subscription and API budget views:
 
-```
-GET /api/stats                # All stats (includes Project, Device, and Period groupings)
-GET /api/stats?device=my-mac  # Filter by device
-POST /api/device-alias        # Set device alias (body: {"device_id": "...", "display_name": "..."})
-GET /download/dashboard       # Fetch embedded Fat Server binary matching host OS
+```bash
+./dashboard --billing-mode subscription --plan pro
+./dashboard --billing-mode api --budget-daily 20
 ```
 
-Returns `{ periods, sources, devices, projects }` — see [dashboard-api.md](dashboard-api.md) for details.
+## LAN And Device Management
 
-## 🗺 Roadmap
+LAN is enabled by default. Without a token, Dashboard performs discovery and live broadcasts. With `--token` or `DASHBOARD_TOKEN`, authenticated sync is enabled.
 
-- [x] **Phase 1: HUD Layer** — Persistent Bubble Tea terminal panel with live flickering updates
-- [x] **Phase 2: Structured Persistence** — Real-time log interception + SQLite + incremental scanning
-- [x] **Phase 2.5: Web Dashboard** — React SPA + HTTP API + embedded distribution
-- [ ] **Phase 3: Full Terminal Dashboard** — `Tab` to switch, render ASCII charts and project cost leaderboards
+```bash
+DASHBOARD_TOKEN=your-token ./dashboard --web --port 19100
+```
 
-## 📜 License
+The GUI settings screen can:
+
+- join or leave LAN;
+- show local and LAN devices;
+- assign device aliases;
+- delete device aliases;
+- soft-delete old devices by marking their usage rows as superseded instead of physically deleting them.
+
+## Commands And Flags
+
+| Command or flag | Description |
+|---|---|
+| `./dashboard` | Start the Wails desktop GUI. |
+| `--web`, `-w` | Start the Web dashboard. |
+| `--tui` | Start the legacy TUI. |
+| `--port`, `-p` | Web port, default `19100`. |
+| `--device-id` | Current device ID, default hostname. |
+| `--data-dir` | Database and config directory. |
+| `--token` | API, forwarder, and LAN sync auth token; can also use `DASHBOARD_TOKEN`. |
+| `--forward-to` | Run as a probe and send usage to receiver `/api/track`. |
+| `--lan` | Enable LAN discovery and sync, default enabled. |
+| `--sync-mode` | `poll`, `fsnotify`, or `once`. |
+| `--billing-mode` | `auto`, `subscription`, or `api`. |
+| `--plan` | Subscription plan: `pro`, `max5`, or `max20`. |
+| `--budget-daily` | Daily API-mode budget, `0` disables it. |
+| `repair-history` | Rescan local Claude, Gemini, and Codex history and repair stats. |
+| `export` | Export CSV to stdout. |
+| `import <file.csv>` | Import CSV and skip duplicates. |
+| `dedup` | Remove historical duplicates; export a backup first. |
+
+## HTTP API
+
+Common endpoints:
+
+```text
+GET    /api/stats
+GET    /api/stats?device={device_id}
+GET    /api/stats?source={source_name}
+GET    /api/stats?detail={full|summary|details}
+GET    /api/cache-savings
+GET    /api/pricing
+PUT    /api/pricing
+POST   /api/pricing
+GET    /api/config
+PUT    /api/config
+POST   /api/track
+GET    /api/devices
+DELETE /api/devices?device_id={device_id}
+POST   /api/device-alias
+DELETE /api/device-alias?device_id={device_id}
+GET    /api/lan/status
+GET    /api/lan/self
+POST   /api/lan/join
+POST   /api/lan/leave
+GET    /api/lan/scan
+GET    /api/sync/pull
+GET    /api/system/logs
+POST   /api/pause
+GET    /download/dashboard
+GET    /install.sh
+```
+
+Write endpoints require a bearer token when one is configured:
+
+```bash
+curl -H "Authorization: Bearer $DASHBOARD_TOKEN" http://localhost:19100/api/stats
+```
+
+See [docs/dashboard-api.md](docs/dashboard-api.md) for response fields.
+
+## Architecture
+
+```text
+cmd/dashboard/              CLI entry, runtime wiring, LAN runtime, pricing, repair-history
+internal/model/             Shared data structures, billing mode, stats types
+internal/watcher/           Live file watching, JSONL parsing, project attribution
+internal/scanner/           Claude/Gemini history scanning, offsets, truncation handling
+internal/codexusage/        Codex sessions, telemetry, threads, SQLite parsing
+internal/calculator/        Token to USD cost calculation
+internal/db/                SQLite connection, schema, writes, queries, sync, devices, offsets
+internal/dashboard/         Dashboard stats aggregation and cache
+internal/web/               REST handlers, LAN control, device management, sync, static assets
+internal/lan/               UDP broadcast, listener, HTTP discovery, peer management, pull sync
+internal/forwarder/         Remote probe forwarding
+internal/desktop/           Wails desktop bindings, system logs, autostart
+internal/tui/               Legacy Bubble Tea HUD
+frontend/src/               React dashboard, settings UI, i18n, Wails bridge
+scripts/                    Deployment, desktop build, Fat Server build
+```
+
+Persistence, Web handlers, and LAN code are split by responsibility, keeping business source files near the 500-line target for reviewability.
+
+## Development And Quality Gates
+
+Before merging behavior changes locally:
+
+```bash
+cd frontend && npm run build
+cd frontend && npm run test:e2e
+go test -race -count=1 -timeout=5m ./...
+go vet ./...
+go build ./...
+```
+
+Docs-only changes only need Markdown and link inspection unless they also touch runtime behavior. CI and release gates are documented in [docs/testing_and_ci.md](docs/testing_and_ci.md).
+
+## Release
+
+Releases are created by GitHub Actions:
+
+1. Merge the PR into `main`.
+2. Wait for the `Test` workflow on `main`.
+3. Run the `Tag Release` workflow to create a `vX.Y.Z` tag.
+4. Wait for the `Release` workflow to build and upload Linux, macOS Apple Silicon, macOS Intel, and Windows assets.
+
+See [docs/RELEASE.md](docs/RELEASE.md) for the full runbook.
+
+## License
 
 MIT
