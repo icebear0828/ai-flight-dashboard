@@ -137,8 +137,9 @@ func TestGetDataDir_Custom(t *testing.T) {
 	config.SetDataDir("/my/data")
 	defer config.SetDataDir("")
 	dir := config.GetDataDir()
-	if dir != "/my/data" {
-		t.Errorf("expected /my/data, got %s", dir)
+	expected := filepath.Clean("/my/data")
+	if dir != expected {
+		t.Errorf("expected %s, got %s", expected, dir)
 	}
 }
 
