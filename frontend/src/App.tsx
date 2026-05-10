@@ -1,210 +1,22 @@
 import React, { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { LazyBlockFallback, LazyModalFallback } from "./components/LoadingFallbacks";
+import {
+  asRecord,
+  mergeDashboardDetails,
+  normalizeDashboardData,
+  type DashboardData,
+  type DeviceStats,
+  type PeriodStats,
+  type SourceModelStats,
+  type SourceStats,
+} from "./dashboardData";
+import { fmt, fmtCost, fmtPercent, num, text } from "./format";
+import { wailsWindow } from "./wails";
+
 const SettingsModal = lazy(() => import("./SettingsModal"));
 const Radar = lazy(() => import("./components/Radar"));
-
-const num = (value: unknown): number => {
-  const n = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(n) ? n : 0;
-};
-
-const text = (value: unknown, fallback = ''): string => {
-  return typeof value === 'string' && value.trim() !== '' ? value : fallback;
-};
-
-const fmt = (value: unknown) => {
-  const n = num(value);
-  if (n >= 1e9) return (n/1e9).toFixed(2) + 'B';
-  if (n >= 1e6) return (n/1e6).toFixed(2) + 'M';
-  if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
-  return n.toString();
-};
-const fmtCost = (value: unknown) => '$' + num(value).toFixed(2);
-const fmtPercent = (value: unknown) => num(value).toFixed(1) + '%';
-
-function LazyBlockFallback() {
-  return (
-    <div className="mb-16 md:mb-20 border-[5px] border-[#000000] bg-[#FFFFFF] p-6 md:p-10">
-      <div className="h-4 w-32 animate-pulse bg-[#000000]" aria-hidden="true"></div>
-    </div>
-  );
-}
-
-function LazyModalFallback() {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#000000]/80 p-4 md:p-6" style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}>
-      <div className="w-full max-w-5xl border-[5px] border-[#000000] bg-[#FFFFFF] p-6">
-        <div className="h-5 w-40 animate-pulse bg-[#000000]" aria-hidden="true"></div>
-      </div>
-    </div>
-  );
-}
-
-type JsonRecord = Record<string, unknown>;
-
-const asRecord = (value: unknown): JsonRecord => {
-  return value !== null && typeof value === 'object' ? value as JsonRecord : {};
-};
-
-type WailsWindow = Window & {
-  go?: {
-    desktop?: {
-      App?: {
-        OpenSystemLogs?: () => Promise<void> | void;
-      };
-    };
-  };
-};
-
-const wailsWindow = (): WailsWindow => window as WailsWindow;
-
-interface PeriodStats {
-  label: string;
-  input_tokens: number;
-  cached_tokens: number;
-  cache_creation_tokens?: number;
-  output_tokens: number;
-  cost: number;
-  cache_hit_rate: number;
-}
-
-interface SourceModelStats {
-  model: string;
-  input_tokens: number;
-  cached_tokens: number;
-  cache_creation_tokens?: number;
-  output_tokens: number;
-  input_price_per_m?: number;
-  cached_price_per_m?: number;
-  cache_creation_price_per_m?: number;
-  output_price_per_m?: number;
-  events: number;
-  total_cost: number;
-  cache_hit_rate: number;
-}
-
-interface SourceStats {
-  name: string;
-  total_input: number;
-  total_cached: number;
-  total_cache_creation?: number;
-  total_output: number;
-  total_cost: number;
-  total_events: number;
-  cache_hit_rate: number;
-  models?: SourceModelStats[];
-}
-
-interface DeviceStats {
-  id: string;
-  display_name?: string;
-}
-
-interface ProjectStat {
-  project: string;
-  events: number;
-  input_tokens: number;
-  cached_tokens: number;
-  cache_creation_tokens?: number;
-  output_tokens: number;
-  total_cost: number;
-  cache_hit_rate: number;
-}
-
-interface DashboardData {
-  periods: PeriodStats[];
-  sources: SourceStats[];
-  devices: DeviceStats[];
-  projects?: ProjectStat[];
-  is_paused?: boolean;
-}
-
-const normalizeDashboardData = (raw: unknown): DashboardData => {
-  const root = asRecord(raw);
-  const periods = Array.isArray(root.periods) ? root.periods : [];
-  const sources = Array.isArray(root.sources) ? root.sources : [];
-  const devices = Array.isArray(root.devices) ? root.devices : [];
-  const projects = Array.isArray(root.projects) ? root.projects : [];
-
-  return {
-    periods: periods.map((period) => {
-      const p = asRecord(period);
-      return {
-        label: text(p.label, 'UNKNOWN'),
-        input_tokens: num(p.input_tokens),
-        cached_tokens: num(p.cached_tokens),
-        cache_creation_tokens: num(p.cache_creation_tokens),
-        output_tokens: num(p.output_tokens),
-        cost: num(p.cost),
-        cache_hit_rate: num(p.cache_hit_rate),
-      };
-    }),
-    sources: sources.map((source) => {
-      const src = asRecord(source);
-      const models = Array.isArray(src.models) ? src.models : [];
-      return {
-        name: text(src.name, 'Unknown'),
-        total_input: num(src.total_input),
-        total_cached: num(src.total_cached),
-        total_cache_creation: num(src.total_cache_creation),
-        total_output: num(src.total_output),
-        total_cost: num(src.total_cost),
-        total_events: num(src.total_events),
-        cache_hit_rate: num(src.cache_hit_rate),
-        models: models.map((model) => {
-          const m = asRecord(model);
-          return {
-            model: text(m.model, 'unknown'),
-            input_tokens: num(m.input_tokens),
-            cached_tokens: num(m.cached_tokens),
-            cache_creation_tokens: num(m.cache_creation_tokens),
-            output_tokens: num(m.output_tokens),
-            input_price_per_m: num(m.input_price_per_m),
-            cached_price_per_m: num(m.cached_price_per_m),
-            cache_creation_price_per_m: num(m.cache_creation_price_per_m),
-            output_price_per_m: num(m.output_price_per_m),
-            events: num(m.events),
-            total_cost: num(m.total_cost),
-            cache_hit_rate: num(m.cache_hit_rate),
-          };
-        }),
-      };
-    }),
-    devices: devices.map((device) => {
-      const d = asRecord(device);
-      const fallbackID = text(device, 'local');
-      const id = text(d.id, fallbackID);
-      return {
-        id,
-        display_name: text(d.display_name, id),
-      };
-    }),
-    projects: projects.map((project) => {
-      const p = asRecord(project);
-      return {
-        project: text(p.project, 'Default'),
-        events: num(p.events),
-        input_tokens: num(p.input_tokens),
-        cached_tokens: num(p.cached_tokens),
-        cache_creation_tokens: num(p.cache_creation_tokens),
-        output_tokens: num(p.output_tokens),
-        total_cost: num(p.total_cost),
-        cache_hit_rate: num(p.cache_hit_rate),
-      };
-    }),
-    is_paused: Boolean(root.is_paused),
-  };
-};
-
-const mergeDashboardDetails = (summary: DashboardData, details: DashboardData): DashboardData => {
-  return {
-    ...summary,
-    sources: details.sources.length > 0 ? details.sources : summary.sources,
-    projects: details.projects ?? [],
-    is_paused: details.is_paused,
-  };
-};
 
 export default function App() {
   const { t, i18n } = useTranslation();
