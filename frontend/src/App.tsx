@@ -248,13 +248,18 @@ export default function App() {
         setErrorMsg("");
         setIsStatsLoading(false);
 
-        const detailsRes = await fetch(statsURL('details'));
-        if (!detailsRes.ok) {
-           throw new Error(`HTTP ${detailsRes.status}: ${await detailsRes.text()}`);
+        try {
+          const detailsRes = await fetch(statsURL('details'));
+          if (!detailsRes.ok) {
+             throw new Error(`HTTP ${detailsRes.status}: ${await detailsRes.text()}`);
+          }
+          const details = normalizeDashboardData(await detailsRes.json());
+          if (cancelled || requestSeq !== statsRequestSeqRef.current) return;
+          setData(mergeDashboardDetails(summary, details));
+        } catch (detailsError: unknown) {
+          if (cancelled || requestSeq !== statsRequestSeqRef.current) return;
+          console.warn('Failed to load stats details', detailsError);
         }
-        const details = normalizeDashboardData(await detailsRes.json());
-        if (cancelled || requestSeq !== statsRequestSeqRef.current) return;
-        setData(mergeDashboardDetails(summary, details));
       } catch (e: unknown) {
         if (cancelled || requestSeq !== statsRequestSeqRef.current) return;
         console.error(e);

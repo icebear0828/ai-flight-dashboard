@@ -106,6 +106,18 @@ func TestGetConfigPath(t *testing.T) {
 	config.SetDataDir("")
 }
 
+func TestGetCustomPricingPathUsesDataDir(t *testing.T) {
+	dataDir := t.TempDir()
+	config.SetDataDir(dataDir)
+	defer config.SetDataDir("")
+
+	path := config.GetCustomPricingPath()
+	expected := filepath.Join(dataDir, "custom_pricing.json")
+	if path != expected {
+		t.Errorf("expected custom pricing path %s, got %s", expected, path)
+	}
+}
+
 func TestGetDataDir_Default(t *testing.T) {
 	config.SetDataDir("")
 	t.Setenv("AI_FLIGHT_DASHBOARD_DATA_DIR", "")

@@ -60,6 +60,10 @@ func GetConfigPath() string {
 	return filepath.Join(GetDataDir(), "config.json")
 }
 
+func GetCustomPricingPath() string {
+	return filepath.Join(GetDataDir(), "custom_pricing.json")
+}
+
 func LoadConfig() (*AppConfig, error) {
 	data, err := os.ReadFile(GetConfigPath())
 	if err != nil {

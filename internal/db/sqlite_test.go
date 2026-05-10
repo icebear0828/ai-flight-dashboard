@@ -352,6 +352,48 @@ func TestSourceTotalsSummaryTracksInsertUpdateAndSupersede(t *testing.T) {
 	}
 }
 
+func TestSourceTotalsSummaryIgnoresNonAggregateUpdates(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	now := time.Now().UTC()
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{
+			Source:       "Codex",
+			Model:        "gpt-5.5",
+			Project:      "before",
+			InputTokens:  100,
+			CachedTokens: 40,
+			OutputTokens: 20,
+			UUID:         "codex-session:aggregate-stable",
+		},
+		1.00,
+		now,
+		"/codex.sqlite",
+		"mac",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, stmt := range []string{
+		`CREATE TRIGGER fail_source_totals_insert BEFORE INSERT ON usage_source_totals BEGIN SELECT RAISE(ABORT, 'source totals insert touched'); END`,
+		`CREATE TRIGGER fail_source_totals_update BEFORE UPDATE ON usage_source_totals BEGIN SELECT RAISE(ABORT, 'source totals update touched'); END`,
+		`CREATE TRIGGER fail_source_totals_delete BEFORE DELETE ON usage_source_totals BEGIN SELECT RAISE(ABORT, 'source totals delete touched'); END`,
+	} {
+		if err := database.RawExec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := database.RawExec("UPDATE usage_records SET project = ? WHERE uuid = ?", "after", "codex-session:aggregate-stable"); err != nil {
+		t.Fatalf("project-only update should not touch source totals summary: %v", err)
+	}
+	assertSingleSourceTotal(t, database, "mac", "Codex", 1, 100, 40, 0, 20, 1.00)
+}
+
 func TestQueryTokenSourceSummaries(t *testing.T) {
 	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {

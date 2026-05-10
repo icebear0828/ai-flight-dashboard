@@ -16,7 +16,7 @@ type DB struct {
 
 const logTimestampLayout = "2006-01-02T15:04:05.000000000Z"
 const activeUsagePredicate = "COALESCE(superseded, 0) = 0"
-const sourceTotalsSummaryMigrationKey = "migration:source-totals-summary-v1"
+const sourceTotalsSummaryMigrationKey = "migration:source-totals-summary-v2"
 
 var errInvalidLogTimestamp = errors.New("invalid log timestamp")
 
@@ -203,8 +203,45 @@ func ensurePartialDedupIndex(conn *sql.DB) error {
 }
 
 func ensureSourceTotalsSummary(conn *sql.DB) error {
+	if err := execMigration(conn, "CREATE INDEX IF NOT EXISTS idx_usage_source_totals_source ON usage_source_totals(source)", false); err != nil {
+		return err
+	}
+
+	var done int64
+	err := conn.QueryRow("SELECT byte_offset FROM scan_offsets WHERE file_path = ?", sourceTotalsSummaryMigrationKey).Scan(&done)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	recreate := err == sql.ErrNoRows || done != 1
+	if err := ensureSourceTotalsSummaryTriggers(conn, recreate); err != nil {
+		return err
+	}
+	if !recreate {
+		return nil
+	}
+	if err := rebuildSourceTotalsSummary(conn); err != nil {
+		return err
+	}
+	_, err = conn.Exec(`INSERT INTO scan_offsets (file_path, byte_offset) VALUES (?, 1)
+	ON CONFLICT(file_path) DO UPDATE SET byte_offset = excluded.byte_offset`, sourceTotalsSummaryMigrationKey)
+	return err
+}
+
+func ensureSourceTotalsSummaryTriggers(conn *sql.DB, recreate bool) error {
+	if recreate {
+		for _, stmt := range []string{
+			"DROP TRIGGER IF EXISTS trg_usage_source_totals_insert",
+			"DROP TRIGGER IF EXISTS trg_usage_source_totals_delete",
+			"DROP TRIGGER IF EXISTS trg_usage_source_totals_update_remove",
+			"DROP TRIGGER IF EXISTS trg_usage_source_totals_update_add",
+		} {
+			if err := execMigration(conn, stmt, false); err != nil {
+				return err
+			}
+		}
+	}
+
 	for _, stmt := range []string{
-		"CREATE INDEX IF NOT EXISTS idx_usage_source_totals_source ON usage_source_totals(source)",
 		`CREATE TRIGGER IF NOT EXISTS trg_usage_source_totals_insert
 		AFTER INSERT ON usage_records
 		WHEN COALESCE(NEW.superseded, 0) = 0
@@ -244,6 +281,16 @@ func ensureSourceTotalsSummary(conn *sql.DB) error {
 		`CREATE TRIGGER IF NOT EXISTS trg_usage_source_totals_update_remove
 		AFTER UPDATE ON usage_records
 		WHEN COALESCE(OLD.superseded, 0) = 0
+			AND (
+				COALESCE(NEW.superseded, 0) != 0
+				OR COALESCE(OLD.device_id, 'local') IS NOT COALESCE(NEW.device_id, 'local')
+				OR OLD.source IS NOT NEW.source
+				OR COALESCE(OLD.input_tokens, 0) IS NOT COALESCE(NEW.input_tokens, 0)
+				OR COALESCE(OLD.cached_tokens, 0) IS NOT COALESCE(NEW.cached_tokens, 0)
+				OR COALESCE(OLD.cache_creation_tokens, 0) IS NOT COALESCE(NEW.cache_creation_tokens, 0)
+				OR COALESCE(OLD.output_tokens, 0) IS NOT COALESCE(NEW.output_tokens, 0)
+				OR COALESCE(OLD.cost_usd, 0) IS NOT COALESCE(NEW.cost_usd, 0)
+			)
 		BEGIN
 			UPDATE usage_source_totals SET
 				events = events - 1,
@@ -258,6 +305,16 @@ func ensureSourceTotalsSummary(conn *sql.DB) error {
 		`CREATE TRIGGER IF NOT EXISTS trg_usage_source_totals_update_add
 		AFTER UPDATE ON usage_records
 		WHEN COALESCE(NEW.superseded, 0) = 0
+			AND (
+				COALESCE(OLD.superseded, 0) != 0
+				OR COALESCE(OLD.device_id, 'local') IS NOT COALESCE(NEW.device_id, 'local')
+				OR OLD.source IS NOT NEW.source
+				OR COALESCE(OLD.input_tokens, 0) IS NOT COALESCE(NEW.input_tokens, 0)
+				OR COALESCE(OLD.cached_tokens, 0) IS NOT COALESCE(NEW.cached_tokens, 0)
+				OR COALESCE(OLD.cache_creation_tokens, 0) IS NOT COALESCE(NEW.cache_creation_tokens, 0)
+				OR COALESCE(OLD.output_tokens, 0) IS NOT COALESCE(NEW.output_tokens, 0)
+				OR COALESCE(OLD.cost_usd, 0) IS NOT COALESCE(NEW.cost_usd, 0)
+			)
 		BEGIN
 			INSERT INTO usage_source_totals (
 				device_id, source, events, input_tokens, cached_tokens,
@@ -282,21 +339,7 @@ func ensureSourceTotalsSummary(conn *sql.DB) error {
 			return err
 		}
 	}
-
-	var done int64
-	err := conn.QueryRow("SELECT byte_offset FROM scan_offsets WHERE file_path = ?", sourceTotalsSummaryMigrationKey).Scan(&done)
-	if err == nil && done == 1 {
-		return nil
-	}
-	if err != nil && err != sql.ErrNoRows {
-		return err
-	}
-	if err := rebuildSourceTotalsSummary(conn); err != nil {
-		return err
-	}
-	_, err = conn.Exec(`INSERT INTO scan_offsets (file_path, byte_offset) VALUES (?, 1)
-	ON CONFLICT(file_path) DO UPDATE SET byte_offset = excluded.byte_offset`, sourceTotalsSummaryMigrationKey)
-	return err
+	return nil
 }
 
 // RebuildSourceTotalsSummary rebuilds the materialized all-time source totals

@@ -585,19 +585,9 @@ func handlePutPricing(w http.ResponseWriter, r *http.Request, calc *calculator.C
 		}
 	}
 
-	// Persist to ~/.ai-flight-dashboard/custom_pricing.json
-	home, err := os.UserHomeDir()
-	if err != nil {
-		http.Error(w, "Failed to resolve user home directory for persistence", http.StatusInternalServerError)
-		return
-	}
-
-	configDir := filepath.Join(home, ".ai-flight-dashboard")
-	os.MkdirAll(configDir, 0755)
-
 	// Load existing first to merge, so we don't lose other custom models
 	existingCustomPrices := make(map[string]calculator.ModelPrice)
-	customPricingPath := filepath.Join(configDir, "custom_pricing.json")
+	customPricingPath := config.GetCustomPricingPath()
 	if data, err := os.ReadFile(customPricingPath); err == nil {
 		if err := json.Unmarshal(data, &existingCustomPrices); err != nil {
 			http.Error(w, "Existing custom_pricing.json is corrupted. Refusing to overwrite.", http.StatusInternalServerError)
@@ -615,6 +605,10 @@ func handlePutPricing(w http.ResponseWriter, r *http.Request, calc *calculator.C
 		return
 	}
 
+	if err := os.MkdirAll(filepath.Dir(customPricingPath), 0755); err != nil {
+		http.Error(w, "Failed to prepare pricing directory", http.StatusInternalServerError)
+		return
+	}
 	if err := os.WriteFile(customPricingPath, data, 0644); err != nil {
 		http.Error(w, "Failed to write pricing data to disk", http.StatusInternalServerError)
 		return

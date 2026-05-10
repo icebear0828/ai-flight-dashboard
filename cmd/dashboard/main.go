@@ -425,11 +425,10 @@ func main() {
 		log.Fatalf("Failed to initialize calculator: %v", err)
 	}
 
-	home, _ := os.UserHomeDir()
-	customPricingPath := filepath.Join(home, ".ai-flight-dashboard", "custom_pricing.json")
-	if err := calc.LoadCustomPrices(customPricingPath); err != nil {
+	if err := calc.LoadCustomPrices(config.GetCustomPricingPath()); err != nil {
 		fmt.Printf("⚠️  Failed to load custom pricing: %v\n", err)
 	}
+	home, _ := os.UserHomeDir()
 
 	// Initialize Database
 	appDataDir := config.GetDataDir()

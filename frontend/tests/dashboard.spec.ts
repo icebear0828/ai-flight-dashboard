@@ -324,6 +324,77 @@ test('source switching renders summary before delayed details', async ({ page })
   expect(pageErrors).toEqual([]);
 });
 
+test('source switching keeps summary visible when details fail', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+
+  let detailFailures = 0;
+  const summaryPayload = (source: string) => ({
+    periods,
+    sources: source
+      ? [{
+          name: source,
+          total_input: 1000,
+          total_cached: 100,
+          total_cache_creation: 50,
+          total_output: 25,
+          total_cost: 2.5,
+          total_events: 1,
+          cache_hit_rate: 10,
+          models: [],
+        }]
+      : [],
+    devices: [{ id: 'local', display_name: 'local' }],
+    projects: [],
+    is_paused: false,
+  });
+
+  await page.route('**/api/stats?*', async (route) => {
+    const url = new URL(route.request().url());
+    const source = url.searchParams.get('source') ?? '';
+    const detail = url.searchParams.get('detail') ?? '';
+    if (detail === 'details' && source === 'Codex') {
+      detailFailures++;
+      await route.fulfill({
+        status: 500,
+        contentType: 'text/plain',
+        body: 'details unavailable',
+      });
+      return;
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(summaryPayload(source)),
+    });
+  });
+  await page.route('**/api/lan/scan', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ peers: [] }),
+    });
+  });
+  await page.route('**/api/lan/status', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ enabled: true }),
+    });
+  });
+
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'CODEX' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'CODEX' }).click();
+  await expect(page.getByRole('heading', { name: 'Codex' })).toBeVisible();
+  await expect.poll(() => detailFailures).toBeGreaterThan(0);
+  await expect(page.getByRole('heading', { name: 'Codex' })).toBeVisible();
+  await expect(page.getByText(/HTTP 500|details unavailable/)).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
 test('LAN radar shows per-source peer totals before full sync completes', async ({ page }) => {
   await page.route('**/api/stats?*', async (route) => {
     await route.fulfill({
