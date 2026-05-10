@@ -56,6 +56,93 @@ func TestBuildStatsIncludesCacheHitRates(t *testing.T) {
 	assertApprox(t, stats.Projects[0].CacheHitRate, 25.0)
 }
 
+func TestBuildStatsSummaryOmitsHeavyDetails(t *testing.T) {
+	database := testutil.NewTestDB(t)
+	defer database.Close()
+	calc := testutil.NewTestCalc(t)
+
+	now := time.Now().UTC()
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{
+			Source:       "Codex",
+			Model:        "gpt-5.5",
+			Project:      "token",
+			InputTokens:  1000,
+			CachedTokens: 250,
+			OutputTokens: 50,
+		},
+		1.00,
+		now.Add(-10*time.Minute),
+		"/codex.sqlite",
+		"local",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	summary, err := dashboard.BuildStatsSummary(database, calc, "local", "Codex", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(summary.Periods) != 8 {
+		t.Fatalf("expected period summary, got %+v", summary.Periods)
+	}
+	if len(summary.Sources) != 1 {
+		t.Fatalf("expected one source total, got %+v", summary.Sources)
+	}
+	if summary.Sources[0].Name != "Codex" || summary.Sources[0].TotalInput != 1000 || summary.Sources[0].TotalCached != 250 {
+		t.Fatalf("unexpected source summary: %+v", summary.Sources[0])
+	}
+	if len(summary.Sources[0].Models) != 0 {
+		t.Fatalf("summary should omit model details, got %+v", summary.Sources[0].Models)
+	}
+	if len(summary.Projects) != 0 {
+		t.Fatalf("summary should omit project details, got %+v", summary.Projects)
+	}
+	if len(summary.Devices) != 1 || summary.Devices[0].ID != "local" {
+		t.Fatalf("expected devices in summary, got %+v", summary.Devices)
+	}
+}
+
+func TestBuildStatsDetailsOmitsSummaryData(t *testing.T) {
+	database := testutil.NewTestDB(t)
+	defer database.Close()
+	calc := testutil.NewTestCalc(t)
+
+	now := time.Now().UTC()
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{
+			Source:       "Codex",
+			Model:        "gpt-5.5",
+			Project:      "token",
+			InputTokens:  1000,
+			CachedTokens: 250,
+			OutputTokens: 50,
+		},
+		1.00,
+		now.Add(-10*time.Minute),
+		"/codex.sqlite",
+		"local",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	details, err := dashboard.BuildStatsDetails(database, calc, "local", "Codex", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(details.Periods) != 0 || len(details.Devices) != 0 {
+		t.Fatalf("details should omit period/device summary data, got periods=%+v devices=%+v", details.Periods, details.Devices)
+	}
+	if len(details.Sources) != 1 || len(details.Sources[0].Models) != 1 {
+		t.Fatalf("expected source model details, got %+v", details.Sources)
+	}
+	if len(details.Projects) != 1 || details.Projects[0].Project != "token" {
+		t.Fatalf("expected project details, got %+v", details.Projects)
+	}
+}
+
 func TestBuildTokenSummaryIncludesPerSourceBreakdown(t *testing.T) {
 	database := testutil.NewTestDB(t)
 	defer database.Close()

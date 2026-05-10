@@ -139,9 +139,10 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 
 func NewHandlerWithLANController(database *db.DB, calc *calculator.Calculator, wInst *watcher.Watcher, lanControl LANController, token string, distBinFS embed.FS) http.Handler {
 	mux := http.NewServeMux()
+	statsCache := dashboard.NewStatsCache(2 * time.Second)
 
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
-		handleStats(w, r, database, calc, wInst)
+		handleStats(w, r, database, calc, wInst, statsCache)
 	})
 
 	mux.HandleFunc("/api/cache-savings", func(w http.ResponseWriter, r *http.Request) {
@@ -444,16 +445,41 @@ func handleSyncPull(w http.ResponseWriter, r *http.Request, database *db.DB) {
 	json.NewEncoder(w).Encode(page)
 }
 
-func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *calculator.Calculator, wInst *watcher.Watcher) {
+func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *calculator.Calculator, wInst *watcher.Watcher, statsCache *dashboard.StatsCache) {
 	deviceID := r.URL.Query().Get("device")
 	source := r.URL.Query().Get("source") // "Claude Code", "Gemini CLI", or "" for all
+	detail := r.URL.Query().Get("detail")
 
 	isPaused := false
 	if wInst != nil {
 		isPaused = wInst.IsPaused()
 	}
 
-	stats, err := dashboard.BuildStats(database, calc, deviceID, source, isPaused)
+	var build func() (*model.StatsResponse, error)
+	switch detail {
+	case "", "full":
+		build = func() (*model.StatsResponse, error) {
+			return dashboard.BuildStats(database, calc, deviceID, source, isPaused)
+		}
+	case "summary":
+		build = func() (*model.StatsResponse, error) {
+			return dashboard.BuildStatsSummary(database, calc, deviceID, source, isPaused)
+		}
+	case "details":
+		build = func() (*model.StatsResponse, error) {
+			return dashboard.BuildStatsDetails(database, calc, deviceID, source, isPaused)
+		}
+	default:
+		http.Error(w, "invalid stats detail mode", http.StatusBadRequest)
+		return
+	}
+
+	stats, err := statsCache.Get(dashboard.StatsCacheKey{
+		DeviceID: deviceID,
+		Source:   source,
+		Detail:   detail,
+		IsPaused: isPaused,
+	}, build)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

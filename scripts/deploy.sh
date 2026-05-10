@@ -43,7 +43,7 @@ fi
 if [ "$MODE" == "1" ]; then
     read -p "请输入 Web 服务监听端口 [默认 19100]: " PORT
     PORT=${PORT:-19100}
-    EXEC_START="/usr/local/bin/ai-flight-dashboard --web --port ${PORT}"
+    EXEC_START="/usr/local/bin/ai-flight-dashboard --data-dir /var/lib/ai-flight-dashboard --web --port ${PORT}"
     echo -e "${GREEN}配置为: 主控服务端 (端口: ${PORT})${NC}"
 else
     HOSTNAME=$(hostname)
@@ -54,7 +54,7 @@ else
         echo -e "${RED}上报地址不能为空。${NC}"
         exit 1
     fi
-    EXEC_START="/usr/local/bin/ai-flight-dashboard --device-id \"${DEVICE_ID}\" --forward-to \"${FORWARD_URL}\""
+    EXEC_START="/usr/local/bin/ai-flight-dashboard --data-dir /var/lib/ai-flight-dashboard --device-id \"${DEVICE_ID}\" --forward-to \"${FORWARD_URL}\""
     echo -e "${GREEN}配置为: 探针端 (设备名: ${DEVICE_ID}, 上报至: ${FORWARD_URL})${NC}"
 fi
 

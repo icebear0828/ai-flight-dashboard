@@ -14,10 +14,110 @@ import (
 func BuildStats(database *db.DB, calc *calculator.Calculator, deviceID string, source string, isPaused bool) (*model.StatsResponse, error) {
 	now := time.Now().UTC()
 
-	if deviceID == "all" {
-		deviceID = ""
+	deviceID = normalizeDeviceID(deviceID)
+
+	periods, err := buildPeriodCosts(database, now, deviceID, source)
+	if err != nil {
+		return nil, err
 	}
 
+	stats, err := database.QueryStatsSince(time.Time{}, deviceID, source)
+	if err != nil {
+		return nil, err
+	}
+	sources := buildSourcesFromModelStats(stats, calc)
+
+	deviceInfos, err := buildDeviceInfos(database)
+	if err != nil {
+		return nil, err
+	}
+
+	projects, err := database.QueryProjectStatsSince(time.Time{}, deviceID, source)
+	if err != nil {
+		return nil, err
+	}
+
+	return &model.StatsResponse{
+		Periods:  periods,
+		Sources:  sources,
+		Devices:  deviceInfos,
+		Projects: projects,
+		IsPaused: isPaused,
+	}, nil
+}
+
+func BuildStatsSummary(database *db.DB, _ *calculator.Calculator, deviceID string, source string, isPaused bool) (*model.StatsResponse, error) {
+	now := time.Now().UTC()
+	deviceID = normalizeDeviceID(deviceID)
+
+	periods, err := buildPeriodCosts(database, now, deviceID, source)
+	if err != nil {
+		return nil, err
+	}
+
+	stats, err := database.QuerySourceTotalsSince(time.Time{}, deviceID, source)
+	if err != nil {
+		return nil, err
+	}
+	sources := make([]model.SourceStats, 0, len(stats))
+	for _, stat := range stats {
+		sources = append(sources, model.SourceStats{
+			Name:               stat.Source,
+			TotalInput:         stat.InputTokens,
+			TotalCached:        stat.CachedTokens,
+			TotalCacheCreation: stat.CacheCreationTokens,
+			TotalOutput:        stat.OutputTokens,
+			TotalCost:          stat.TotalCost,
+			TotalEvents:        stat.Events,
+			CacheHitRate:       model.CacheHitRatePercent(stat.InputTokens, stat.CachedTokens),
+		})
+	}
+	sort.Slice(sources, func(i, j int) bool {
+		return sources[i].Name < sources[j].Name
+	})
+
+	deviceInfos, err := buildDeviceInfos(database)
+	if err != nil {
+		return nil, err
+	}
+
+	return &model.StatsResponse{
+		Periods:  periods,
+		Sources:  sources,
+		Devices:  deviceInfos,
+		IsPaused: isPaused,
+	}, nil
+}
+
+func BuildStatsDetails(database *db.DB, calc *calculator.Calculator, deviceID string, source string, isPaused bool) (*model.StatsResponse, error) {
+	deviceID = normalizeDeviceID(deviceID)
+
+	stats, err := database.QueryStatsSince(time.Time{}, deviceID, source)
+	if err != nil {
+		return nil, err
+	}
+	sources := buildSourcesFromModelStats(stats, calc)
+
+	projects, err := database.QueryProjectStatsSince(time.Time{}, deviceID, source)
+	if err != nil {
+		return nil, err
+	}
+
+	return &model.StatsResponse{
+		Sources:  sources,
+		Projects: projects,
+		IsPaused: isPaused,
+	}, nil
+}
+
+func normalizeDeviceID(deviceID string) string {
+	if deviceID == "all" {
+		return ""
+	}
+	return deviceID
+}
+
+func buildPeriodCosts(database *db.DB, now time.Time, deviceID string, source string) ([]model.PeriodCost, error) {
 	windows := []struct {
 		label string
 		dur   time.Duration
@@ -31,41 +131,35 @@ func BuildStats(database *db.DB, calc *calculator.Calculator, deviceID string, s
 		{"1y", 365 * 24 * time.Hour},
 	}
 
-	periods := make([]model.PeriodCost, 0, len(windows)+1)
+	periodWindows := make([]db.PeriodStatsWindow, 0, len(windows)+1)
 	for _, win := range windows {
-		cost, inTok, caTok, caWTok, outTok, err := database.QueryPeriodStatsSince(now.Add(-win.dur), deviceID, source)
-		if err != nil {
-			return nil, err
-		}
-		periods = append(periods, model.PeriodCost{
-			Label:               win.label,
-			Cost:                cost,
-			InputTokens:         inTok,
-			CachedTokens:        caTok,
-			CacheCreationTokens: caWTok,
-			OutputTokens:        outTok,
-			CacheHitRate:        model.CacheHitRatePercent(inTok, caTok),
+		periodWindows = append(periodWindows, db.PeriodStatsWindow{
+			Label: win.label,
+			Since: now.Add(-win.dur),
 		})
 	}
-	total, tIn, tCa, tCaW, tOut, err := database.QueryPeriodStatsAll(deviceID, source)
+	periodWindows = append(periodWindows, db.PeriodStatsWindow{Label: "ALL"})
+
+	periodBuckets, err := database.QueryPeriodStatsBuckets(periodWindows, deviceID, source)
 	if err != nil {
 		return nil, err
 	}
-	periods = append(periods, model.PeriodCost{
-		Label:               "ALL",
-		Cost:                total,
-		InputTokens:         tIn,
-		CachedTokens:        tCa,
-		CacheCreationTokens: tCaW,
-		OutputTokens:        tOut,
-		CacheHitRate:        model.CacheHitRatePercent(tIn, tCa),
-	})
-
-	stats, err := database.QueryStatsSince(time.Time{}, deviceID, source)
-	if err != nil {
-		return nil, err
+	periods := make([]model.PeriodCost, 0, len(periodBuckets))
+	for _, bucket := range periodBuckets {
+		periods = append(periods, model.PeriodCost{
+			Label:               bucket.Label,
+			Cost:                bucket.Cost,
+			InputTokens:         bucket.InputTokens,
+			CachedTokens:        bucket.CachedTokens,
+			CacheCreationTokens: bucket.CacheCreationTokens,
+			OutputTokens:        bucket.OutputTokens,
+			CacheHitRate:        model.CacheHitRatePercent(bucket.InputTokens, bucket.CachedTokens),
+		})
 	}
+	return periods, nil
+}
 
+func buildSourcesFromModelStats(stats []db.ModelStat, calc *calculator.Calculator) []model.SourceStats {
 	sourceMap := make(map[string]*model.SourceStats)
 	for _, s := range stats {
 		src, ok := sourceMap[s.Source]
@@ -104,7 +198,10 @@ func BuildStats(database *db.DB, calc *calculator.Calculator, deviceID string, s
 	sort.Slice(sources, func(i, j int) bool {
 		return sources[i].Name < sources[j].Name
 	})
+	return sources
+}
 
+func buildDeviceInfos(database *db.DB) ([]model.DeviceInfo, error) {
 	devices, err := database.QueryDevices()
 	if err != nil {
 		return nil, err
@@ -122,27 +219,13 @@ func BuildStats(database *db.DB, calc *calculator.Calculator, deviceID string, s
 		}
 		deviceInfos = append(deviceInfos, model.DeviceInfo{ID: id, DisplayName: name})
 	}
-
-	projects, err := database.QueryProjectStatsSince(time.Time{}, deviceID, source)
-	if err != nil {
-		return nil, err
-	}
-
-	return &model.StatsResponse{
-		Periods:  periods,
-		Sources:  sources,
-		Devices:  deviceInfos,
-		Projects: projects,
-		IsPaused: isPaused,
-	}, nil
+	return deviceInfos, nil
 }
 
 // BuildTokenSummary constructs the lightweight aggregate advertised to LAN
 // peers during discovery.
 func BuildTokenSummary(database *db.DB, deviceID string) (model.TokenSummary, error) {
-	if deviceID == "all" {
-		deviceID = ""
-	}
+	deviceID = normalizeDeviceID(deviceID)
 
 	now := time.Now().UTC()
 	sources, err := database.QueryTokenSourceSummaries(now.Add(-24*time.Hour), deviceID)

@@ -151,6 +151,207 @@ func TestQueryCostSince(t *testing.T) {
 	}
 }
 
+func TestQueryPeriodStatsBucketsMatchesIndividualQueries(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	now := time.Now().UTC()
+	rows := []struct {
+		usage    model.TokenUsage
+		cost     float64
+		at       time.Time
+		filePath string
+		deviceID string
+	}{
+		{
+			usage:    model.TokenUsage{Source: "Claude Code", Model: "m1", InputTokens: 100, CachedTokens: 10, CacheCreationTokens: 5, OutputTokens: 50},
+			cost:     1.00,
+			at:       now.Add(-48 * time.Hour),
+			filePath: "/old.jsonl",
+			deviceID: "dev1",
+		},
+		{
+			usage:    model.TokenUsage{Source: "Claude Code", Model: "m2", InputTokens: 200, CachedTokens: 20, CacheCreationTokens: 10, OutputTokens: 100},
+			cost:     2.00,
+			at:       now.Add(-30 * time.Minute),
+			filePath: "/recent.jsonl",
+			deviceID: "dev1",
+		},
+		{
+			usage:    model.TokenUsage{Source: "Gemini CLI", Model: "m3", InputTokens: 300, CachedTokens: 30, CacheCreationTokens: 15, OutputTokens: 150},
+			cost:     3.00,
+			at:       now.Add(-5 * time.Minute),
+			filePath: "/other.jsonl",
+			deviceID: "dev2",
+		},
+	}
+	for _, row := range rows {
+		if err := database.InsertUsageWithTime(row.usage, row.cost, row.at, row.filePath, row.deviceID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.RawExec(
+		"INSERT INTO usage_records (log_timestamp, source, model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd, file_path, device_id, superseded) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		now.Format(time.RFC3339), "Claude Code", "ignored", 999, 999, 999, 999, 99.00, "/superseded.jsonl", "dev1", 1,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	windows := []db.PeriodStatsWindow{
+		{Label: "1h", Since: now.Add(-1 * time.Hour)},
+		{Label: "24h", Since: now.Add(-24 * time.Hour)},
+		{Label: "ALL"},
+	}
+	buckets, err := database.QueryPeriodStatsBuckets(windows, "dev1", "Claude Code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(buckets) != len(windows) {
+		t.Fatalf("expected %d buckets, got %+v", len(windows), buckets)
+	}
+
+	for i, bucket := range buckets {
+		var wantCost float64
+		var wantInput, wantCached, wantCacheCreation, wantOutput int
+		if windows[i].Since.IsZero() {
+			wantCost, wantInput, wantCached, wantCacheCreation, wantOutput, err = database.QueryPeriodStatsAll("dev1", "Claude Code")
+		} else {
+			wantCost, wantInput, wantCached, wantCacheCreation, wantOutput, err = database.QueryPeriodStatsSince(windows[i].Since, "dev1", "Claude Code")
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bucket.Label != windows[i].Label || bucket.Cost != wantCost || bucket.InputTokens != wantInput || bucket.CachedTokens != wantCached || bucket.CacheCreationTokens != wantCacheCreation || bucket.OutputTokens != wantOutput {
+			t.Fatalf("bucket %s mismatch: got %+v want cost=%f input=%d cached=%d cacheCreation=%d output=%d", windows[i].Label, bucket, wantCost, wantInput, wantCached, wantCacheCreation, wantOutput)
+		}
+	}
+}
+
+func TestRebuildSourceTotalsSummaryMatchesRawTotals(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	now := time.Now().UTC()
+	rows := []struct {
+		usage      model.TokenUsage
+		cost       float64
+		at         time.Time
+		filePath   string
+		deviceID   string
+		superseded int
+	}{
+		{
+			usage:    model.TokenUsage{Source: "Claude Code", Model: "claude-opus-4-7", InputTokens: 100, CachedTokens: 20, CacheCreationTokens: 5, OutputTokens: 50},
+			cost:     1.00,
+			at:       now.Add(-3 * time.Hour),
+			filePath: "/claude-a.jsonl",
+			deviceID: "mac",
+		},
+		{
+			usage:    model.TokenUsage{Source: "Codex", Model: "gpt-5.5", InputTokens: 200, CachedTokens: 80, CacheCreationTokens: 10, OutputTokens: 60},
+			cost:     2.00,
+			at:       now.Add(-2 * time.Hour),
+			filePath: "/codex-mac.sqlite",
+			deviceID: "mac",
+		},
+		{
+			usage:    model.TokenUsage{Source: "Codex", Model: "gpt-5.5", InputTokens: 300, CachedTokens: 120, CacheCreationTokens: 15, OutputTokens: 70},
+			cost:     3.00,
+			at:       now.Add(-1 * time.Hour),
+			filePath: "/codex-linux.sqlite",
+			deviceID: "linux",
+		},
+		{
+			usage:      model.TokenUsage{Source: "Codex", Model: "gpt-5.5", InputTokens: 999, CachedTokens: 999, CacheCreationTokens: 999, OutputTokens: 999},
+			cost:       9.99,
+			at:         now,
+			filePath:   "/superseded.sqlite",
+			deviceID:   "mac",
+			superseded: 1,
+		},
+	}
+	for _, row := range rows {
+		if err := database.RawExec(
+			"INSERT INTO usage_records (log_timestamp, source, model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd, file_path, device_id, superseded) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			row.at.Format(time.RFC3339Nano), row.usage.Source, row.usage.Model, row.usage.InputTokens, row.usage.CachedTokens, row.usage.CacheCreationTokens, row.usage.OutputTokens, row.cost, row.filePath, row.deviceID, row.superseded,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := database.RebuildSourceTotalsSummary(); err != nil {
+		t.Fatal(err)
+	}
+
+	rawAll, err := database.QuerySourceTotalsSince(now.Add(-24*time.Hour), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	summaryAll, err := database.QuerySourceTotalsSummary("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSourceTotalsEqual(t, summaryAll, rawAll)
+
+	rawMacCodex, err := database.QuerySourceTotalsSince(now.Add(-24*time.Hour), "mac", "Codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	summaryMacCodex, err := database.QuerySourceTotalsSummary("mac", "Codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSourceTotalsEqual(t, summaryMacCodex, rawMacCodex)
+}
+
+func TestSourceTotalsSummaryTracksInsertUpdateAndSupersede(t *testing.T) {
+	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	now := time.Now().UTC()
+	usage := model.TokenUsage{
+		Source:       "Codex",
+		Model:        "gpt-5.5",
+		InputTokens:  100,
+		CachedTokens: 40,
+		OutputTokens: 20,
+		UUID:         "codex-session:1",
+	}
+	if err := database.InsertUsageWithTime(usage, 1.00, now, "/codex.sqlite", "mac"); err != nil {
+		t.Fatal(err)
+	}
+	assertSingleSourceTotal(t, database, "mac", "Codex", 1, 100, 40, 0, 20, 1.00)
+
+	usage.InputTokens = 250
+	usage.CachedTokens = 125
+	usage.CacheCreationTokens = 30
+	usage.OutputTokens = 50
+	if err := database.InsertUsageWithTime(usage, 2.50, now.Add(time.Minute), "/codex.sqlite", "mac"); err != nil {
+		t.Fatal(err)
+	}
+	assertSingleSourceTotal(t, database, "mac", "Codex", 1, 250, 125, 30, 50, 2.50)
+
+	if _, err := database.SupersedeUsageBySourceFilePathDeviceUUIDPrefix("Codex", "/codex.sqlite", "mac", "codex-session:"); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := database.QuerySourceTotalsSummary("mac", "Codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 0 {
+		t.Fatalf("expected superseded Codex row to be removed from summary, got %+v", stats)
+	}
+}
+
 func TestQueryTokenSourceSummaries(t *testing.T) {
 	database, err := db.New(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -1082,5 +1283,40 @@ func TestDeduplicateExisting(t *testing.T) {
 	cost, _, _, _, _, _ = database.QueryPeriodStatsAll("", "")
 	if cost < 0.99 || cost > 1.01 {
 		t.Errorf("expected ~1.00 after dedup, got %f", cost)
+	}
+}
+
+func assertSingleSourceTotal(t *testing.T, database *db.DB, deviceID string, source string, events int, input int, cached int, cacheCreation int, output int, cost float64) {
+	t.Helper()
+	stats, err := database.QuerySourceTotalsSummary(deviceID, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("expected one source total, got %+v", stats)
+	}
+	got := stats[0]
+	if got.Source != source || got.Events != events || got.InputTokens != input || got.CachedTokens != cached || got.CacheCreationTokens != cacheCreation || got.OutputTokens != output || got.TotalCost != cost {
+		t.Fatalf("unexpected source total: got %+v want source=%s events=%d input=%d cached=%d cacheCreation=%d output=%d cost=%f", got, source, events, input, cached, cacheCreation, output, cost)
+	}
+}
+
+func assertSourceTotalsEqual(t *testing.T, got []db.SourceTotalStat, want []db.SourceTotalStat) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("source totals length mismatch: got %+v want %+v", got, want)
+	}
+	gotBySource := make(map[string]db.SourceTotalStat, len(got))
+	for _, stat := range got {
+		gotBySource[stat.Source] = stat
+	}
+	for _, expected := range want {
+		actual, ok := gotBySource[expected.Source]
+		if !ok {
+			t.Fatalf("missing source %s in totals: got %+v want %+v", expected.Source, got, want)
+		}
+		if actual != expected {
+			t.Fatalf("source total mismatch for %s: got %+v want %+v", expected.Source, actual, expected)
+		}
 	}
 }

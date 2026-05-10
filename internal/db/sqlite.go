@@ -16,6 +16,7 @@ type DB struct {
 
 const logTimestampLayout = "2006-01-02T15:04:05.000000000Z"
 const activeUsagePredicate = "COALESCE(superseded, 0) = 0"
+const sourceTotalsSummaryMigrationKey = "migration:source-totals-summary-v1"
 
 var errInvalidLogTimestamp = errors.New("invalid log timestamp")
 
@@ -28,6 +29,30 @@ type ModelStat struct {
 	CacheCreationTokens int
 	OutputTokens        int
 	TotalCost           float64
+}
+
+type SourceTotalStat struct {
+	Source              string
+	Events              int
+	InputTokens         int
+	CachedTokens        int
+	CacheCreationTokens int
+	OutputTokens        int
+	TotalCost           float64
+}
+
+type PeriodStatsWindow struct {
+	Label string
+	Since time.Time
+}
+
+type PeriodStatsBucket struct {
+	Label               string
+	Cost                float64
+	InputTokens         int
+	CachedTokens        int
+	CacheCreationTokens int
+	OutputTokens        int
 }
 
 func New(dsn string) (*DB, error) {
@@ -85,6 +110,18 @@ func initSchema(conn *sql.DB) error {
 		device_id TEXT PRIMARY KEY,
 		display_name TEXT NOT NULL
 	);
+
+	CREATE TABLE IF NOT EXISTS usage_source_totals (
+		device_id TEXT NOT NULL,
+		source TEXT NOT NULL,
+		events INTEGER NOT NULL,
+		input_tokens INTEGER NOT NULL,
+		cached_tokens INTEGER NOT NULL,
+		cache_creation_tokens INTEGER NOT NULL,
+		output_tokens INTEGER NOT NULL,
+		cost_usd REAL NOT NULL,
+		PRIMARY KEY (device_id, source)
+	);
 	`
 	_, err := conn.Exec(schema)
 	if err != nil {
@@ -126,6 +163,9 @@ func initSchema(conn *sql.DB) error {
 	if err := ensurePartialDedupIndex(conn); err != nil {
 		return err
 	}
+	if err := ensureSourceTotalsSummary(conn); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -160,6 +200,141 @@ func ensurePartialDedupIndex(conn *sql.DB) error {
 	_, err = conn.Exec(`INSERT INTO scan_offsets (file_path, byte_offset) VALUES (?, 1)
 	ON CONFLICT(file_path) DO UPDATE SET byte_offset = excluded.byte_offset`, migrationKey)
 	return err
+}
+
+func ensureSourceTotalsSummary(conn *sql.DB) error {
+	for _, stmt := range []string{
+		"CREATE INDEX IF NOT EXISTS idx_usage_source_totals_source ON usage_source_totals(source)",
+		`CREATE TRIGGER IF NOT EXISTS trg_usage_source_totals_insert
+		AFTER INSERT ON usage_records
+		WHEN COALESCE(NEW.superseded, 0) = 0
+		BEGIN
+			INSERT INTO usage_source_totals (
+				device_id, source, events, input_tokens, cached_tokens,
+				cache_creation_tokens, output_tokens, cost_usd
+			)
+			VALUES (
+				COALESCE(NEW.device_id, 'local'), NEW.source, 1,
+				COALESCE(NEW.input_tokens, 0), COALESCE(NEW.cached_tokens, 0),
+				COALESCE(NEW.cache_creation_tokens, 0), COALESCE(NEW.output_tokens, 0),
+				COALESCE(NEW.cost_usd, 0)
+			)
+			ON CONFLICT(device_id, source) DO UPDATE SET
+				events = usage_source_totals.events + excluded.events,
+				input_tokens = usage_source_totals.input_tokens + excluded.input_tokens,
+				cached_tokens = usage_source_totals.cached_tokens + excluded.cached_tokens,
+				cache_creation_tokens = usage_source_totals.cache_creation_tokens + excluded.cache_creation_tokens,
+				output_tokens = usage_source_totals.output_tokens + excluded.output_tokens,
+				cost_usd = usage_source_totals.cost_usd + excluded.cost_usd;
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS trg_usage_source_totals_delete
+		AFTER DELETE ON usage_records
+		WHEN COALESCE(OLD.superseded, 0) = 0
+		BEGIN
+			UPDATE usage_source_totals SET
+				events = events - 1,
+				input_tokens = input_tokens - COALESCE(OLD.input_tokens, 0),
+				cached_tokens = cached_tokens - COALESCE(OLD.cached_tokens, 0),
+				cache_creation_tokens = cache_creation_tokens - COALESCE(OLD.cache_creation_tokens, 0),
+				output_tokens = output_tokens - COALESCE(OLD.output_tokens, 0),
+				cost_usd = cost_usd - COALESCE(OLD.cost_usd, 0)
+			WHERE device_id = COALESCE(OLD.device_id, 'local') AND source = OLD.source;
+			DELETE FROM usage_source_totals WHERE events <= 0;
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS trg_usage_source_totals_update_remove
+		AFTER UPDATE ON usage_records
+		WHEN COALESCE(OLD.superseded, 0) = 0
+		BEGIN
+			UPDATE usage_source_totals SET
+				events = events - 1,
+				input_tokens = input_tokens - COALESCE(OLD.input_tokens, 0),
+				cached_tokens = cached_tokens - COALESCE(OLD.cached_tokens, 0),
+				cache_creation_tokens = cache_creation_tokens - COALESCE(OLD.cache_creation_tokens, 0),
+				output_tokens = output_tokens - COALESCE(OLD.output_tokens, 0),
+				cost_usd = cost_usd - COALESCE(OLD.cost_usd, 0)
+			WHERE device_id = COALESCE(OLD.device_id, 'local') AND source = OLD.source;
+			DELETE FROM usage_source_totals WHERE events <= 0;
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS trg_usage_source_totals_update_add
+		AFTER UPDATE ON usage_records
+		WHEN COALESCE(NEW.superseded, 0) = 0
+		BEGIN
+			INSERT INTO usage_source_totals (
+				device_id, source, events, input_tokens, cached_tokens,
+				cache_creation_tokens, output_tokens, cost_usd
+			)
+			VALUES (
+				COALESCE(NEW.device_id, 'local'), NEW.source, 1,
+				COALESCE(NEW.input_tokens, 0), COALESCE(NEW.cached_tokens, 0),
+				COALESCE(NEW.cache_creation_tokens, 0), COALESCE(NEW.output_tokens, 0),
+				COALESCE(NEW.cost_usd, 0)
+			)
+			ON CONFLICT(device_id, source) DO UPDATE SET
+				events = usage_source_totals.events + excluded.events,
+				input_tokens = usage_source_totals.input_tokens + excluded.input_tokens,
+				cached_tokens = usage_source_totals.cached_tokens + excluded.cached_tokens,
+				cache_creation_tokens = usage_source_totals.cache_creation_tokens + excluded.cache_creation_tokens,
+				output_tokens = usage_source_totals.output_tokens + excluded.output_tokens,
+				cost_usd = usage_source_totals.cost_usd + excluded.cost_usd;
+		END`,
+	} {
+		if err := execMigration(conn, stmt, false); err != nil {
+			return err
+		}
+	}
+
+	var done int64
+	err := conn.QueryRow("SELECT byte_offset FROM scan_offsets WHERE file_path = ?", sourceTotalsSummaryMigrationKey).Scan(&done)
+	if err == nil && done == 1 {
+		return nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if err := rebuildSourceTotalsSummary(conn); err != nil {
+		return err
+	}
+	_, err = conn.Exec(`INSERT INTO scan_offsets (file_path, byte_offset) VALUES (?, 1)
+	ON CONFLICT(file_path) DO UPDATE SET byte_offset = excluded.byte_offset`, sourceTotalsSummaryMigrationKey)
+	return err
+}
+
+// RebuildSourceTotalsSummary rebuilds the materialized all-time source totals
+// from usage_records. The raw usage table remains the source of truth.
+func (d *DB) RebuildSourceTotalsSummary() error {
+	return rebuildSourceTotalsSummary(d.conn)
+}
+
+func rebuildSourceTotalsSummary(conn *sql.DB) error {
+	tx, err := conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM usage_source_totals"); err != nil {
+		return err
+	}
+	_, err = tx.Exec(`
+		INSERT INTO usage_source_totals (
+			device_id, source, events, input_tokens, cached_tokens,
+			cache_creation_tokens, output_tokens, cost_usd
+		)
+		SELECT
+			COALESCE(device_id, 'local'), source, COUNT(*),
+			COALESCE(SUM(input_tokens), 0),
+			COALESCE(SUM(cached_tokens), 0),
+			COALESCE(SUM(cache_creation_tokens), 0),
+			COALESCE(SUM(output_tokens), 0),
+			COALESCE(SUM(cost_usd), 0)
+		FROM usage_records
+		WHERE ` + activeUsagePredicate + `
+		GROUP BY COALESCE(device_id, 'local'), source
+	`)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // InsertUsage inserts a usage record with current timestamp (for live watcher).
@@ -398,6 +573,89 @@ func (d *DB) QueryPeriodStatsSince(since time.Time, deviceID string, source stri
 	return cost.Float64, int(inTok.Int64), int(cacheTok.Int64), int(cacheCreationTok.Int64), int(outTok.Int64), nil
 }
 
+// QueryPeriodStatsBuckets returns multiple period aggregates in a single scan.
+// A zero Since value means the all-time bucket.
+func (d *DB) QueryPeriodStatsBuckets(windows []PeriodStatsWindow, deviceID string, source string) ([]PeriodStatsBucket, error) {
+	if len(windows) == 0 {
+		return []PeriodStatsBucket{}, nil
+	}
+
+	var query strings.Builder
+	query.WriteString("SELECT ")
+	args := make([]interface{}, 0, len(windows)*5+2)
+	for i, window := range windows {
+		if i > 0 {
+			query.WriteString(", ")
+		}
+		conditional := !window.Since.IsZero()
+		appendPeriodAggregateExpr(&query, "cost_usd", conditional)
+		query.WriteString(", ")
+		appendPeriodAggregateExpr(&query, "input_tokens", conditional)
+		query.WriteString(", ")
+		appendPeriodAggregateExpr(&query, "cached_tokens", conditional)
+		query.WriteString(", ")
+		appendPeriodAggregateExpr(&query, "cache_creation_tokens", conditional)
+		query.WriteString(", ")
+		appendPeriodAggregateExpr(&query, "output_tokens", conditional)
+		if conditional {
+			since := formatLogTimestamp(window.Since)
+			args = append(args, since, since, since, since, since)
+		}
+	}
+	query.WriteString(" FROM usage_records WHERE ")
+	query.WriteString(activeUsagePredicate)
+
+	if deviceID != "" && deviceID != "all" {
+		query.WriteString(" AND device_id = ?")
+		args = append(args, deviceID)
+	}
+	if source != "" {
+		query.WriteString(" AND source = ?")
+		args = append(args, source)
+	}
+
+	values := make([]struct {
+		cost          sql.NullFloat64
+		input         sql.NullInt64
+		cached        sql.NullInt64
+		cacheCreation sql.NullInt64
+		output        sql.NullInt64
+	}, len(windows))
+	scanArgs := make([]interface{}, 0, len(windows)*5)
+	for i := range values {
+		scanArgs = append(scanArgs, &values[i].cost, &values[i].input, &values[i].cached, &values[i].cacheCreation, &values[i].output)
+	}
+
+	if err := d.conn.QueryRow(query.String(), args...).Scan(scanArgs...); err != nil {
+		return nil, err
+	}
+
+	buckets := make([]PeriodStatsBucket, 0, len(windows))
+	for i, window := range windows {
+		buckets = append(buckets, PeriodStatsBucket{
+			Label:               window.Label,
+			Cost:                values[i].cost.Float64,
+			InputTokens:         int(values[i].input.Int64),
+			CachedTokens:        int(values[i].cached.Int64),
+			CacheCreationTokens: int(values[i].cacheCreation.Int64),
+			OutputTokens:        int(values[i].output.Int64),
+		})
+	}
+	return buckets, nil
+}
+
+func appendPeriodAggregateExpr(query *strings.Builder, column string, conditional bool) {
+	if conditional {
+		query.WriteString("COALESCE(SUM(CASE WHEN julianday(log_timestamp) >= julianday(?) THEN ")
+		query.WriteString(column)
+		query.WriteString(" ELSE 0 END), 0)")
+		return
+	}
+	query.WriteString("COALESCE(SUM(")
+	query.WriteString(column)
+	query.WriteString("), 0)")
+}
+
 // QueryPeriodStatsAll returns total cumulative cost and token breakdown.
 // source filters by source column; empty means all.
 func (d *DB) QueryPeriodStatsAll(deviceID string, source string) (float64, int, int, int, int, error) {
@@ -496,6 +754,102 @@ func (d *DB) QueryStatsSince(since time.Time, deviceID string, source string) ([
 	for rows.Next() {
 		var s ModelStat
 		if err := rows.Scan(&s.Source, &s.Model, &s.Events,
+			&s.InputTokens, &s.CachedTokens, &s.CacheCreationTokens, &s.OutputTokens, &s.TotalCost); err != nil {
+			return nil, err
+		}
+		stats = append(stats, s)
+	}
+	return stats, rows.Err()
+}
+
+// QuerySourceTotalsSince returns per-source aggregate stats without model/project details.
+func (d *DB) QuerySourceTotalsSince(since time.Time, deviceID string, source string) ([]SourceTotalStat, error) {
+	if since.IsZero() {
+		return d.QuerySourceTotalsSummary(deviceID, source)
+	}
+
+	query := `
+		SELECT source, COUNT(*) as events,
+			SUM(input_tokens), SUM(cached_tokens), SUM(cache_creation_tokens), SUM(output_tokens),
+			SUM(cost_usd)
+		FROM usage_records
+		WHERE COALESCE(superseded, 0) = 0
+	`
+	var args []interface{}
+
+	if !since.IsZero() {
+		query += " AND julianday(log_timestamp) >= julianday(?)"
+		args = append(args, formatLogTimestamp(since))
+	}
+
+	if deviceID != "" && deviceID != "all" {
+		query += " AND device_id = ?"
+		args = append(args, deviceID)
+	}
+	if source != "" {
+		query += " AND source = ?"
+		args = append(args, source)
+	}
+
+	query += `
+		GROUP BY source
+		ORDER BY SUM(cost_usd) DESC
+	`
+
+	rows, err := d.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stats []SourceTotalStat
+	for rows.Next() {
+		var s SourceTotalStat
+		if err := rows.Scan(&s.Source, &s.Events,
+			&s.InputTokens, &s.CachedTokens, &s.CacheCreationTokens, &s.OutputTokens, &s.TotalCost); err != nil {
+			return nil, err
+		}
+		stats = append(stats, s)
+	}
+	return stats, rows.Err()
+}
+
+// QuerySourceTotalsSummary returns all-time per-source totals from the maintained summary table.
+func (d *DB) QuerySourceTotalsSummary(deviceID string, source string) ([]SourceTotalStat, error) {
+	query := `
+		SELECT source, COALESCE(SUM(events), 0) as events,
+			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(cached_tokens), 0),
+			COALESCE(SUM(cache_creation_tokens), 0), COALESCE(SUM(output_tokens), 0),
+			COALESCE(SUM(cost_usd), 0)
+		FROM usage_source_totals
+		WHERE 1 = 1
+	`
+	var args []interface{}
+
+	if deviceID != "" && deviceID != "all" {
+		query += " AND device_id = ?"
+		args = append(args, deviceID)
+	}
+	if source != "" {
+		query += " AND source = ?"
+		args = append(args, source)
+	}
+
+	query += `
+		GROUP BY source
+		ORDER BY SUM(cost_usd) DESC
+	`
+
+	rows, err := d.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stats []SourceTotalStat
+	for rows.Next() {
+		var s SourceTotalStat
+		if err := rows.Scan(&s.Source, &s.Events,
 			&s.InputTokens, &s.CachedTokens, &s.CacheCreationTokens, &s.OutputTokens, &s.TotalCost); err != nil {
 			return nil, err
 		}

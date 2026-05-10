@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"ai-flight-dashboard/internal/config"
 )
 
 // SetAutoStart registers or unregisters the application for auto-start on login.
@@ -59,7 +61,15 @@ func setAutoStartDarwin(enabled bool) error {
 		return fmt.Errorf("get executable path: %w", err)
 	}
 
-	plistContent := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+	plistContent := darwinAutoStartPlist(exePath, config.GetDataDir())
+
+	dir := filepath.Dir(plistPath)
+	os.MkdirAll(dir, 0755)
+	return os.WriteFile(plistPath, []byte(plistContent), 0644)
+}
+
+func darwinAutoStartPlist(exePath string, dataDir string) string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -68,7 +78,8 @@ func setAutoStartDarwin(enabled bool) error {
     <key>ProgramArguments</key>
     <array>
         <string>%s</string>
-        <string>--gui</string>
+        <string>--data-dir</string>
+        <string>%s</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -76,11 +87,7 @@ func setAutoStartDarwin(enabled bool) error {
     <false/>
 </dict>
 </plist>
-`, exePath)
-
-	dir := filepath.Dir(plistPath)
-	os.MkdirAll(dir, 0755)
-	return os.WriteFile(plistPath, []byte(plistContent), 0644)
+`, exePath, dataDir)
 }
 
 // --- Linux: XDG Autostart ---
@@ -105,18 +112,22 @@ func setAutoStartLinux(enabled bool) error {
 		return fmt.Errorf("get executable path: %w", err)
 	}
 
-	content := fmt.Sprintf(`[Desktop Entry]
-Type=Application
-Name=AI Flight Dashboard
-Exec=%s --gui
-Icon=ai-flight-dashboard
-Terminal=false
-X-GNOME-Autostart-enabled=true
-`, exePath)
+	content := linuxAutoStartDesktopEntry(exePath, config.GetDataDir())
 
 	dir := filepath.Dir(desktopPath)
 	os.MkdirAll(dir, 0755)
 	return os.WriteFile(desktopPath, []byte(content), 0644)
+}
+
+func linuxAutoStartDesktopEntry(exePath string, dataDir string) string {
+	return fmt.Sprintf(`[Desktop Entry]
+Type=Application
+Name=AI Flight Dashboard
+Exec=%s --data-dir %s
+Icon=ai-flight-dashboard
+Terminal=false
+X-GNOME-Autostart-enabled=true
+`, exePath, dataDir)
 }
 
 // --- Windows: Registry (stub — requires golang.org/x/sys/windows) ---

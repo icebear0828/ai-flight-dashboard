@@ -25,9 +25,9 @@ echo ""
 echo "✅ Desktop binary built at: build/bin/ai-flight-dashboard"
 echo ""
 echo "Usage:"
-echo "  ./build/bin/ai-flight-dashboard --gui    # Native desktop window"
+echo "  ./build/bin/ai-flight-dashboard          # Native desktop window"
 echo "  ./build/bin/ai-flight-dashboard --web    # Web dashboard mode"
-echo "  ./build/bin/ai-flight-dashboard          # TUI terminal mode"
+echo "  ./build/bin/ai-flight-dashboard --tui    # TUI terminal mode"
 
 # Platform-specific packaging
 if [[ "$(uname)" == "Darwin" ]]; then

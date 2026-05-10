@@ -12,13 +12,13 @@ AI Flight Dashboard is a **TUI + Web dual-mode tool** built in Go. Using a **"pa
 - ⚡ **Blazing Fast**: Built with Go + [Bubble Tea](https://github.com/charmbracelet/bubbletea). Single binary, zero runtime dependencies, instant startup.
 - 💰 **Real-time Cost Calculation**: Built-in pricing engine converts raw token counts into USD costs per model.
 - 📊 **Project Tracking**: Automatically parses Claude workspace hash prefixes to precisely attribute token costs to specific code projects.
-- 💾 **SQLite Persistence**: All captured usage is automatically upserted into `stats/usage.db` for long-term analysis.
+- 💾 **SQLite Persistence**: All captured usage is automatically upserted into `stats/usage.db` under the resolved data-dir for long-term analysis.
 - 🌐 **Web Dashboard**: Start an HTTP server with `--web` to view a React-powered visual dashboard.
 - 📡 **LAN P2P Sharing**: Enable zero-config decentralized UDP multicast with `--lan` to instantly share live token usage across local machines.
 - 📦 **Fat Server Distribution**: Cross-platform binaries embedded natively. Other machines can join simply by running `curl -sL http://<master-ip>:19100/install.sh | bash` to auto-fetch the correct OS version.
 - 🛰️ **Remote Telemetry**: Use `--forward-to` to aggregate logs from multiple remote server probes into a single control panel.
 
-For complete configuration and cluster deployment guides, please refer to the [📚 Usage Guide (docs/usage.md)](docs/usage.md).
+For complete configuration and cluster deployment guides, please refer to the [📚 Usage Guide (usage.md)](usage.md).
 
 ## 🚀 Quick Start
 
@@ -39,8 +39,11 @@ sudo ./scripts/deploy.sh
 # Build
 go build -o dashboard ./cmd/dashboard
 
-# TUI mode — keep it in a terminal sidebar or Tmux split
+# GUI mode — default native desktop window
 ./dashboard
+
+# TUI mode — keep it in a terminal sidebar or Tmux split
+./dashboard --tui
 
 # Web mode — open http://localhost:19100 in your browser
 ./dashboard --web
@@ -54,6 +57,8 @@ go build -o dashboard ./cmd/dashboard
 ```
 
 `repair-history` rescans locally available Claude Code, Gemini CLI, and Codex history logs. It only marks replayable local Gemini legacy rows as superseded; it does not physically delete records and does not affect LAN/remote device records. Dashboard holds `dashboard.lock` in the data-dir to prevent a second local process from writing the same database at the same time.
+
+The default data-dir is `~/.ai-flight-dashboard`. For portable mode or test isolation, pass `--data-dir <dir>` explicitly or set `AI_FLIGHT_DASHBOARD_DATA_DIR`.
 
 ### Simulate Radar Trigger
 

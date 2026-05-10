@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type AppConfig struct {
@@ -15,39 +16,44 @@ type AppConfig struct {
 // customDir allows overriding the data directory at runtime.
 var customDir string
 
+const DataDirEnv = "AI_FLIGHT_DASHBOARD_DATA_DIR"
+
 // SetDataDir overrides the default ~/.ai-flight-dashboard data directory.
 func SetDataDir(dir string) {
 	customDir = dir
 }
 
-func isWritable(dir string) bool {
-	testFile := filepath.Join(dir, ".writable_test")
-	f, err := os.OpenFile(testFile, os.O_WRONLY|os.O_CREATE, 0666)
-	if err != nil {
-		return false
-	}
-	f.Close()
-	os.Remove(testFile)
-	return true
-}
-
 // GetDataDir returns the application data directory.
 func GetDataDir() string {
 	if customDir != "" {
-		return customDir
+		return normalizeDataDir(customDir)
 	}
-	// Default portable
-	if isWritable(".") {
-		return "."
+	if envDir := strings.TrimSpace(os.Getenv(DataDirEnv)); envDir != "" {
+		return normalizeDataDir(envDir)
 	}
-	// Fallback for macOS App Translocation / Read-Only environments
 	home, err := os.UserHomeDir()
-	if err == nil {
-		fallbackDir := filepath.Join(home, ".ai-flight-dashboard")
-		os.MkdirAll(fallbackDir, 0755)
-		return fallbackDir
+	if err == nil && home != "" {
+		dir := filepath.Join(home, ".ai-flight-dashboard")
+		os.MkdirAll(dir, 0755)
+		return dir
 	}
 	return "."
+}
+
+func normalizeDataDir(dir string) string {
+	trimmed := strings.TrimSpace(dir)
+	if trimmed == "~" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			return home
+		}
+		return trimmed
+	}
+	if strings.HasPrefix(trimmed, "~/") {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			return filepath.Join(home, strings.TrimPrefix(trimmed, "~/"))
+		}
+	}
+	return filepath.Clean(trimmed)
 }
 
 func GetConfigPath() string {

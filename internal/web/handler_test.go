@@ -152,6 +152,70 @@ func TestAPIStatsCodexSourceFilter(t *testing.T) {
 	}
 }
 
+func TestAPIStatsDetailModes(t *testing.T) {
+	database, calc := testutil.NewTestDBAndCalc(t)
+	defer database.Close()
+
+	now := time.Now().UTC()
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{Source: "Codex", Model: "gpt-5.5", Project: "dashboard", InputTokens: 2000, CachedTokens: 1500, OutputTokens: 300},
+		2.50, now.Add(-1*time.Minute), "/codex.sqlite", "local",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := web.NewHandler(database, calc, nil, nil, "", emptyFS)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	summaryResp, err := http.Get(srv.URL + "/api/stats?device=all&source=Codex&detail=summary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer summaryResp.Body.Close()
+	if summaryResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected summary 200, got %d", summaryResp.StatusCode)
+	}
+	var summary model.StatsResponse
+	if err := json.NewDecoder(summaryResp.Body).Decode(&summary); err != nil {
+		t.Fatal(err)
+	}
+	if len(summary.Periods) == 0 || len(summary.Devices) == 0 {
+		t.Fatalf("expected summary periods/devices, got %+v", summary)
+	}
+	if len(summary.Sources) != 1 || len(summary.Sources[0].Models) != 0 || len(summary.Projects) != 0 {
+		t.Fatalf("summary should include source totals only, got %+v", summary)
+	}
+
+	detailsResp, err := http.Get(srv.URL + "/api/stats?device=all&source=Codex&detail=details")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer detailsResp.Body.Close()
+	if detailsResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected details 200, got %d", detailsResp.StatusCode)
+	}
+	var details model.StatsResponse
+	if err := json.NewDecoder(detailsResp.Body).Decode(&details); err != nil {
+		t.Fatal(err)
+	}
+	if len(details.Periods) != 0 || len(details.Devices) != 0 {
+		t.Fatalf("details should omit summary periods/devices, got %+v", details)
+	}
+	if len(details.Sources) != 1 || len(details.Sources[0].Models) != 1 || len(details.Projects) != 1 {
+		t.Fatalf("expected details models/projects, got %+v", details)
+	}
+
+	badResp, err := http.Get(srv.URL + "/api/stats?detail=invalid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer badResp.Body.Close()
+	if badResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected invalid detail 400, got %d", badResp.StatusCode)
+	}
+}
+
 func TestStaticPage(t *testing.T) {
 	database, calc := testutil.NewTestDBAndCalc(t)
 	defer database.Close()
