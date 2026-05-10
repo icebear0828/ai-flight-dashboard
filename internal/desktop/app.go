@@ -156,8 +156,7 @@ func (a *App) SaveConfig(cfg *config.AppConfig) error {
 
 // OpenSystemLogs opens the logs directory in the native file explorer.
 func (a *App) OpenSystemLogs() {
-	homeDir, _ := os.UserHomeDir()
-	logPath := filepath.Join(homeDir, ".ai-flight-dashboard", "stats")
+	logPath := filepath.Join(config.GetDataDir(), "stats")
 	// Wails BrowserOpenURL can open local directories if prefixed with file://
 	runtime.BrowserOpenURL(a.ctx, "file://"+logPath)
 }

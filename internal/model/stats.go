@@ -114,6 +114,16 @@ type LANScanResponse struct {
 	PeerInfos []LANPeerInfo `json:"peer_infos"`
 }
 
+// LANStatusResponse is returned by LAN control endpoints.
+type LANStatusResponse struct {
+	Enabled bool `json:"enabled"`
+}
+
+// SystemLogsResponse points clients at the local stats/log directory.
+type SystemLogsResponse struct {
+	Path string `json:"path"`
+}
+
 // CacheSavingsResponse is the cache savings analysis response.
 type CacheSavingsResponse struct {
 	ActualCost       float64 `json:"actual_cost"`

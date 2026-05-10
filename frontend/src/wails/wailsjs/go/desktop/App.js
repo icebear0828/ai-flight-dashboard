@@ -34,6 +34,10 @@ export function MinimiseToTray() {
   return window['go']['desktop']['App']['MinimiseToTray']();
 }
 
+export function OpenSystemLogs() {
+  return window['go']['desktop']['App']['OpenSystemLogs']();
+}
+
 export function SaveConfig(arg1) {
   return window['go']['desktop']['App']['SaveConfig'](arg1);
 }

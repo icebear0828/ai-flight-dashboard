@@ -32,7 +32,7 @@ type WailsWindow = Window & {
   go?: {
     desktop?: {
       App?: {
-        OpenSystemLogs?: () => void;
+        OpenSystemLogs?: () => Promise<void> | void;
       };
     };
   };
@@ -185,6 +185,7 @@ export default function App() {
   const [selectedSource, setSelectedSource] = useState<string>("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string>("");
+  const [systemLogsNotice, setSystemLogsNotice] = useState<string>("");
   const [projectsCollapsed, setProjectsCollapsed] = useState(false);
   const [collapsedModelSources, setCollapsedModelSources] = useState<Record<string, boolean>>({});
   
@@ -230,6 +231,28 @@ export default function App() {
     }));
   };
 
+  const openSystemLogs = async () => {
+    try {
+      const app = wailsWindow().go?.desktop?.App;
+      if (app?.OpenSystemLogs) {
+        await Promise.resolve(app.OpenSystemLogs());
+        setSystemLogsNotice(t('systemLogsOpened'));
+        return;
+      }
+
+      const res = await fetch('/api/system/logs');
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const payload = asRecord(await res.json());
+      const path = text(payload.path);
+      setSystemLogsNotice(path ? `${t('systemLogsPath')}: ${path}` : t('systemLogsError'));
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      setSystemLogsNotice(`${t('systemLogsError')}: ${message}`);
+    }
+  };
+
   // Detect if we are running inside the Wails desktop app
   const isDesktop = typeof window !== 'undefined' && wailsWindow().go !== undefined;
 
@@ -267,7 +290,7 @@ export default function App() {
             ))}
           </h1>
           <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-            <button 
+            <button
               onClick={togglePause}
               style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}
               className={`border-[3px] px-3 py-1 font-sans text-xs font-semibold uppercase tracking-wider w-fit min-w-[100px] text-center cursor-pointer ${data?.is_paused ? 'border-[#FF0000] text-[#FF0000] hover:bg-[#FF0000] hover:text-[#FFFFFF]' : 'border-[#008000] text-[#008000] hover:bg-[#008000] hover:text-[#FFFFFF]'}`}
@@ -292,34 +315,34 @@ export default function App() {
         <div className="font-mono text-sm md:text-base text-left md:text-right flex flex-col items-start md:items-end w-full md:w-auto mt-4 md:mt-0">
           <div>{t('dataRefreshRate')}</div>
           <div className="flex flex-wrap gap-4 mt-2">
-            <button 
+            <button
               onClick={() => setIsSettingsOpen(true)}
               style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}
               className="text-[#0000FF] uppercase underline decoration-[3px] underline-offset-4 cursor-pointer bg-transparent border-none p-0 hover:text-[#000000] whitespace-nowrap"
             >
               [ {t('settings')} ]
             </button>
-            <button 
+            <button
               onClick={() => i18n.changeLanguage(i18n.language === 'zh' ? 'en' : 'zh')}
               style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}
               className="text-[#0000FF] uppercase underline decoration-[3px] underline-offset-4 cursor-pointer bg-transparent border-none p-0 hover:text-[#000000] whitespace-nowrap"
             >
               [ {i18n.language === 'zh' ? 'EN' : '中'} ]
             </button>
-            <div 
-              onClick={() => {
-                const app = wailsWindow().go?.desktop?.App;
-                if (app?.OpenSystemLogs) {
-                  app.OpenSystemLogs();
-                } else {
-                  console.log("OpenSystemLogs not available in web mode");
-                }
-              }}
-              className="text-[#0000FF] uppercase underline decoration-[3px] underline-offset-4 cursor-pointer hover:text-[#000000] whitespace-nowrap"
+            <button
+              type="button"
+              onClick={openSystemLogs}
+              style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}
+              className="text-[#0000FF] uppercase underline decoration-[3px] underline-offset-4 cursor-pointer bg-transparent border-none p-0 hover:text-[#000000] whitespace-nowrap"
             >
               [ {t('systemLogs')} ]
-            </div>
+            </button>
           </div>
+          {systemLogsNotice && (
+            <div role="status" className="mt-3 max-w-full md:max-w-[520px] break-all border-[3px] border-[#000000] bg-[#F0F0F0] p-2 text-xs text-[#000000]">
+              {systemLogsNotice}
+            </div>
+          )}
         </div>
       </header>
       

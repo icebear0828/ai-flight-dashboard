@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"ai-flight-dashboard/internal/codexusage"
+	"ai-flight-dashboard/internal/config"
 	"ai-flight-dashboard/internal/db"
 	"ai-flight-dashboard/internal/lan"
 	"ai-flight-dashboard/internal/model"
@@ -206,6 +207,99 @@ func TestStartLocalLANServicesStartsHTTPWithoutSyncToken(t *testing.T) {
 	}
 	if self.DeviceID != "local-device" || self.HTTPPort != 19100 {
 		t.Fatalf("unexpected LAN self response: %+v", self)
+	}
+}
+
+func TestRuntimeLANControllerJoinLeaveRestartsLANRuntime(t *testing.T) {
+	configDir := t.TempDir()
+	config.SetDataDir(configDir)
+	defer config.SetDataDir("")
+
+	database := testutil.NewTestDB(t)
+	defer database.Close()
+
+	broadcastChan := make(chan model.TokenUsage)
+	usageChan := make(chan model.TokenUsage)
+	httpStarts := 0
+	runtimeStarts := 0
+	var runtimeContexts []context.Context
+
+	controller := newRuntimeLANController(
+		context.Background(),
+		true,
+		"local-device",
+		"19100",
+		"",
+		database,
+		broadcastChan,
+		usageChan,
+		func(ctx context.Context, port string, handler http.Handler) bool {
+			httpStarts++
+			runtimeContexts = append(runtimeContexts, ctx)
+			if port != "19100" {
+				t.Fatalf("expected port 19100, got %q", port)
+			}
+			if handler == nil {
+				t.Fatal("expected LAN HTTP handler")
+			}
+			return true
+		},
+		func(ctx context.Context, gotLAN *lan.LAN, gotDB *db.DB, token string, gotBroadcast <-chan model.TokenUsage, gotUsage chan<- model.TokenUsage) {
+			runtimeStarts++
+			runtimeContexts = append(runtimeContexts, ctx)
+			if gotLAN == nil || gotLAN.DeviceID != "local-device" {
+				t.Fatalf("unexpected LAN instance: %+v", gotLAN)
+			}
+			if gotDB != database {
+				t.Fatal("unexpected database")
+			}
+			if token != "" {
+				t.Fatalf("expected empty token, got %q", token)
+			}
+			if gotBroadcast != broadcastChan {
+				t.Fatal("unexpected broadcast channel")
+			}
+			if gotUsage != usageChan {
+				t.Fatal("unexpected usage channel")
+			}
+		},
+	)
+
+	status, err := controller.Join()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Enabled || controller.CurrentLAN() == nil {
+		t.Fatalf("expected LAN enabled after join, status=%+v current=%+v", status, controller.CurrentLAN())
+	}
+	if httpStarts != 1 || runtimeStarts != 1 {
+		t.Fatalf("expected one HTTP and runtime start, got http=%d runtime=%d", httpStarts, runtimeStarts)
+	}
+
+	status, err = controller.Leave()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Enabled || controller.CurrentLAN() != nil {
+		t.Fatalf("expected LAN disabled after leave, status=%+v current=%+v", status, controller.CurrentLAN())
+	}
+	for _, ctx := range runtimeContexts {
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Second):
+			t.Fatal("expected runtime context to be canceled after leave")
+		}
+	}
+
+	status, err = controller.Join()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Enabled || controller.CurrentLAN() == nil {
+		t.Fatalf("expected LAN enabled after rejoin, status=%+v current=%+v", status, controller.CurrentLAN())
+	}
+	if httpStarts != 2 || runtimeStarts != 2 {
+		t.Fatalf("expected LAN runtime to restart, got http=%d runtime=%d", httpStarts, runtimeStarts)
 	}
 }
 

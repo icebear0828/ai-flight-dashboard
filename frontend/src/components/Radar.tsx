@@ -26,6 +26,10 @@ const num = (value: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
+const record = (value: unknown): Record<string, unknown> => {
+  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {};
+};
+
 const fmt = (value: unknown) => {
   const n = num(value);
   if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
@@ -44,12 +48,32 @@ export default function Radar() {
   const { t } = useTranslation();
   const [peers, setPeers] = useState<LanPeer[]>([]);
   const [joined, setJoined] = useState(false);
+  const [updatingNetwork, setUpdatingNetwork] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
+
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch('/api/lan/status');
+        if (!res.ok) return;
+        const data = record(await res.json());
+        if (typeof data.enabled === 'boolean' && !cancelled) {
+          setJoined(data.enabled);
+          if (!data.enabled) {
+            setPeers([]);
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    };
+
     const fetchPeers = async () => {
       try {
         const res = await fetch('/api/lan/scan');
         const data = await res.json();
+        if (cancelled) return;
         if (Array.isArray(data.peer_infos)) {
           setPeers(data.peer_infos);
         } else if (Array.isArray(data.peers)) {
@@ -60,17 +84,47 @@ export default function Radar() {
       }
     };
     
+    fetchStatus();
     fetchPeers();
-    const interval = setInterval(fetchPeers, 3000);
-    return () => clearInterval(interval);
+    const interval = setInterval(() => {
+      fetchStatus();
+      fetchPeers();
+    }, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, []);
 
+  const applyStatus = (raw: unknown, fallback: boolean) => {
+    const data = record(raw);
+    setJoined(typeof data.enabled === 'boolean' ? data.enabled : fallback);
+  };
+
   const handleJoin = async () => {
+    setUpdatingNetwork(true);
     try {
-      await fetch('/api/lan/join', { method: 'POST' });
-      setJoined(true);
+      const res = await fetch('/api/lan/join', { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      applyStatus(await res.json(), true);
     } catch (e) {
       console.error(e);
+    } finally {
+      setUpdatingNetwork(false);
+    }
+  };
+
+  const handleLeave = async () => {
+    setUpdatingNetwork(true);
+    try {
+      const res = await fetch('/api/lan/leave', { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      applyStatus(await res.json(), false);
+      setPeers([]);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setUpdatingNetwork(false);
     }
   };
 
@@ -81,13 +135,23 @@ export default function Radar() {
         {!joined ? (
           <button 
             onClick={handleJoin}
-            className="border-[3px] border-[#000000] bg-[#000000] text-[#FFFFFF] px-4 py-2 sm:px-6 sm:py-2 font-bold text-sm sm:text-base uppercase hover:bg-[#333333] transition-none cursor-pointer"
+            disabled={updatingNetwork}
+            className="border-[3px] border-[#000000] bg-[#000000] text-[#FFFFFF] px-4 py-2 sm:px-6 sm:py-2 font-bold text-sm sm:text-base uppercase hover:bg-[#333333] transition-none cursor-pointer disabled:opacity-50"
           >
             {t('joinNetwork')}
           </button>
         ) : (
-          <div className="border-[3px] border-[#008000] text-[#008000] px-3 py-1 font-sans text-[11px] font-bold uppercase tracking-[1px]">
-            {t('connected')}
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="border-[3px] border-[#008000] text-[#008000] px-3 py-1 font-sans text-[11px] font-bold uppercase tracking-[1px]">
+              {t('connected')}
+            </div>
+            <button
+              onClick={handleLeave}
+              disabled={updatingNetwork}
+              className="border-[3px] border-[#FF0000] bg-[#FFFFFF] text-[#FF0000] px-4 py-2 sm:px-6 sm:py-2 font-bold text-sm sm:text-base uppercase hover:bg-[#FF0000] hover:text-[#FFFFFF] transition-none cursor-pointer disabled:opacity-50"
+            >
+              {t('leaveNetwork')}
+            </button>
           </div>
         )}
       </div>

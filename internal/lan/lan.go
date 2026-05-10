@@ -292,15 +292,25 @@ func (l *LAN) updatePeerSyncResult(id string, status string, errMsg string, sync
 
 // StartPinger periodically sends ping packets to the LAN.
 func (l *LAN) StartPinger() {
+	l.StartPingerContext(context.Background())
+}
+
+// StartPingerContext periodically sends ping packets until ctx is canceled.
+func (l *LAN) StartPingerContext(ctx context.Context) {
 	if data, err := json.Marshal(l.newPayload("ping")); err == nil {
 		l.sendToAll(data)
 	}
 
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
-		if data, err := json.Marshal(l.newPayload("ping")); err == nil {
-			l.sendToAll(data)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if data, err := json.Marshal(l.newPayload("ping")); err == nil {
+				l.sendToAll(data)
+			}
 		}
 	}
 }
@@ -574,8 +584,21 @@ func (l *LAN) sendToAll(data []byte) {
 // StartBroadcaster listens to local usage events and broadcasts dirty signals.
 // Token records are synchronized over HTTP, not UDP.
 func (l *LAN) StartBroadcaster(usageChan <-chan model.TokenUsage) {
-	for range usageChan {
-		l.AnnounceDirty()
+	l.StartBroadcasterContext(context.Background(), usageChan)
+}
+
+// StartBroadcasterContext broadcasts dirty signals until ctx is canceled.
+func (l *LAN) StartBroadcasterContext(ctx context.Context, usageChan <-chan model.TokenUsage) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case _, ok := <-usageChan:
+			if !ok {
+				return
+			}
+			l.AnnounceDirty()
+		}
 	}
 }
 

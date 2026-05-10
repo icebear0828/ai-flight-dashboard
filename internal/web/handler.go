@@ -110,7 +110,34 @@ func handleLANSelf(w http.ResponseWriter, r *http.Request, lanInst *lan.LAN) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+func currentLAN(lanControl LANController) *lan.LAN {
+	if lanControl == nil {
+		return nil
+	}
+	return lanControl.CurrentLAN()
+}
+
+func handleSystemLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	logPath := filepath.Join(config.GetDataDir(), "stats")
+	if err := os.MkdirAll(logPath, 0755); err != nil {
+		http.Error(w, "Failed to prepare system logs directory", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(model.SystemLogsResponse{Path: logPath})
+}
+
 func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Watcher, lanInst *lan.LAN, token string, distBinFS embed.FS) http.Handler {
+	return NewHandlerWithLANController(database, calc, wInst, newStaticLANController(lanInst), token, distBinFS)
+}
+
+func NewHandlerWithLANController(database *db.DB, calc *calculator.Calculator, wInst *watcher.Watcher, lanControl LANController, token string, distBinFS embed.FS) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +221,7 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 	}))
 
 	mux.HandleFunc("/api/lan/self", func(w http.ResponseWriter, r *http.Request) {
-		handleLANSelf(w, r, lanInst)
+		handleLANSelf(w, r, currentLAN(lanControl))
 	})
 
 	mux.HandleFunc("/api/lan/scan", func(w http.ResponseWriter, r *http.Request) {
@@ -204,6 +231,7 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 		}
 		peers := make([]string, 0)
 		peerInfos := make([]model.LANPeerInfo, 0)
+		lanInst := currentLAN(lanControl)
 		if lanInst != nil {
 			peers = lanInst.GetActivePeers()
 			aliases, _ := database.GetDeviceAliases()
@@ -240,16 +268,56 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 		json.NewEncoder(w).Encode(model.LANScanResponse{Peers: peers, PeerInfos: peerInfos})
 	})
 
+	mux.HandleFunc("/api/lan/status", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		status := model.LANStatusResponse{Enabled: false}
+		if lanControl != nil {
+			status = lanControl.Status()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(status)
+	})
+
 	mux.HandleFunc("/api/lan/join", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if lanInst != nil {
-			lanInst.Ping()
+		status := model.LANStatusResponse{Enabled: false}
+		var err error
+		if lanControl != nil {
+			status, err = lanControl.Join()
 		}
-		w.WriteHeader(http.StatusOK)
+		if err != nil {
+			http.Error(w, "Failed to join LAN", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(status)
 	})
+
+	mux.HandleFunc("/api/lan/leave", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		status := model.LANStatusResponse{Enabled: false}
+		var err error
+		if lanControl != nil {
+			status, err = lanControl.Leave()
+		}
+		if err != nil {
+			http.Error(w, "Failed to leave LAN", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(status)
+	})
+
+	mux.HandleFunc("/api/system/logs", handleSystemLogs)
 
 	mux.HandleFunc("/api/sync/pull", syncAuthMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
 		handleSyncPull(w, r, database)
