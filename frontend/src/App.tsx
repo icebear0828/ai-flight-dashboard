@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import SettingsModal from "./SettingsModal";
-import Radar from "./components/Radar";
+
+const SettingsModal = lazy(() => import("./SettingsModal"));
+const Radar = lazy(() => import("./components/Radar"));
 
 const num = (value: unknown): number => {
   const n = typeof value === 'number' ? value : Number(value);
@@ -21,6 +22,24 @@ const fmt = (value: unknown) => {
 };
 const fmtCost = (value: unknown) => '$' + num(value).toFixed(2);
 const fmtPercent = (value: unknown) => num(value).toFixed(1) + '%';
+
+function LazyBlockFallback() {
+  return (
+    <div className="mb-16 md:mb-20 border-[5px] border-[#000000] bg-[#FFFFFF] p-6 md:p-10">
+      <div className="h-4 w-32 animate-pulse bg-[#000000]" aria-hidden="true"></div>
+    </div>
+  );
+}
+
+function LazyModalFallback() {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#000000]/80 p-4 md:p-6" style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}>
+      <div className="w-full max-w-5xl border-[5px] border-[#000000] bg-[#FFFFFF] p-6">
+        <div className="h-5 w-40 animate-pulse bg-[#000000]" aria-hidden="true"></div>
+      </div>
+    </div>
+  );
+}
 
 type JsonRecord = Record<string, unknown>;
 
@@ -178,6 +197,15 @@ const normalizeDashboardData = (raw: unknown): DashboardData => {
   };
 };
 
+const mergeDashboardDetails = (summary: DashboardData, details: DashboardData): DashboardData => {
+  return {
+    ...summary,
+    sources: details.sources.length > 0 ? details.sources : summary.sources,
+    projects: details.projects ?? [],
+    is_paused: details.is_paused,
+  };
+};
+
 export default function App() {
   const { t, i18n } = useTranslation();
   const [data, setData] = useState<DashboardData | null>(null);
@@ -185,31 +213,70 @@ export default function App() {
   const [selectedSource, setSelectedSource] = useState<string>("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string>("");
+  const [isStatsLoading, setIsStatsLoading] = useState(false);
   const [systemLogsNotice, setSystemLogsNotice] = useState<string>("");
   const [projectsCollapsed, setProjectsCollapsed] = useState(false);
   const [collapsedModelSources, setCollapsedModelSources] = useState<Record<string, boolean>>({});
+  const statsRequestSeqRef = useRef(0);
   
   useEffect(() => {
-    const fetchData = async () => {
+    let cancelled = false;
+    let inFlight = false;
+
+    const statsURL = (detail: 'summary' | 'details') => {
+      const params = new URLSearchParams({ device: selectedDevice, detail });
+      if (selectedSource) params.set('source', selectedSource);
+      return "/api/stats?" + params.toString();
+    };
+
+    const fetchData = async (showLoading: boolean) => {
+      if (inFlight) return;
+      inFlight = true;
+      const requestSeq = statsRequestSeqRef.current + 1;
+      statsRequestSeqRef.current = requestSeq;
+      if (showLoading) {
+        setIsStatsLoading(true);
+      }
       try {
-        // Works in both Wails (assets handler) and standalone Web mode
-        const params = new URLSearchParams({ device: selectedDevice });
-        if (selectedSource) params.set('source', selectedSource);
-        const res = await fetch("/api/stats?" + params.toString());
-        if (!res.ok) {
-           throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        const summaryRes = await fetch(statsURL('summary'));
+        if (!summaryRes.ok) {
+           throw new Error(`HTTP ${summaryRes.status}: ${await summaryRes.text()}`);
         }
-        const json = await res.json();
-        setData(normalizeDashboardData(json));
+        const summary = normalizeDashboardData(await summaryRes.json());
+        if (cancelled || requestSeq !== statsRequestSeqRef.current) return;
+        setData(summary);
         setErrorMsg("");
+        setIsStatsLoading(false);
+
+        try {
+          const detailsRes = await fetch(statsURL('details'));
+          if (!detailsRes.ok) {
+             throw new Error(`HTTP ${detailsRes.status}: ${await detailsRes.text()}`);
+          }
+          const details = normalizeDashboardData(await detailsRes.json());
+          if (cancelled || requestSeq !== statsRequestSeqRef.current) return;
+          setData(mergeDashboardDetails(summary, details));
+        } catch (detailsError: unknown) {
+          if (cancelled || requestSeq !== statsRequestSeqRef.current) return;
+          console.warn('Failed to load stats details', detailsError);
+        }
       } catch (e: unknown) {
+        if (cancelled || requestSeq !== statsRequestSeqRef.current) return;
         console.error(e);
         setErrorMsg(e instanceof Error ? e.toString() : String(e));
+      } finally {
+        inFlight = false;
+        if (!cancelled && requestSeq === statsRequestSeqRef.current) {
+          setIsStatsLoading(false);
+        }
       }
     };
-    fetchData();
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
+    fetchData(true);
+    const interval = setInterval(() => fetchData(false), 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [selectedDevice, selectedSource]);
 
   const togglePause = async () => {
@@ -281,6 +348,18 @@ export default function App() {
         <div className="h-10 w-full wails-drag fixed top-0 left-0 z-50 bg-[#FFFFFF]"></div>
       )}
 
+      {isStatsLoading && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`fixed left-4 right-4 ${isDesktop ? 'top-14' : 'top-4'} z-[60] flex items-center gap-3 border-[5px] border-[#000000] bg-[#FFFFFF] px-4 py-3 font-display text-sm uppercase text-[#000000] sm:left-auto sm:right-6 sm:w-[260px]`}
+          style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}
+        >
+          <span className="h-4 w-4 shrink-0 animate-pulse bg-[#000000]" aria-hidden="true"></span>
+          <span>{t('loading')}</span>
+        </div>
+      )}
+
       {/* Header Section */}
       <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 mb-16 border-b-[5px] border-[#000000] pb-6">
         <div>
@@ -346,7 +425,11 @@ export default function App() {
         </div>
       </header>
       
-      {isSettingsOpen && <SettingsModal onClose={() => setIsSettingsOpen(false)} />}
+      {isSettingsOpen && (
+        <Suspense fallback={<LazyModalFallback />}>
+          <SettingsModal onClose={() => setIsSettingsOpen(false)} />
+        </Suspense>
+      )}
 
       {/* Source Filter Tabs + PeriodCost Stats */}
       <section className="mb-12 md:mb-20">
@@ -397,7 +480,9 @@ export default function App() {
       </section>
 
       {/* LAN Radar Component */}
-      <Radar />
+      <Suspense fallback={<LazyBlockFallback />}>
+        <Radar />
+      </Suspense>
 
       {/* Projects Section */}
       {data.projects && data.projects.length > 0 && (

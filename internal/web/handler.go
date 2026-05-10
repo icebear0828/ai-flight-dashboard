@@ -139,9 +139,10 @@ func NewHandler(database *db.DB, calc *calculator.Calculator, wInst *watcher.Wat
 
 func NewHandlerWithLANController(database *db.DB, calc *calculator.Calculator, wInst *watcher.Watcher, lanControl LANController, token string, distBinFS embed.FS) http.Handler {
 	mux := http.NewServeMux()
+	statsCache := dashboard.NewStatsCache(2 * time.Second)
 
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
-		handleStats(w, r, database, calc, wInst)
+		handleStats(w, r, database, calc, wInst, statsCache)
 	})
 
 	mux.HandleFunc("/api/cache-savings", func(w http.ResponseWriter, r *http.Request) {
@@ -444,16 +445,41 @@ func handleSyncPull(w http.ResponseWriter, r *http.Request, database *db.DB) {
 	json.NewEncoder(w).Encode(page)
 }
 
-func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *calculator.Calculator, wInst *watcher.Watcher) {
+func handleStats(w http.ResponseWriter, r *http.Request, database *db.DB, calc *calculator.Calculator, wInst *watcher.Watcher, statsCache *dashboard.StatsCache) {
 	deviceID := r.URL.Query().Get("device")
 	source := r.URL.Query().Get("source") // "Claude Code", "Gemini CLI", or "" for all
+	detail := r.URL.Query().Get("detail")
 
 	isPaused := false
 	if wInst != nil {
 		isPaused = wInst.IsPaused()
 	}
 
-	stats, err := dashboard.BuildStats(database, calc, deviceID, source, isPaused)
+	var build func() (*model.StatsResponse, error)
+	switch detail {
+	case "", "full":
+		build = func() (*model.StatsResponse, error) {
+			return dashboard.BuildStats(database, calc, deviceID, source, isPaused)
+		}
+	case "summary":
+		build = func() (*model.StatsResponse, error) {
+			return dashboard.BuildStatsSummary(database, calc, deviceID, source, isPaused)
+		}
+	case "details":
+		build = func() (*model.StatsResponse, error) {
+			return dashboard.BuildStatsDetails(database, calc, deviceID, source, isPaused)
+		}
+	default:
+		http.Error(w, "invalid stats detail mode", http.StatusBadRequest)
+		return
+	}
+
+	stats, err := statsCache.Get(dashboard.StatsCacheKey{
+		DeviceID: deviceID,
+		Source:   source,
+		Detail:   detail,
+		IsPaused: isPaused,
+	}, build)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -559,19 +585,9 @@ func handlePutPricing(w http.ResponseWriter, r *http.Request, calc *calculator.C
 		}
 	}
 
-	// Persist to ~/.ai-flight-dashboard/custom_pricing.json
-	home, err := os.UserHomeDir()
-	if err != nil {
-		http.Error(w, "Failed to resolve user home directory for persistence", http.StatusInternalServerError)
-		return
-	}
-
-	configDir := filepath.Join(home, ".ai-flight-dashboard")
-	os.MkdirAll(configDir, 0755)
-
 	// Load existing first to merge, so we don't lose other custom models
 	existingCustomPrices := make(map[string]calculator.ModelPrice)
-	customPricingPath := filepath.Join(configDir, "custom_pricing.json")
+	customPricingPath := config.GetCustomPricingPath()
 	if data, err := os.ReadFile(customPricingPath); err == nil {
 		if err := json.Unmarshal(data, &existingCustomPrices); err != nil {
 			http.Error(w, "Existing custom_pricing.json is corrupted. Refusing to overwrite.", http.StatusInternalServerError)
@@ -589,6 +605,10 @@ func handlePutPricing(w http.ResponseWriter, r *http.Request, calc *calculator.C
 		return
 	}
 
+	if err := os.MkdirAll(filepath.Dir(customPricingPath), 0755); err != nil {
+		http.Error(w, "Failed to prepare pricing directory", http.StatusInternalServerError)
+		return
+	}
 	if err := os.WriteFile(customPricingPath, data, 0644); err != nil {
 		http.Error(w, "Failed to write pricing data to disk", http.StatusInternalServerError)
 		return

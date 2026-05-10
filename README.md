@@ -12,7 +12,7 @@ AI Flight Dashboard 是一个基于 Go 语言构建的 **命令行 UI (TUI) + We
 - ⚡ **极致性能**: Go 语言 + [Bubble Tea](https://github.com/charmbracelet/bubbletea) 构建，单文件可执行分发，极速启动。
 - 💰 **实时成本折算**: 内置计费引擎，将 Token 数字根据不同模型实时折算为美元 (USD) 成本。
 - 📊 **代码工程归因 (Project Tracking)**: 自动解析 Claude 工作区哈希前缀，精确统计各个代码项目的独立 Token 花费。
-- 💾 **SQLite 数据脱水**: 所有捕获的消耗流会自动 upsert 进入 `stats/usage.db`，沉淀长期分析数据。
+- 💾 **SQLite 数据脱水**: 所有捕获的消耗流会自动 upsert 进入 data-dir 下的 `stats/usage.db`，沉淀长期分析数据。
 - 🌐 **Web 看板模式**: 通过 `--web` 启动 HTTP 服务，在浏览器中查看 React 驱动的可视化仪表盘。
 - 📡 **局域网 P2P 互联**: 通过 `--lan` 启用纯去中心化 UDP 组播，免配置实现局域网内多台电脑 Token 实时共享与探测。
 - 📦 **Fat Server 跨平台分发**: 提供内嵌式多端二进制分发。新设备只需执行 `curl -sL http://主节点IP:19100/install.sh | bash` 即可自适应拉取正确版本的本体并加入雷达网络。
@@ -20,7 +20,7 @@ AI Flight Dashboard 是一个基于 Go 语言构建的 **命令行 UI (TUI) + We
 
 ## 🚀 快速体验
 
-完整的配置指南与集群部署，请参考 [📚 使用手册 (docs/usage.md)](docs/usage.md)。
+完整的配置指南与集群部署，请参考 [📚 使用手册 (usage.md)](usage.md)。
 
 ### macOS 安装
 
@@ -43,8 +43,11 @@ sudo ./scripts/deploy.sh
 # 编译
 go build -o dashboard ./cmd/dashboard
 
-# TUI 模式 — 放在终端侧栏或 Tmux 分屏
+# GUI 模式 — 默认启动桌面窗口
 ./dashboard
+
+# TUI 模式 — 放在终端侧栏或 Tmux 分屏
+./dashboard --tui
 
 # Web 模式 — 浏览器访问 http://localhost:19100
 ./dashboard --web
@@ -58,6 +61,8 @@ go build -o dashboard ./cmd/dashboard
 ```
 
 `repair-history` 会重新扫描本机可访问的 Claude Code、Gemini CLI 和 Codex 历史日志。它只会将可从磁盘重放的本机 Gemini 旧记录标记为已替代，不会物理删除记录，也不会影响局域网/远端设备记录。Dashboard 会在 data-dir 下持有 `dashboard.lock`，防止第二个本地进程同时写入同一个数据库。
+
+默认 data-dir 是 `~/.ai-flight-dashboard`。如需便携模式或测试隔离，显式传 `--data-dir <dir>`，也可以用 `AI_FLIGHT_DASHBOARD_DATA_DIR` 设置。
 
 ### 模拟触发雷达
 

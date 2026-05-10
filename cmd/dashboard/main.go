@@ -332,7 +332,7 @@ func main() {
 	budgetDaily := flag.Float64("budget-daily", 0, "Daily budget limit in USD (only for api mode, 0=disabled)")
 	syncMode := flag.String("sync-mode", "poll", "Sync mode: poll (default), fsnotify, once")
 	lanMode := flag.Bool("lan", true, "Enable UDP Multicast LAN discovery and broadcast")
-	dataDir := flag.String("data-dir", "", "Data directory for database and config (default: current directory)")
+	dataDir := flag.String("data-dir", "", "Data directory for database and config (default: ~/.ai-flight-dashboard; env: AI_FLIGHT_DASHBOARD_DATA_DIR)")
 	flag.BoolVar(webMode, "w", false, "Run in web dashboard mode (shorthand)")
 	flag.StringVar(port, "p", "19100", "HTTP port for web mode (shorthand)")
 	flag.Parse()
@@ -425,11 +425,10 @@ func main() {
 		log.Fatalf("Failed to initialize calculator: %v", err)
 	}
 
-	home, _ := os.UserHomeDir()
-	customPricingPath := filepath.Join(home, ".ai-flight-dashboard", "custom_pricing.json")
-	if err := calc.LoadCustomPrices(customPricingPath); err != nil {
+	if err := calc.LoadCustomPrices(config.GetCustomPricingPath()); err != nil {
 		fmt.Printf("⚠️  Failed to load custom pricing: %v\n", err)
 	}
+	home, _ := os.UserHomeDir()
 
 	// Initialize Database
 	appDataDir := config.GetDataDir()
@@ -440,6 +439,9 @@ func main() {
 	defer processLock.Release()
 
 	dbPath := filepath.Join(statsDir, "usage.db")
+	fmt.Printf("📁 Data dir: %s\n", appDataDir)
+	fmt.Printf("🧾 Config: %s\n", config.GetConfigPath())
+	fmt.Printf("💾 Database: %s\n", dbPath)
 	database, err := db.New(dbPath)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)

@@ -81,11 +81,20 @@ func TestLoadConfig_MalformedJSON(t *testing.T) {
 }
 
 func TestGetConfigPath(t *testing.T) {
-	// Default (no SetDataDir): current directory
 	config.SetDataDir("")
+	t.Setenv("AI_FLIGHT_DASHBOARD_DATA_DIR", "")
+
 	path := config.GetConfigPath()
 	if filepath.Base(path) != "config.json" {
 		t.Errorf("expected config.json, got %s", filepath.Base(path))
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedDefault := filepath.Join(home, ".ai-flight-dashboard", "config.json")
+	if path != expectedDefault {
+		t.Errorf("expected default config path %s, got %s", expectedDefault, path)
 	}
 
 	// Custom dir
@@ -97,11 +106,30 @@ func TestGetConfigPath(t *testing.T) {
 	config.SetDataDir("")
 }
 
+func TestGetCustomPricingPathUsesDataDir(t *testing.T) {
+	dataDir := t.TempDir()
+	config.SetDataDir(dataDir)
+	defer config.SetDataDir("")
+
+	path := config.GetCustomPricingPath()
+	expected := filepath.Join(dataDir, "custom_pricing.json")
+	if path != expected {
+		t.Errorf("expected custom pricing path %s, got %s", expected, path)
+	}
+}
+
 func TestGetDataDir_Default(t *testing.T) {
 	config.SetDataDir("")
+	t.Setenv("AI_FLIGHT_DASHBOARD_DATA_DIR", "")
+
 	dir := config.GetDataDir()
-	if dir != "." {
-		t.Errorf("expected current directory '.', got %s", dir)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := filepath.Join(home, ".ai-flight-dashboard")
+	if dir != expected {
+		t.Errorf("expected default home data directory %s, got %s", expected, dir)
 	}
 }
 
@@ -111,5 +139,43 @@ func TestGetDataDir_Custom(t *testing.T) {
 	dir := config.GetDataDir()
 	if dir != "/my/data" {
 		t.Errorf("expected /my/data, got %s", dir)
+	}
+}
+
+func TestGetDataDir_EnvironmentOverride(t *testing.T) {
+	config.SetDataDir("")
+	envDir := filepath.Join(t.TempDir(), "env-data")
+	t.Setenv("AI_FLIGHT_DASHBOARD_DATA_DIR", envDir)
+
+	dir := config.GetDataDir()
+	if dir != envDir {
+		t.Errorf("expected environment data directory %s, got %s", envDir, dir)
+	}
+}
+
+func TestGetDataDir_CustomOverridesEnvironment(t *testing.T) {
+	envDir := filepath.Join(t.TempDir(), "env-data")
+	customDir := filepath.Join(t.TempDir(), "custom-data")
+	t.Setenv("AI_FLIGHT_DASHBOARD_DATA_DIR", envDir)
+	config.SetDataDir(customDir)
+	defer config.SetDataDir("")
+
+	dir := config.GetDataDir()
+	if dir != customDir {
+		t.Errorf("expected custom data directory %s, got %s", customDir, dir)
+	}
+}
+
+func TestGetDataDir_ExpandsHomeDirectory(t *testing.T) {
+	config.SetDataDir("~/ai-flight-test")
+	defer config.SetDataDir("")
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := filepath.Join(home, "ai-flight-test")
+	if dir := config.GetDataDir(); dir != expected {
+		t.Errorf("expected expanded home data directory %s, got %s", expected, dir)
 	}
 }

@@ -39,3 +39,6 @@ test_dashboard
 .idea/
 .vscode/
 *.exe
+
+# Local-only audit notes
+/docs/antigravity_audit.md
