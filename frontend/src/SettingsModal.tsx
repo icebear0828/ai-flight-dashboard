@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import DeviceManagementTab from './components/SettingsModal/DeviceManagementTab';
 import PricingTab from './components/SettingsModal/PricingTab';
 import SystemConfigTab from './components/SettingsModal/SystemConfigTab';
 
@@ -22,37 +23,59 @@ export interface DeviceInfo {
   display_name: string;
 }
 
+export interface DeviceSummary {
+  id: string;
+  display_name: string;
+  events: number;
+  input_tokens: number;
+  cached_tokens: number;
+  cache_creation_tokens: number;
+  output_tokens: number;
+  total_cost: number;
+  first_seen?: string;
+  last_seen?: string;
+}
+
 interface SettingsModalProps {
   onClose: () => void;
 }
 
 export default function SettingsModal({ onClose }: SettingsModalProps) {
   const { t } = useTranslation();
-  const [activeTab, setActiveTab] = useState<'pricing' | 'system'>('pricing');
+  const [activeTab, setActiveTab] = useState<'pricing' | 'devices' | 'system'>('pricing');
   
   const [pricing, setPricing] = useState<PricingEntry[]>([]);
   const [config, setConfig] = useState<AppConfig>({ auto_start: false, extra_watch_dirs: [] });
-  const [devices, setDevices] = useState<DeviceInfo[]>([]);
+  const [devices, setDevices] = useState<DeviceSummary[]>([]);
   
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   
   const [newModelName, setNewModelName] = useState('');
   const [newPath, setNewPath] = useState('');
+  const [newDeviceId, setNewDeviceId] = useState('');
+  const [newDeviceName, setNewDeviceName] = useState('');
   
   // Temporary state for inline device editing
   const [editingDevice, setEditingDevice] = useState<string | null>(null);
   const [editAliasName, setEditAliasName] = useState('');
 
+  const loadDevices = async () => {
+    const res = await fetch('/api/devices');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json() as DeviceSummary[];
+    if (Array.isArray(data)) setDevices(data);
+  };
+
   useEffect(() => {
     Promise.all([
       fetch('/api/pricing').then(res => res.json()),
       fetch('/api/config').then(res => res.json()),
-      fetch('/api/stats?device=all').then(res => res.json())
-    ]).then(([pricingData, configData, statsData]) => {
+      fetch('/api/devices').then(res => res.json())
+    ]).then(([pricingData, configData, devicesData]) => {
       if (Array.isArray(pricingData)) setPricing(pricingData);
       if (configData) setConfig(configData);
-      if (statsData && Array.isArray(statsData.devices)) setDevices(statsData.devices);
+      if (Array.isArray(devicesData)) setDevices(devicesData);
       setLoading(false);
     }).catch(err => {
       console.error("Failed to load data", err);
@@ -112,19 +135,61 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     setConfig({ ...config, enable_lan: !(config.enable_lan !== false) });
   };
 
-  const handleSaveAlias = async (deviceId: string) => {
-    if (!editAliasName.trim()) return;
+  const saveAlias = async (deviceId: string, displayName: string) => {
+    const id = deviceId.trim();
+    const name = displayName.trim();
+    if (!id || !name) return;
+    const res = await fetch('/api/device-alias', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: id, display_name: name })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  };
+
+  const handleAddAlias = async () => {
     try {
-      await fetch('/api/device-alias', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ device_id: deviceId, display_name: editAliasName.trim() })
-      });
-      setDevices(devices.map(d => d.id === deviceId ? { ...d, display_name: editAliasName.trim() } : d));
+      await saveAlias(newDeviceId, newDeviceName);
+      setNewDeviceId('');
+      setNewDeviceName('');
+      await loadDevices();
+    } catch (err) {
+      console.error("Failed to add alias", err);
+      alert("Failed to add device alias.");
+    }
+  };
+
+  const handleSaveAlias = async (deviceId: string) => {
+    try {
+      await saveAlias(deviceId, editAliasName);
       setEditingDevice(null);
+      await loadDevices();
     } catch (err) {
       console.error("Failed to save alias", err);
       alert("Failed to save device alias.");
+    }
+  };
+
+  const handleDeleteAlias = async (deviceId: string) => {
+    try {
+      const res = await fetch(`/api/device-alias?device_id=${encodeURIComponent(deviceId)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await loadDevices();
+    } catch (err) {
+      console.error("Failed to clear alias", err);
+      alert("Failed to clear device alias.");
+    }
+  };
+
+  const handleSupersedeDevice = async (deviceId: string) => {
+    if (!window.confirm(t('confirmSoftDeleteDevice', { id: deviceId }))) return;
+    try {
+      const res = await fetch(`/api/devices?device_id=${encodeURIComponent(deviceId)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await loadDevices();
+    } catch (err) {
+      console.error("Failed to clean device", err);
+      alert("Failed to clean device.");
     }
   };
 
@@ -174,7 +239,13 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
           >
             {t('modelPricing')}
           </button>
-          <button 
+          <button
+            onClick={() => setActiveTab('devices')}
+            className={`flex-1 py-3 px-4 whitespace-nowrap font-display text-lg sm:text-xl uppercase border-r-[5px] border-[#000000] transition-none ${activeTab === 'devices' ? 'bg-[#000000] text-[#FFFFFF]' : 'hover:bg-[#E0E0E0]'}`}
+          >
+            {t('deviceManagement')}
+          </button>
+          <button
             onClick={() => setActiveTab('system')} 
             className={`flex-1 py-3 px-4 whitespace-nowrap font-display text-lg sm:text-xl uppercase transition-none ${activeTab === 'system' ? 'bg-[#000000] text-[#FFFFFF]' : 'hover:bg-[#E0E0E0]'}`}
           >
@@ -200,20 +271,33 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 />
               )}
 
-              {/* --- SYSTEM CONFIG TAB --- */}
-              {activeTab === 'system' && (
-                <SystemConfigTab
-                  config={config}
+              {/* --- DEVICE MANAGEMENT TAB --- */}
+              {activeTab === 'devices' && (
+                <DeviceManagementTab
                   devices={devices}
-                  newPath={newPath}
-                  setNewPath={setNewPath}
-                  handleAddPath={handleAddPath}
-                  handleRemovePath={handleRemovePath}
+                  newDeviceId={newDeviceId}
+                  newDeviceName={newDeviceName}
+                  setNewDeviceId={setNewDeviceId}
+                  setNewDeviceName={setNewDeviceName}
+                  handleAddAlias={handleAddAlias}
                   editingDevice={editingDevice}
                   setEditingDevice={setEditingDevice}
                   editAliasName={editAliasName}
                   setEditAliasName={setEditAliasName}
                   handleSaveAlias={handleSaveAlias}
+                  handleDeleteAlias={handleDeleteAlias}
+                  handleSupersedeDevice={handleSupersedeDevice}
+                />
+              )}
+
+              {/* --- SYSTEM CONFIG TAB --- */}
+              {activeTab === 'system' && (
+                <SystemConfigTab
+                  config={config}
+                  newPath={newPath}
+                  setNewPath={setNewPath}
+                  handleAddPath={handleAddPath}
+                  handleRemovePath={handleRemovePath}
                   handleToggleLAN={handleToggleLAN}
                 />
               )}

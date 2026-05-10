@@ -50,6 +50,26 @@ type DeviceInfo struct {
 	DisplayName string `json:"display_name"`
 }
 
+// DeviceSummary represents a device row in the management UI.
+type DeviceSummary struct {
+	ID                  string    `json:"id"`
+	DisplayName         string    `json:"display_name"`
+	Events              int       `json:"events"`
+	InputTokens         int       `json:"input_tokens"`
+	CachedTokens        int       `json:"cached_tokens"`
+	CacheCreationTokens int       `json:"cache_creation_tokens"`
+	OutputTokens        int       `json:"output_tokens"`
+	TotalCost           float64   `json:"total_cost"`
+	FirstSeen           time.Time `json:"first_seen,omitempty"`
+	LastSeen            time.Time `json:"last_seen,omitempty"`
+}
+
+// DeviceSupersedeResponse describes a soft-delete operation for a device ID.
+type DeviceSupersedeResponse struct {
+	DeviceID        string `json:"device_id"`
+	SupersededCount int64  `json:"superseded_count"`
+}
+
 // ProjectStat represents aggregated token usage and cost for a project.
 type ProjectStat struct {
 	Project             string  `json:"project"`
