@@ -357,7 +357,7 @@ export default function App() {
               <div className="mb-4">
                 <h3 className="font-display text-xl xl:text-2xl leading-[1.1] uppercase mb-2">{p.label}</h3>
                 <div className="flex flex-col gap-1 font-mono text-xs xl:text-sm">
-                  <span>{t('labelIn')}: {fmt(Math.max(0, num(p.input_tokens) - num(p.cached_tokens) - num(p.cache_creation_tokens)))}</span>
+                  <span>{t('labelIn')}: {fmt(p.input_tokens)}</span>
                   <span>{t('cacheRead')}: {fmt(p.cached_tokens)}</span>
                   <span>{t('cacheWrite')}: {fmt(p.cache_creation_tokens)}</span>
                   <span>{t('labelOut')}: {fmt(p.output_tokens)}</span>
@@ -413,7 +413,7 @@ export default function App() {
                         <td className="px-3 py-3 sm:px-4 sm:py-4 font-bold group-hover:text-[#FFFFFF] truncate max-w-[300px]" title={p.project}>{p.project}</td>
                         <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">{p.events}</td>
                         <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
-                          {t('labelIn')}: {fmt(Math.max(0, num(p.input_tokens) - num(p.cached_tokens) - num(p.cache_creation_tokens)))} / {t('cacheRead')}: {fmt(p.cached_tokens)} / {t('cacheWrite')}: {fmt(p.cache_creation_tokens)} / {t('labelOut')}: {fmt(p.output_tokens)} / {t('cacheHitRate')}: {fmtPercent(p.cache_hit_rate)}
+                          {t('labelIn')}: {fmt(p.input_tokens)} / {t('cacheRead')}: {fmt(p.cached_tokens)} / {t('cacheWrite')}: {fmt(p.cache_creation_tokens)} / {t('labelOut')}: {fmt(p.output_tokens)} / {t('cacheHitRate')}: {fmtPercent(p.cache_hit_rate)}
                         </td>
                         <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-bold group-hover:text-[#FFFFFF]">{fmtCost(p.total_cost)}</td>
                       </tr>
@@ -549,7 +549,7 @@ export default function App() {
                               {t('labelIn')}: {fmtCost(m.input_price_per_m)} / {t('cacheRead')}: {fmtCost(m.cached_price_per_m)} / {t('cacheWrite')}: {fmtCost(m.cache_creation_price_per_m)} / {t('labelOut')}: {fmtCost(m.output_price_per_m)}
                             </td>
                             <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
-                              {t('labelIn')}: {fmt(Math.max(0, num(m.input_tokens) - num(m.cached_tokens) - num(m.cache_creation_tokens)))} / {t('cacheRead')}: {fmt(m.cached_tokens)} / {t('cacheWrite')}: {fmt(m.cache_creation_tokens)} / {t('labelOut')}: {fmt(m.output_tokens)} / {t('cacheHitRate')}: {fmtPercent(m.cache_hit_rate)}
+                              {t('labelIn')}: {fmt(m.input_tokens)} / {t('cacheRead')}: {fmt(m.cached_tokens)} / {t('cacheWrite')}: {fmt(m.cache_creation_tokens)} / {t('labelOut')}: {fmt(m.output_tokens)} / {t('cacheHitRate')}: {fmtPercent(m.cache_hit_rate)}
                             </td>
                             <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">{m.events}</td>
                             <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-bold group-hover:text-[#FFFFFF]">{fmtCost(m.total_cost)}</td>

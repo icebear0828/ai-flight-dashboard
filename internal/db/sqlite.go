@@ -358,6 +358,22 @@ func (d *DB) SupersedeLegacyUsageBySourceFilePathsAndDevices(source string, file
 	return changed, nil
 }
 
+// SupersedeUsageBySourceFilePathDeviceUUIDPrefix hides active rows from a
+// superseded source that used different UUIDs for the same underlying usage.
+func (d *DB) SupersedeUsageBySourceFilePathDeviceUUIDPrefix(source string, filePath string, deviceID string, uuidPrefix string) (int64, error) {
+	if source == "" || filePath == "" || deviceID == "" || uuidPrefix == "" {
+		return 0, nil
+	}
+	result, err := d.conn.Exec(
+		"UPDATE usage_records SET superseded = 1, updated_at = ? WHERE source = ? AND file_path = ? AND device_id = ? AND uuid LIKE ? AND COALESCE(superseded, 0) = 0",
+		formatLogTimestamp(time.Now().UTC()), source, filePath, deviceID, uuidPrefix+"%",
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 // QueryPeriodStatsSince returns total cost and token breakdown since the given time.
 // source filters by source column (e.g. "Claude Code", "Gemini CLI"); empty means all.
 func (d *DB) QueryPeriodStatsSince(since time.Time, deviceID string, source string) (float64, int, int, int, int, error) {
