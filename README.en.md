@@ -123,7 +123,7 @@ POST /api/device-alias        # Set device alias (body: {"device_id": "...", "di
 GET /download/dashboard       # Fetch embedded Fat Server binary matching host OS
 ```
 
-Returns `{ periods, sources, devices, projects }` — see [dashboard-api.md](dashboard-api.md) for details.
+Returns `{ periods, sources, devices, projects }`. See [usage.md](usage.md) for the common API summary.
 
 ## 🗺 Roadmap
 
