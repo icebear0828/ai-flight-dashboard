@@ -87,14 +87,19 @@ func startLANGoroutines(ctx context.Context, lanInst *lan.LAN, database *db.DB, 
 	}
 }
 
-func startLANHTTPServer(ctx context.Context, port string, handler http.Handler) bool {
+type lanHTTPServerHandle struct {
+	done <-chan struct{}
+}
+
+func startLANHTTPServer(ctx context.Context, port string, handler http.Handler) (*lanHTTPServerHandle, bool) {
 	addr := "0.0.0.0:" + port
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Printf("LAN API server unavailable on port %s: %v", port, err)
-		return false
+		return nil, false
 	}
 	srv := &http.Server{Handler: handler}
+	done := make(chan struct{})
 
 	go func() {
 		<-ctx.Done()
@@ -104,16 +109,19 @@ func startLANHTTPServer(ctx context.Context, port string, handler http.Handler) 
 	}()
 
 	go func() {
+		defer close(done)
 		fmt.Printf("🌐 LAN API server: http://0.0.0.0:%s\n", port)
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("LAN API server unavailable on port %s: %v", port, err)
 		}
 	}()
-	return true
+	return &lanHTTPServerHandle{done: done}, true
 }
 
-type lanHTTPServerStarter func(context.Context, string, http.Handler) bool
+type lanHTTPServerStarter func(context.Context, string, http.Handler) (*lanHTTPServerHandle, bool)
 type lanRuntimeStarter func(context.Context, *lan.LAN, *db.DB, string, <-chan model.TokenUsage, chan<- model.TokenUsage)
+
+const lanHTTPShutdownWait = 4 * time.Second
 
 type runtimeLANController struct {
 	mu            sync.RWMutex
@@ -128,6 +136,7 @@ type runtimeLANController struct {
 	startHTTP     lanHTTPServerStarter
 	startRuntime  lanRuntimeStarter
 	cancel        context.CancelFunc
+	httpDone      <-chan struct{}
 	lanInst       *lan.LAN
 }
 
@@ -175,20 +184,30 @@ func (c *runtimeLANController) Join() (model.LANStatusResponse, error) {
 
 	if c.lanInst != nil {
 		c.lanInst.Ping()
-		c.saveLANSetting(true)
+		if err := c.saveLANSetting(true); err != nil {
+			return model.LANStatusResponse{Enabled: true}, err
+		}
 		return model.LANStatusResponse{Enabled: true}, nil
 	}
-
 	enabled := true
 	lanInst := newLANInstance(c.lanMode, &enabled, c.token, c.deviceID, c.port)
 	if lanInst == nil {
 		return model.LANStatusResponse{Enabled: false}, fmt.Errorf("LAN is disabled by launch configuration")
 	}
+	if err := c.saveLANSetting(true); err != nil {
+		return model.LANStatusResponse{Enabled: false}, err
+	}
 
 	runtimeCtx, cancel := context.WithCancel(c.parentCtx)
+	var httpHandle *lanHTTPServerHandle
 	if c.startHTTP != nil {
-		if !c.startHTTP(runtimeCtx, c.port, web.NewLANHandler(c.database, c.token, lanInst)) {
+		var ok bool
+		httpHandle, ok = c.startHTTP(runtimeCtx, c.port, web.NewLANHandler(c.database, c.token, lanInst))
+		if !ok {
 			cancel()
+			if err := c.saveLANSetting(false); err != nil {
+				return model.LANStatusResponse{Enabled: false}, err
+			}
 			return model.LANStatusResponse{Enabled: false}, fmt.Errorf("failed to start LAN HTTP server")
 		}
 	}
@@ -196,7 +215,11 @@ func (c *runtimeLANController) Join() (model.LANStatusResponse, error) {
 
 	c.lanInst = lanInst
 	c.cancel = cancel
-	c.saveLANSetting(true)
+	if httpHandle != nil {
+		c.httpDone = httpHandle.done
+	} else {
+		c.httpDone = nil
+	}
 	return model.LANStatusResponse{Enabled: true}, nil
 }
 
@@ -204,25 +227,50 @@ func (c *runtimeLANController) Leave() (model.LANStatusResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.lanInst == nil {
+		if err := c.saveLANSetting(false); err != nil {
+			return model.LANStatusResponse{Enabled: false}, err
+		}
+		return model.LANStatusResponse{Enabled: false}, nil
+	}
+	if err := c.saveLANSetting(false); err != nil {
+		return model.LANStatusResponse{Enabled: true}, err
+	}
+
 	if c.cancel != nil {
 		c.cancel()
 		c.cancel = nil
 	}
+	if err := waitForLANHTTPShutdown(c.httpDone); err != nil {
+		return model.LANStatusResponse{Enabled: true}, err
+	}
+	c.httpDone = nil
 	c.lanInst = nil
-	c.saveLANSetting(false)
 	return model.LANStatusResponse{Enabled: false}, nil
 }
 
-func (c *runtimeLANController) saveLANSetting(enabled bool) {
+func waitForLANHTTPShutdown(done <-chan struct{}) error {
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-time.After(lanHTTPShutdownWait):
+		return fmt.Errorf("timed out waiting for LAN HTTP server shutdown")
+	}
+}
+
+func (c *runtimeLANController) saveLANSetting(enabled bool) error {
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		log.Printf("Failed to load LAN config: %v", err)
-		return
+		return fmt.Errorf("failed to load LAN config: %w", err)
 	}
 	cfg.EnableLAN = &enabled
 	if err := config.SaveConfig(cfg); err != nil {
-		log.Printf("Failed to save LAN config: %v", err)
+		return fmt.Errorf("failed to save LAN config: %w", err)
 	}
+	return nil
 }
 
 const codexTelemetryBackfillMigrationKey = "migration:codex-telemetry-event-prefix-v1"
@@ -241,7 +289,7 @@ func startLocalLANServices(
 	if lanInst == nil {
 		return false
 	}
-	if !startHTTP(ctx, port, web.NewLANHandler(database, token, lanInst)) {
+	if _, ok := startHTTP(ctx, port, web.NewLANHandler(database, token, lanInst)); !ok {
 		return false
 	}
 	startRuntime(ctx, lanInst, database, token, broadcastChan, usageChan)

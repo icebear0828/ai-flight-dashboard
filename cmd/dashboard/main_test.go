@@ -164,13 +164,13 @@ func TestStartLocalLANServicesStartsHTTPWithoutSyncToken(t *testing.T) {
 		"19100",
 		broadcastChan,
 		usageChan,
-		func(_ context.Context, port string, handler http.Handler) bool {
+		func(_ context.Context, port string, handler http.Handler) (*lanHTTPServerHandle, bool) {
 			httpStarts++
 			if port != "19100" {
 				t.Fatalf("expected LAN HTTP port 19100, got %q", port)
 			}
 			capturedHandler = handler
-			return true
+			return nil, true
 		},
 		func(_ context.Context, gotLAN *lan.LAN, _ *db.DB, token string, gotBroadcast <-chan model.TokenUsage, gotUsage chan<- model.TokenUsage) {
 			runtimeStarts++
@@ -233,7 +233,7 @@ func TestRuntimeLANControllerJoinLeaveRestartsLANRuntime(t *testing.T) {
 		database,
 		broadcastChan,
 		usageChan,
-		func(ctx context.Context, port string, handler http.Handler) bool {
+		func(ctx context.Context, port string, handler http.Handler) (*lanHTTPServerHandle, bool) {
 			httpStarts++
 			runtimeContexts = append(runtimeContexts, ctx)
 			if port != "19100" {
@@ -242,7 +242,7 @@ func TestRuntimeLANControllerJoinLeaveRestartsLANRuntime(t *testing.T) {
 			if handler == nil {
 				t.Fatal("expected LAN HTTP handler")
 			}
-			return true
+			return nil, true
 		},
 		func(ctx context.Context, gotLAN *lan.LAN, gotDB *db.DB, token string, gotBroadcast <-chan model.TokenUsage, gotUsage chan<- model.TokenUsage) {
 			runtimeStarts++
@@ -300,6 +300,156 @@ func TestRuntimeLANControllerJoinLeaveRestartsLANRuntime(t *testing.T) {
 	}
 	if httpStarts != 2 || runtimeStarts != 2 {
 		t.Fatalf("expected LAN runtime to restart, got http=%d runtime=%d", httpStarts, runtimeStarts)
+	}
+}
+
+func TestRuntimeLANControllerLeaveWaitsForHTTPShutdownBeforeRejoin(t *testing.T) {
+	configDir := t.TempDir()
+	config.SetDataDir(configDir)
+	defer config.SetDataDir("")
+
+	database := testutil.NewTestDB(t)
+	defer database.Close()
+
+	httpRelease := make(chan struct{})
+	httpCancelSeen := make(chan struct{}, 1)
+	httpStarts := 0
+	parentCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	controller := newRuntimeLANController(
+		parentCtx,
+		true,
+		"local-device",
+		"19100",
+		"",
+		database,
+		make(chan model.TokenUsage),
+		make(chan model.TokenUsage),
+		func(ctx context.Context, port string, handler http.Handler) (*lanHTTPServerHandle, bool) {
+			httpStarts++
+			done := make(chan struct{})
+			go func() {
+				<-ctx.Done()
+				httpCancelSeen <- struct{}{}
+				<-httpRelease
+				close(done)
+			}()
+			return &lanHTTPServerHandle{done: done}, true
+		},
+		func(context.Context, *lan.LAN, *db.DB, string, <-chan model.TokenUsage, chan<- model.TokenUsage) {},
+	)
+
+	if _, err := controller.Join(); err != nil {
+		t.Fatal(err)
+	}
+
+	leaveDone := make(chan error, 1)
+	go func() {
+		_, err := controller.Leave()
+		leaveDone <- err
+	}()
+
+	select {
+	case <-httpCancelSeen:
+	case <-time.After(time.Second):
+		t.Fatal("expected leave to cancel the HTTP server context")
+	}
+	select {
+	case err := <-leaveDone:
+		t.Fatalf("leave returned before HTTP shutdown completed: %v", err)
+	default:
+	}
+
+	close(httpRelease)
+	if err := <-leaveDone; err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := controller.Join(); err != nil {
+		t.Fatal(err)
+	}
+	if httpStarts != 2 {
+		t.Fatalf("expected HTTP server to start twice, got %d", httpStarts)
+	}
+}
+
+func TestRuntimeLANControllerDoesNotStartWhenLANConfigCannotPersist(t *testing.T) {
+	configDir := t.TempDir()
+	blocker := filepath.Join(configDir, "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("blocked"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	config.SetDataDir(blocker)
+	defer config.SetDataDir("")
+
+	database := testutil.NewTestDB(t)
+	defer database.Close()
+
+	runtimeStarts := 0
+	controller := newRuntimeLANController(
+		context.Background(),
+		true,
+		"local-device",
+		"19100",
+		"",
+		database,
+		make(chan model.TokenUsage),
+		make(chan model.TokenUsage),
+		nil,
+		func(context.Context, *lan.LAN, *db.DB, string, <-chan model.TokenUsage, chan<- model.TokenUsage) {
+			runtimeStarts++
+		},
+	)
+
+	status, err := controller.Join()
+	if err == nil {
+		t.Fatal("expected join to fail when LAN config cannot be persisted")
+	}
+	if status.Enabled || controller.CurrentLAN() != nil {
+		t.Fatalf("expected LAN to remain disabled after config failure, status=%+v current=%+v", status, controller.CurrentLAN())
+	}
+	if runtimeStarts != 0 {
+		t.Fatalf("expected runtime not to start when config cannot persist, got %d starts", runtimeStarts)
+	}
+}
+
+func TestRuntimeLANControllerDoesNotLeaveWhenLANConfigCannotPersist(t *testing.T) {
+	validConfigDir := t.TempDir()
+	config.SetDataDir(validConfigDir)
+	defer config.SetDataDir("")
+
+	database := testutil.NewTestDB(t)
+	defer database.Close()
+
+	controller := newRuntimeLANController(
+		context.Background(),
+		true,
+		"local-device",
+		"19100",
+		"",
+		database,
+		make(chan model.TokenUsage),
+		make(chan model.TokenUsage),
+		nil,
+		func(context.Context, *lan.LAN, *db.DB, string, <-chan model.TokenUsage, chan<- model.TokenUsage) {},
+	)
+	if _, err := controller.Join(); err != nil {
+		t.Fatal(err)
+	}
+
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("blocked"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	config.SetDataDir(blocker)
+
+	status, err := controller.Leave()
+	if err == nil {
+		t.Fatal("expected leave to fail when LAN config cannot be persisted")
+	}
+	if !status.Enabled || controller.CurrentLAN() == nil {
+		t.Fatalf("expected LAN to remain enabled after config failure, status=%+v current=%+v", status, controller.CurrentLAN())
 	}
 }
 
