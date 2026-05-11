@@ -389,18 +389,12 @@ func main() {
 		// Reuse the existing HTTP handler inside Wails.
 		apiHandler := web.NewHandlerWithLANController(database, calc, w, lanController, *token, root.DistBinFS)
 
-		err = wailsrun.Run(&options.App{
+		guiOptions := &options.App{
 			Title:     "AI Flight Dashboard",
 			Width:     1280,
 			Height:    800,
 			MinWidth:  900,
 			MinHeight: 600,
-			SingleInstanceLock: &options.SingleInstanceLock{
-				UniqueId: "ai-flight-dashboard",
-				OnSecondInstanceLaunch: func(secondInstanceData options.SecondInstanceData) {
-					// Wails handles focusing the primary window automatically
-				},
-			},
 			AssetServer: &assetserver.Options{
 				Assets:  guiAssets,
 				Handler: apiHandler,
@@ -419,7 +413,10 @@ func main() {
 					Message: "Real-time AI token cost monitoring",
 				},
 			},
-		})
+		}
+		configureGUIWindowLifecycle(guiOptions, app)
+
+		err = wailsrun.Run(guiOptions)
 		if err != nil {
 			log.Fatalf("GUI error: %v", err)
 		}
