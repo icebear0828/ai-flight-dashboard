@@ -29,12 +29,21 @@ type BudgetStatus struct {
 type BudgetAlert struct {
 	db         *db.DB
 	dailyLimit float64
+	now        func() time.Time
 }
 
 // NewBudgetAlert creates a budget alert checker.
 // A dailyLimit of 0 disables the alert (always green).
 func NewBudgetAlert(database *db.DB, dailyLimit float64) *BudgetAlert {
-	return &BudgetAlert{db: database, dailyLimit: dailyLimit}
+	return NewBudgetAlertWithClock(database, dailyLimit, time.Now)
+}
+
+// NewBudgetAlertWithClock creates a budget alert checker with an injected clock.
+func NewBudgetAlertWithClock(database *db.DB, dailyLimit float64, now func() time.Time) *BudgetAlert {
+	if now == nil {
+		now = time.Now
+	}
+	return &BudgetAlert{db: database, dailyLimit: dailyLimit, now: now}
 }
 
 // Check queries today's total cost and returns the budget status.
@@ -43,8 +52,8 @@ func (b *BudgetAlert) Check() BudgetStatus {
 		return BudgetStatus{Level: LevelGreen}
 	}
 
-	now := time.Now().UTC()
-	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	now := b.now()
+	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	spent, _, _, _, _, err := b.db.QueryPeriodStatsSince(startOfDay, "all", "")
 	if err != nil {
 		log.Printf("Budget check failed to query DB: %v", err)
