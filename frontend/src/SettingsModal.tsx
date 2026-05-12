@@ -75,7 +75,12 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
       fetch('/api/devices').then(res => res.json())
     ]).then(([pricingData, configData, devicesData]) => {
       if (Array.isArray(pricingData)) setPricing(pricingData);
-      if (configData) setConfig(configData);
+      if (configData) {
+        setConfig({
+          ...configData,
+          extra_watch_dirs: Array.isArray(configData.extra_watch_dirs) ? configData.extra_watch_dirs : [],
+        });
+      }
       if (Array.isArray(devicesData)) setDevices(devicesData);
       setLoading(false);
     }).catch(err => {
@@ -118,11 +123,12 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
   const handleAddPath = () => {
     if (!newPath.trim()) return;
-    if (config.extra_watch_dirs.includes(newPath.trim())) {
+    const dirs = config.extra_watch_dirs || [];
+    if (dirs.includes(newPath.trim())) {
       alert("Path already exists.");
       return;
     }
-    setConfig({ ...config, extra_watch_dirs: [...(config.extra_watch_dirs || []), newPath.trim()] });
+    setConfig({ ...config, extra_watch_dirs: [...dirs, newPath.trim()] });
     setNewPath('');
   };
 
