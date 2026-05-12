@@ -87,6 +87,15 @@ func (c *StatsCache) Get(key StatsCacheKey, build func() (*model.StatsResponse, 
 	return cloneStatsResponse(cloned), err
 }
 
+func (c *StatsCache) Clear() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries = make(map[StatsCacheKey]statsCacheEntry)
+}
+
 func cloneStatsResponse(stats *model.StatsResponse) *model.StatsResponse {
 	if stats == nil {
 		return nil

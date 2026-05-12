@@ -80,7 +80,7 @@ func TestAPIStats(t *testing.T) {
 		if modelStats.InputTokens != 3000 || modelStats.CachedTokens != 13000 || modelStats.OutputTokens != 600 {
 			t.Errorf("Claude model token breakdown missing/wrong: %+v", modelStats)
 		}
-		if modelStats.CacheCreationPricePerM != 22.5 {
+		if modelStats.CacheCreationPricePerM != 6.25 {
 			t.Errorf("Claude model cache creation price missing/wrong: %+v", modelStats)
 		}
 	}

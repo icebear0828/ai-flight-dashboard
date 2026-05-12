@@ -4,8 +4,11 @@ import (
 	"ai-flight-dashboard/internal/model"
 	"database/sql"
 	"errors"
+	"math"
 	"time"
 )
+
+type UsageCostCalculator func(model string, inputTokens int, cachedTokens int, cacheCreationTokens int, outputTokens int) (float64, error)
 
 // InsertUsage inserts a usage record with current timestamp (for live watcher).
 func (d *DB) InsertUsage(u model.TokenUsage, cost float64, deviceID string) error {
@@ -24,6 +27,79 @@ func (d *DB) InsertUsage(u model.TokenUsage, cost float64, deviceID string) erro
 // If UUID is empty, duplicate records are silently ignored.
 func (d *DB) InsertUsageWithTime(u model.TokenUsage, cost float64, logTS time.Time, filePath string, deviceID string) error {
 	return d.insertUsageWithTime(u, cost, logTS, filePath, deviceID, false)
+}
+
+func (d *DB) RecalculateUsageCosts(calculate UsageCostCalculator) (int64, error) {
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(`
+		SELECT id, model, input_tokens, cached_tokens, cache_creation_tokens, output_tokens, cost_usd
+		FROM usage_records
+	`)
+	if err != nil {
+		return 0, err
+	}
+
+	type costUpdate struct {
+		id   int64
+		cost float64
+	}
+	var updates []costUpdate
+	for rows.Next() {
+		var id int64
+		var modelName string
+		var inputTokens, cachedTokens, cacheCreationTokens, outputTokens int
+		var existingCost float64
+		if err := rows.Scan(&id, &modelName, &inputTokens, &cachedTokens, &cacheCreationTokens, &outputTokens, &existingCost); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		cost, err := calculate(modelName, inputTokens, cachedTokens, cacheCreationTokens, outputTokens)
+		if err != nil {
+			rows.Close()
+			return 0, err
+		}
+		if math.Abs(existingCost-cost) <= 0.000000001 {
+			continue
+		}
+		updates = append(updates, costUpdate{id: id, cost: cost})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+
+	stmt, err := tx.Prepare("UPDATE usage_records SET cost_usd = ?, updated_at = ? WHERE id = ?")
+	if err != nil {
+		return 0, err
+	}
+	defer stmt.Close()
+
+	updatedAt := formatLogTimestamp(time.Now().UTC())
+	var changed int64
+	for _, update := range updates {
+		result, err := stmt.Exec(update.cost, updatedAt, update.id)
+		if err != nil {
+			return changed, err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return changed, err
+		}
+		changed += n
+	}
+
+	if err := tx.Commit(); err != nil {
+		return changed, err
+	}
+	return changed, nil
 }
 func (d *DB) insertUsageWithTime(u model.TokenUsage, cost float64, logTS time.Time, filePath string, deviceID string, superseded bool) error {
 	return d.insertUsageWithTimeUpdatedAt(u, cost, logTS, filePath, deviceID, time.Now().UTC(), superseded)

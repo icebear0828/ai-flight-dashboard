@@ -54,6 +54,8 @@
   "actions": "操作",
   "clearAlias": "清除别名",
   "softDeleteDevice": "软删除",
+  "confirmSoftDeleteAction": "确认软删除",
+  "deletingDevice": "删除中...",
   "confirmSoftDeleteDevice": "确认软删除 {{id}} 的所有活跃记录？记录会保留为 superseded，不会物理删除。",
   "save": "保存",
   "cancel": "取消",

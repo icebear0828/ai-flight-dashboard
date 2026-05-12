@@ -152,3 +152,27 @@ export const mergeDashboardDetails = (summary: DashboardData, details: Dashboard
     is_paused: details.is_paused,
   };
 };
+
+export const mergeSummaryWithPreviousDetails = (summary: DashboardData, previous: DashboardData | null): DashboardData => {
+  if (!previous) {
+    return summary;
+  }
+
+  const previousSources = new Map(previous.sources.map((source) => [source.name, source]));
+  const sources = summary.sources.map((source) => {
+    const previousModels = previousSources.get(source.name)?.models ?? [];
+    if (previousModels.length === 0) {
+      return source;
+    }
+    return {
+      ...source,
+      models: previousModels,
+    };
+  });
+
+  return {
+    ...summary,
+    sources,
+    projects: summary.projects && summary.projects.length > 0 ? summary.projects : previous.projects ?? [],
+  };
+};

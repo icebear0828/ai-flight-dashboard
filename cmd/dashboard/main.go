@@ -138,8 +138,7 @@ func main() {
 
 	// Initialize Calculator from pricing table
 	pricingData := embeddedPricing
-	const pricingURL = "https://raw.githubusercontent.com/icebear0828/ai-flight-dashboard/main/cmd/dashboard/pricing_table.json"
-	if dynPricing, err := fetchDynamicPricing(pricingURL, 3*time.Second); err == nil {
+	if dynPricing, err := fetchDynamicPricingFromURLs(pricingTableURLs, 3*time.Second); err == nil {
 		fmt.Println("☁️  Successfully fetched dynamic pricing table from GitHub.")
 		pricingData = dynPricing
 	} else {
@@ -177,6 +176,11 @@ func main() {
 		log.Printf("Failed to backfill project names: %v", err)
 	} else if n > 0 {
 		fmt.Printf("🧭 Backfilled project names for %d existing records.\n", n)
+	}
+	if n, err := database.RecalculateUsageCosts(calc.CalculateCost); err != nil {
+		log.Printf("Failed to recalculate usage costs: %v", err)
+	} else if n > 0 {
+		fmt.Printf("💸 Recalculated usage costs for %d existing records.\n", n)
 	}
 	const projectMetadataMigrationKey = "migration:project-metadata-v2"
 	if done, err := database.GetOffset(projectMetadataMigrationKey); err == nil && done == 0 {
@@ -389,18 +393,12 @@ func main() {
 		// Reuse the existing HTTP handler inside Wails.
 		apiHandler := web.NewHandlerWithLANController(database, calc, w, lanController, *token, root.DistBinFS)
 
-		err = wailsrun.Run(&options.App{
+		guiOptions := &options.App{
 			Title:     "AI Flight Dashboard",
 			Width:     1280,
 			Height:    800,
 			MinWidth:  900,
 			MinHeight: 600,
-			SingleInstanceLock: &options.SingleInstanceLock{
-				UniqueId: "ai-flight-dashboard",
-				OnSecondInstanceLaunch: func(secondInstanceData options.SecondInstanceData) {
-					// Wails handles focusing the primary window automatically
-				},
-			},
 			AssetServer: &assetserver.Options{
 				Assets:  guiAssets,
 				Handler: apiHandler,
@@ -419,7 +417,10 @@ func main() {
 					Message: "Real-time AI token cost monitoring",
 				},
 			},
-		})
+		}
+		configureGUIWindowLifecycle(guiOptions, app)
+
+		err = wailsrun.Run(guiOptions)
 		if err != nil {
 			log.Fatalf("GUI error: %v", err)
 		}

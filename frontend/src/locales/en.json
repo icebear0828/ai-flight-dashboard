@@ -54,6 +54,8 @@
   "actions": "ACTIONS",
   "clearAlias": "CLEAR ALIAS",
   "softDeleteDevice": "SOFT DELETE",
+  "confirmSoftDeleteAction": "CONFIRM DELETE",
+  "deletingDevice": "DELETING...",
   "confirmSoftDeleteDevice": "Soft-delete all active records for {{id}}? Records stay in the database as superseded rows.",
   "save": "SAVE",
   "cancel": "CANCEL",

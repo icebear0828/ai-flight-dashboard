@@ -34,7 +34,7 @@ func NewHandlerWithLANController(database *db.DB, calc *calculator.Calculator, w
 			handleGetPricing(w, r, calc)
 		} else if r.Method == http.MethodPut || r.Method == http.MethodPost {
 			authMiddleware(token, func(w http.ResponseWriter, r *http.Request) {
-				handlePutPricing(w, r, calc)
+				handlePutPricing(w, r, database, calc, statsCache)
 			})(w, r)
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

@@ -59,6 +59,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   // Temporary state for inline device editing
   const [editingDevice, setEditingDevice] = useState<string | null>(null);
   const [editAliasName, setEditAliasName] = useState('');
+  const [deletingDevice, setDeletingDevice] = useState<string | null>(null);
 
   const loadDevices = async () => {
     const res = await fetch('/api/devices');
@@ -182,7 +183,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   };
 
   const handleSupersedeDevice = async (deviceId: string) => {
-    if (!window.confirm(t('confirmSoftDeleteDevice', { id: deviceId }))) return;
+    setDeletingDevice(deviceId);
     try {
       const res = await fetch(`/api/devices?device_id=${encodeURIComponent(deviceId)}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -190,6 +191,8 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     } catch (err) {
       console.error("Failed to clean device", err);
       alert("Failed to clean device.");
+    } finally {
+      setDeletingDevice(null);
     }
   };
 
@@ -284,6 +287,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                   setEditingDevice={setEditingDevice}
                   editAliasName={editAliasName}
                   setEditAliasName={setEditAliasName}
+                  deletingDevice={deletingDevice}
                   handleSaveAlias={handleSaveAlias}
                   handleDeleteAlias={handleDeleteAlias}
                   handleSupersedeDevice={handleSupersedeDevice}

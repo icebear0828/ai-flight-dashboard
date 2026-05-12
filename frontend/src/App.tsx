@@ -5,6 +5,7 @@ import { LazyBlockFallback, LazyModalFallback } from "./components/LoadingFallba
 import {
   asRecord,
   mergeDashboardDetails,
+  mergeSummaryWithPreviousDetails,
   normalizeDashboardData,
   type DashboardData,
   type DeviceStats,
@@ -17,7 +18,6 @@ import { wailsWindow } from "./wails";
 
 const SettingsModal = lazy(() => import("./SettingsModal"));
 const Radar = lazy(() => import("./components/Radar"));
-
 export default function App() {
   const { t, i18n } = useTranslation();
   const [data, setData] = useState<DashboardData | null>(null);
@@ -56,7 +56,7 @@ export default function App() {
         }
         const summary = normalizeDashboardData(await summaryRes.json());
         if (cancelled || requestSeq !== statsRequestSeqRef.current) return;
-        setData(summary);
+        setData((prev) => showLoading ? summary : mergeSummaryWithPreviousDetails(summary, prev));
         setErrorMsg("");
         setIsStatsLoading(false);
 
@@ -267,11 +267,11 @@ export default function App() {
           ))}
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 md:gap-6">
-        {periods.map((p: PeriodStats, i: number) => {
+        {periods.map((p: PeriodStats) => {
           const isElevated = p.label === 'ALL';
           const cardClass = `bg-[#FFFFFF] border-[#000000] rounded-none p-4 md:p-6 flex flex-col justify-between shadow-none ${isElevated ? 'border-[5px]' : 'border-[3px]'}`;
           return (
-            <div key={i} className={cardClass}>
+            <div key={p.label} className={cardClass}>
               <div className="mb-4">
                 <h3 className="font-display text-xl xl:text-2xl leading-[1.1] uppercase mb-2">{p.label}</h3>
                 <div className="flex flex-col gap-1 font-mono text-xs xl:text-sm">
@@ -348,7 +348,7 @@ export default function App() {
 
       {/* Source Stats Grid */}
       <section className="grid grid-cols-1 2xl:grid-cols-2 gap-6 lg:gap-10">
-        {sources.map((src: SourceStats, si: number) => {
+        {sources.map((src: SourceStats) => {
            const baseInput = Math.max(0, num(src.total_input) - num(src.total_cached) - num(src.total_cache_creation));
            const totalTokens = baseInput + num(src.total_cached) + num(src.total_cache_creation) + num(src.total_output);
            
@@ -366,7 +366,7 @@ export default function App() {
            const modelsCollapsed = Boolean(collapsedModelSources[src.name]);
 
            return (
-            <article key={si} className="bg-[#FFFFFF] border-[5px] border-[#000000] rounded-none shadow-none flex flex-col">
+            <article key={src.name} className="bg-[#FFFFFF] border-[5px] border-[#000000] rounded-none shadow-none flex flex-col">
               <div className="p-4 sm:p-6 border-b-[5px] border-[#000000] flex flex-col md:flex-row justify-between items-start md:items-end gap-4 bg-[#000000] text-[#FFFFFF]">
                 <div className="break-words w-full">
                   <h2 className="font-display text-3xl sm:text-4xl md:text-5xl uppercase leading-[1.05] break-words">
@@ -462,8 +462,8 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {sortedModels.map((m: SourceModelStats, mi: number) => (
-                          <tr key={mi} className="border-b-[3px] border-[#000000] last:border-b-0 hover:bg-[#000000] hover:text-[#FFFFFF] transition-none group">
+                        {sortedModels.map((m: SourceModelStats) => (
+                          <tr key={m.model} className="border-b-[3px] border-[#000000] last:border-b-0 hover:bg-[#000000] hover:text-[#FFFFFF] transition-none group">
                             <td className="px-3 py-3 sm:px-4 sm:py-4 font-bold group-hover:text-[#FFFFFF] max-w-[200px] truncate" title={m.model}>{m.model}</td>
                             <td className="px-3 py-3 sm:px-4 sm:py-4 group-hover:text-[#FFFFFF]">
                               {t('labelIn')}: {fmtCost(m.input_price_per_m)} / {t('cacheRead')}: {fmtCost(m.cached_price_per_m)} / {t('cacheWrite')}: {fmtCost(m.cache_creation_price_per_m)} / {t('labelOut')}: {fmtCost(m.output_price_per_m)}
