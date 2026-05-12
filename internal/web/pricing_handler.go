@@ -9,6 +9,8 @@ import (
 
 	"ai-flight-dashboard/internal/calculator"
 	"ai-flight-dashboard/internal/config"
+	"ai-flight-dashboard/internal/dashboard"
+	"ai-flight-dashboard/internal/db"
 )
 
 type PricingEntry struct {
@@ -37,7 +39,7 @@ func handleGetPricing(w http.ResponseWriter, r *http.Request, calc *calculator.C
 	json.NewEncoder(w).Encode(entries)
 }
 
-func handlePutPricing(w http.ResponseWriter, r *http.Request, calc *calculator.Calculator) {
+func handlePutPricing(w http.ResponseWriter, r *http.Request, database *db.DB, calc *calculator.Calculator, statsCache *dashboard.StatsCache) {
 	var entries []PricingEntry
 	if err := json.NewDecoder(r.Body).Decode(&entries); err != nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
@@ -96,5 +98,10 @@ func handlePutPricing(w http.ResponseWriter, r *http.Request, calc *calculator.C
 	}
 
 	calc.UpdatePrices(customPrices)
+	if _, err := database.RecalculateUsageCosts(calc.CalculateCost); err != nil {
+		http.Error(w, "Failed to recalculate usage costs", http.StatusInternalServerError)
+		return
+	}
+	statsCache.Clear()
 	w.WriteHeader(http.StatusOK)
 }

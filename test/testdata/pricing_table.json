@@ -1,16 +1,16 @@
 {
   "models": {
     "claude-opus-4-7": {
-      "input_price_per_m": 15,
-      "cached_price_per_m": 1.5,
-      "cache_creation_price_per_m": 22.5,
-      "output_price_per_m": 75
+      "input_price_per_m": 5,
+      "cached_price_per_m": 0.5,
+      "cache_creation_price_per_m": 6.25,
+      "output_price_per_m": 25
     },
     "gemini-2.5-pro": {
       "input_price_per_m": 1.25,
-      "cached_price_per_m": 0.31,
-      "cache_creation_price_per_m": 4.5,
-      "output_price_per_m": 5
+      "cached_price_per_m": 0.125,
+      "cache_creation_price_per_m": 0,
+      "output_price_per_m": 10
     },
     "test-model": {
       "input_price_per_m": 2.00,
