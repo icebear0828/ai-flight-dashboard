@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStaticPage(t *testing.T) {
@@ -103,4 +104,98 @@ func TestPricingPersistenceUsesDataDir(t *testing.T) {
 	if !strings.Contains(string(data), `"gpt-5.5"`) {
 		t.Fatalf("custom pricing missing updated model: %s", string(data))
 	}
+}
+
+func TestPricingUpdateRepricesExistingStatsImmediately(t *testing.T) {
+	dataDir := t.TempDir()
+	config.SetDataDir(dataDir)
+	defer config.SetDataDir("")
+
+	database, calc := testutil.NewTestDBAndCalc(t)
+	defer database.Close()
+
+	if err := database.InsertUsageWithTime(
+		model.TokenUsage{
+			Source:       "Claude Code",
+			Model:        "claude-opus-4-7",
+			OutputTokens: 1_000_000,
+		},
+		75,
+		time.Now().UTC(),
+		"/claude.jsonl",
+		"local",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := web.NewHandler(database, calc, nil, nil, "secret-token", emptyFS)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	first := fetchStats(t, srv.URL)
+	if allPeriodCost(first) != 75 {
+		t.Fatalf("setup expected old persisted cost 75, got %+v", first.Periods)
+	}
+
+	body := strings.NewReader(`[{
+		"model": "claude-opus-4-7",
+		"input_price_per_m": 0,
+		"cached_price_per_m": 0,
+		"cache_creation_price_per_m": 0,
+		"output_price_per_m": 10
+	}]`)
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/pricing", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected pricing update 200, got %d", resp.StatusCode)
+	}
+
+	cost, _, _, _, _, err := database.QueryPeriodStatsAll("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cost != 10 {
+		t.Fatalf("expected stored usage cost to be repriced to 10, got %f", cost)
+	}
+
+	second := fetchStats(t, srv.URL)
+	if allPeriodCost(second) != 10 {
+		t.Fatalf("expected cached stats to refresh after repricing, got %+v", second.Periods)
+	}
+}
+
+func fetchStats(t *testing.T, baseURL string) model.StatsResponse {
+	t.Helper()
+	resp, err := http.Get(baseURL + "/api/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected stats 200, got %d", resp.StatusCode)
+	}
+	var data model.StatsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func allPeriodCost(stats model.StatsResponse) float64 {
+	for _, period := range stats.Periods {
+		if period.Label == "ALL" {
+			return period.Cost
+		}
+	}
+	return -1
 }
