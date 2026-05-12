@@ -5,6 +5,11 @@ on:
     branches: ['*']
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -21,6 +26,26 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      - name: Run release automation tests
+        run: node --test scripts/*.test.mjs
+
+      - name: Validate PR release notes
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json number,title,body,labels,files,url \
+            --jq '[{number: .number, title: .title, body: .body, labels: [.labels[].name], url: .url, files: [.files[].path]}]' \
+            > "$RUNNER_TEMP/pr.json"
+
+          gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json files --jq '.files[].path' > "$RUNNER_TEMP/changed-files.txt"
+
+          node scripts/release_notes.mjs \
+            --changed-files "$RUNNER_TEMP/changed-files.txt" \
+            --prs "$RUNNER_TEMP/pr.json"
 
       - name: Install Linux Dependencies
         run: |

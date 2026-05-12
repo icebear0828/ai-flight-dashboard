@@ -1,12 +1,9 @@
-name: Tag Release
+name: Auto Release
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Release version. Use vX.Y.Z, X.Y.Z, or leave empty to bump the latest patch tag.'
-        required: false
-        type: string
+  workflow_run:
+    workflows: ['Test']
+    types: [completed]
 
 permissions:
   actions: write
@@ -14,15 +11,19 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: tag-release
+  group: auto-release-main
   cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  create-tag:
-    name: Create Release Tag
+  auto-release:
+    name: Auto Release
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -34,85 +35,32 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Resolve release version
-        id: version
-        env:
-          REQUESTED_VERSION: ${{ inputs.version }}
+      - name: Guard release target
+        id: guard
         run: |
-          requested="$REQUESTED_VERSION"
-          latest="$(git tag --merged HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
+          event_sha="${{ github.event.workflow_run.head_sha }}"
+          current_sha="$(git rev-parse HEAD)"
 
-          if [[ -z "$requested" ]]; then
-            if [[ -z "$latest" ]]; then
-              requested="v0.1.0"
-            else
-              IFS=. read -r major minor patch <<< "${latest#v}"
-              requested="v${major}.${minor}.$((patch + 1))"
-            fi
-          fi
-
-          if [[ "$requested" != v* ]]; then
-            requested="v${requested}"
-          fi
-
-          if [[ ! "$requested" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Release version must use vX.Y.Z or X.Y.Z format; got $requested"
-            exit 1
-          fi
-
-          if git rev-parse -q --verify "refs/tags/$requested" >/dev/null; then
-            echo "Tag $requested already exists"
-            exit 1
+          if [[ "$event_sha" != "$current_sha" ]]; then
+            echo "Skipping stale Test run for $event_sha; current main is $current_sha."
+            echo "continue=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           if git tag --points-at HEAD | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "main HEAD is already release-tagged:"
+            echo "Skipping release because main HEAD is already release-tagged:"
             git tag --points-at HEAD
-            exit 1
+            echo "continue=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-          echo "tag=$requested" >> "$GITHUB_OUTPUT"
-          echo "latest_tag=$latest" >> "$GITHUB_OUTPUT"
-          echo "Resolved release tag: $requested"
-
-      - name: Verify main tests passed
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          target_sha="$(git rev-parse HEAD)"
-          conclusion="$(gh run list \
-            --workflow Test \
-            --branch main \
-            --commit "$target_sha" \
-            --event push \
-            --status completed \
-            --json conclusion \
-            --jq '.[0].conclusion // ""' \
-            --limit 1)"
-          url="$(gh run list \
-            --workflow Test \
-            --branch main \
-            --commit "$target_sha" \
-            --event push \
-            --status completed \
-            --json url \
-            --jq '.[0].url // ""' \
-            --limit 1)"
-
-          if [[ "$conclusion" != "success" ]]; then
-            echo "No successful Test workflow found for main commit $target_sha."
-            if [[ -n "$url" ]]; then
-              echo "Latest completed Test run: $url"
-            fi
-            exit 1
-          fi
-
-          echo "Verified Test workflow success for $target_sha: $url"
+          echo "continue=true" >> "$GITHUB_OUTPUT"
 
       - name: Resolve release range
         id: range
+        if: steps.guard.outputs.continue == 'true'
         run: |
-          latest_tag="${{ steps.version.outputs.latest_tag }}"
+          latest_tag="$(git tag --merged HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
           if [[ -z "$latest_tag" ]]; then
             base_ref="$(git rev-list --max-parents=0 HEAD)"
           else
@@ -121,10 +69,12 @@ jobs:
 
           git diff --name-only "$base_ref"..HEAD > "$RUNNER_TEMP/changed-files.txt"
 
+          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
           echo "base_ref=$base_ref" >> "$GITHUB_OUTPUT"
           echo "changed_files=$RUNNER_TEMP/changed-files.txt" >> "$GITHUB_OUTPUT"
 
       - name: Collect pull request metadata
+        if: steps.guard.outputs.continue == 'true'
         env:
           BASE_REF: ${{ steps.range.outputs.base_ref }}
           GH_TOKEN: ${{ github.token }}
@@ -185,15 +135,55 @@ jobs:
           echo "Collected pull requests:"
           cat "$PRS_FILE"
 
-      - name: Generate release notes
+      - name: Plan release
+        id: plan
+        if: steps.guard.outputs.continue == 'true'
         run: |
           node scripts/release_notes.mjs \
             --changed-files "${{ steps.range.outputs.changed_files }}" \
             --prs "$RUNNER_TEMP/release-prs.json" \
-            --plan-out "$RUNNER_TEMP/release-plan.json"
+            --plan-out "$RUNNER_TEMP/release-plan.json" \
+            --github-output "$GITHUB_OUTPUT"
 
-          node -e "const fs = require('fs'); const plan = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/release-plan.json', 'utf8')); if (!plan.shouldRelease) { console.error('Manual Tag Release refused: ' + plan.skipReason); process.exit(1); }"
+      - name: Resolve next version
+        id: version
+        if: steps.plan.outputs.should_release == 'true'
+        run: |
+          latest_tag="${{ steps.range.outputs.latest_tag }}"
+          bump="${{ steps.plan.outputs.bump }}"
 
+          if [[ -z "$latest_tag" ]]; then
+            next_tag="v0.1.0"
+          else
+            IFS=. read -r major minor patch <<< "${latest_tag#v}"
+            case "$bump" in
+              major)
+                next_tag="v$((major + 1)).0.0"
+                ;;
+              minor)
+                next_tag="v${major}.$((minor + 1)).0"
+                ;;
+              patch)
+                next_tag="v${major}.${minor}.$((patch + 1))"
+                ;;
+              *)
+                echo "Unsupported release bump: $bump"
+                exit 1
+                ;;
+            esac
+          fi
+
+          if git rev-parse -q --verify "refs/tags/$next_tag" >/dev/null; then
+            echo "Tag $next_tag already exists"
+            exit 1
+          fi
+
+          echo "tag=$next_tag" >> "$GITHUB_OUTPUT"
+          echo "Resolved release tag: $next_tag"
+
+      - name: Generate release notes
+        if: steps.plan.outputs.should_release == 'true'
+        run: |
           node scripts/release_notes.mjs \
             --changed-files "${{ steps.range.outputs.changed_files }}" \
             --prs "$RUNNER_TEMP/release-prs.json" \
@@ -202,16 +192,22 @@ jobs:
 
           cat "$RUNNER_TEMP/release-notes.md" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Create and push tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag "${{ steps.version.outputs.tag }}"
-          git push origin "${{ steps.version.outputs.tag }}"
-
-      - name: Dispatch release workflow
+      - name: Create tag and dispatch release
+        if: steps.plan.outputs.should_release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          tag="${{ steps.version.outputs.tag }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$tag"
+          git push origin "$tag"
+
           release_notes_b64="$(base64 -w0 "$RUNNER_TEMP/release-notes.md")"
-          gh workflow run release.yml --ref "${{ steps.version.outputs.tag }}" -f release_notes_b64="$release_notes_b64"
+          gh workflow run release.yml --ref "$tag" -f release_notes_b64="$release_notes_b64"
+
+      - name: Report skipped release
+        if: steps.guard.outputs.continue == 'true' && steps.plan.outputs.should_release == 'false'
+        run: |
+          echo "Release skipped: ${{ steps.plan.outputs.skip_reason }}"
