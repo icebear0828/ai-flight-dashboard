@@ -14,3 +14,12 @@ test('Test workflow reruns PR release gate when release metadata changes', () =>
     assert.ok(types.includes(requiredType), `missing pull_request type: ${requiredType}`);
   }
 });
+
+test('Release workflow updates release notes without relying on git checkout context', () => {
+  const workflow = fs.readFileSync('.github/workflows/release.yml', 'utf8');
+
+  assert.match(
+    workflow,
+    /gh release edit "\$GITHUB_REF_NAME" --repo "\$GITHUB_REPOSITORY" --title "\$GITHUB_REF_NAME" --notes-file release-notes\.md/,
+  );
+});
