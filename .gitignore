@@ -40,5 +40,7 @@ test_dashboard
 .vscode/
 *.exe
 
-# Local-only audit notes
-/docs/antigravity_audit.md
+# Local-only docs and task notes
+/docs/
+/TODO.md
+/.local-backups/

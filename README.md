@@ -128,7 +128,7 @@ POST /api/device-alias      # 命名设备别名 (body: {"device_id": "...", "di
 GET /download/dashboard     # 动态拉取适配当前平台的 Fat Server 本体
 ```
 
-返回 `{ periods, sources, devices, projects }` — 详见 [dashboard-api.md](dashboard-api.md)。
+返回 `{ periods, sources, devices, projects }`，常用接口摘要见 [usage.md](usage.md)。
 
 ## 🗺 路线图
 
