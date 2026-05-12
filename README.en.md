@@ -26,7 +26,7 @@ It does not require patching Claude Code, Gemini CLI, or Codex, and it does not 
 
 ### Download The Desktop App
 
-Download the package for your platform from [GitHub Releases](https://github.com/icebear0828/ai-flight-dashboard/releases/latest). On macOS, if Gatekeeper blocks the first launch, right-click `AI Flight Dashboard.app` and choose "Open".
+Download the package for your platform from [GitHub Releases](https://github.com/icebear0828/token-ray/releases/latest). On macOS, if Gatekeeper blocks the first launch, right-click `AI Flight Dashboard.app` and choose "Open".
 
 ### Build Locally
 
