@@ -123,3 +123,50 @@ test('settings device management can create edit clear and soft-delete devices',
   expect(dialogs).toEqual([]);
   expect(pageErrors).toEqual([]);
 });
+
+test('settings can add an extra watch directory when backend returns null dirs', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await page.setViewportSize({ width: 390, height: 820 });
+
+  type ConfigPayload = {
+    auto_start: boolean;
+    extra_watch_dirs: string[];
+    enable_lan?: boolean;
+  };
+
+  let savedConfig: ConfigPayload | null = null;
+
+  await page.route('**/api/stats?*', async (route) => {
+    await fulfillJSON(route, { ...emptyStatsPayload, periods, devices: [] });
+  });
+  await page.route('**/api/lan/scan', fulfillEmptyLANScan);
+  await page.route('**/api/lan/status', fulfillLANStatus);
+  await page.route('**/api/pricing', async (route) => {
+    await fulfillJSON(route, []);
+  });
+  await page.route('**/api/devices**', async (route) => {
+    await fulfillJSON(route, []);
+  });
+  await page.route('**/api/config', async (route) => {
+    if (route.request().method() === 'PUT') {
+      savedConfig = await route.request().postDataJSON() as ConfigPayload;
+      await fulfillJSON(route, savedConfig);
+      return;
+    }
+    await fulfillJSON(route, { auto_start: false, extra_watch_dirs: null, enable_lan: true });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: /系统设置|SETTINGS/ }).click();
+  await page.getByRole('button', { name: /系统配置|SYSTEM CONFIG/ }).click();
+
+  await page.getByPlaceholder(/绝对路径|Absolute path/).fill('/tmp/token-ray-extra');
+  await page.getByRole('button', { name: /\+ 添加路径|\+ ADD PATH/ }).click();
+  await expect(page.getByText('/tmp/token-ray-extra', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: /保存配置与计价|SAVE CONFIG & PRICING/ }).click();
+
+  await expect.poll(() => savedConfig?.extra_watch_dirs).toEqual(['/tmp/token-ray-extra']);
+  expect(pageErrors).toEqual([]);
+});
