@@ -42,6 +42,10 @@ type LAN struct {
 	cachedSummaryAt time.Time
 	cachedSummaryOK bool
 	httpProbePorts  []int
+
+	extraHostsMu       sync.RWMutex
+	extraStaticHosts   []string
+	tailscaleDiscovery bool
 }
 
 // New creates a new LAN instance for the given device.

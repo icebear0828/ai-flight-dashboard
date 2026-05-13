@@ -15,6 +15,44 @@ import (
 	"ai-flight-dashboard/internal/model"
 )
 
+// discoveryHosts merges subnet-sweep targets with explicit unicast targets
+// (extra peer hosts + Tailscale auto-discovery), deduplicating the union.
+func (l *LAN) discoveryHosts(ctx context.Context) []string {
+	subnet := localHTTPDiscoveryHosts()
+	static, tailscaleOn := l.extraHostsSnapshot()
+
+	var tailscale []string
+	if tailscaleOn {
+		tailscale = TailscalePeerHosts(ctx)
+	}
+
+	if len(static) == 0 && len(tailscale) == 0 {
+		return subnet
+	}
+
+	seen := make(map[string]bool, len(subnet)+len(static)+len(tailscale))
+	out := make([]string, 0, len(subnet)+len(static)+len(tailscale))
+	for _, h := range subnet {
+		if !seen[h] {
+			seen[h] = true
+			out = append(out, h)
+		}
+	}
+	for _, h := range static {
+		if !seen[h] {
+			seen[h] = true
+			out = append(out, h)
+		}
+	}
+	for _, h := range tailscale {
+		if !seen[h] {
+			seen[h] = true
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
 func localHTTPDiscoveryHosts() []string {
 	interfaces, err := net.Interfaces()
 	if err != nil {
@@ -99,12 +137,19 @@ func (l *LAN) StartHTTPDiscovery(ctx context.Context) {
 }
 
 // ScanHTTPPeers actively discovers LAN nodes by probing their self endpoint.
+//
+// When hosts is empty, the scan covers:
+//   - hosts on the same IPv4 subnet as each up interface (subnet sweep)
+//   - user-configured ExtraPeerHosts (Tailscale, VPN, cross-subnet, ...)
+//   - online Tailscale peers when SetTailscaleDiscovery(true) is in effect
+//
+// Explicitly passing hosts skips all auto-discovery and probes only what's given.
 func (l *LAN) ScanHTTPPeers(ctx context.Context, hosts []string, ports []int) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if len(hosts) == 0 {
-		hosts = localHTTPDiscoveryHosts()
+		hosts = l.discoveryHosts(ctx)
 	}
 	if len(ports) == 0 {
 		ports = l.httpDiscoveryPorts()

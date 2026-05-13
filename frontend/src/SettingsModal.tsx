@@ -16,6 +16,8 @@ export interface AppConfig {
   auto_start: boolean;
   extra_watch_dirs: string[];
   enable_lan?: boolean;
+  extra_peer_hosts?: string[];
+  tailscale_discovery?: boolean;
 }
 
 export interface DeviceInfo {
@@ -53,6 +55,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   
   const [newModelName, setNewModelName] = useState('');
   const [newPath, setNewPath] = useState('');
+  const [newPeerHost, setNewPeerHost] = useState('');
   const [newDeviceId, setNewDeviceId] = useState('');
   const [newDeviceName, setNewDeviceName] = useState('');
   
@@ -79,6 +82,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         setConfig({
           ...configData,
           extra_watch_dirs: Array.isArray(configData.extra_watch_dirs) ? configData.extra_watch_dirs : [],
+          extra_peer_hosts: Array.isArray(configData.extra_peer_hosts) ? configData.extra_peer_hosts : [],
         });
       }
       if (Array.isArray(devicesData)) setDevices(devicesData);
@@ -140,6 +144,28 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
   const handleToggleLAN = () => {
     setConfig({ ...config, enable_lan: !(config.enable_lan !== false) });
+  };
+
+  const handleAddPeer = () => {
+    const trimmed = newPeerHost.trim();
+    if (!trimmed) return;
+    const hosts = config.extra_peer_hosts || [];
+    if (hosts.includes(trimmed)) {
+      alert("Host already exists.");
+      return;
+    }
+    setConfig({ ...config, extra_peer_hosts: [...hosts, trimmed] });
+    setNewPeerHost('');
+  };
+
+  const handleRemovePeer = (index: number) => {
+    const next = [...(config.extra_peer_hosts || [])];
+    next.splice(index, 1);
+    setConfig({ ...config, extra_peer_hosts: next });
+  };
+
+  const handleToggleTailscale = () => {
+    setConfig({ ...config, tailscale_discovery: !(config.tailscale_discovery !== false) });
   };
 
   const saveAlias = async (deviceId: string, displayName: string) => {
@@ -309,6 +335,11 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                   handleAddPath={handleAddPath}
                   handleRemovePath={handleRemovePath}
                   handleToggleLAN={handleToggleLAN}
+                  newPeerHost={newPeerHost}
+                  setNewPeerHost={setNewPeerHost}
+                  handleAddPeer={handleAddPeer}
+                  handleRemovePeer={handleRemovePeer}
+                  handleToggleTailscale={handleToggleTailscale}
                 />
               )}
             </>
