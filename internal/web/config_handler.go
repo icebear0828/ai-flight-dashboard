@@ -9,6 +9,16 @@ import (
 	"ai-flight-dashboard/internal/watcher"
 )
 
+// configSavedHook, when set, is invoked after a successful PUT /api/config so
+// that runtime components (e.g. the LAN discovery instance) can refresh their
+// view of the persisted config. main.go wires it during startup.
+var configSavedHook func(*config.AppConfig)
+
+// SetConfigSavedHook installs the post-save callback. Pass nil to clear.
+func SetConfigSavedHook(h func(*config.AppConfig)) {
+	configSavedHook = h
+}
+
 func handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -54,6 +64,10 @@ func handlePutConfig(w http.ResponseWriter, r *http.Request, wInst *watcher.Watc
 				wInst.WatchDirRecursive(dir)
 			}
 		}
+	}
+
+	if configSavedHook != nil {
+		configSavedHook(&cfg)
 	}
 
 	w.WriteHeader(http.StatusOK)

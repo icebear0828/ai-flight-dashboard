@@ -390,6 +390,14 @@ func main() {
 			}
 		}
 
+		// Push any post-save discovery config changes (extra peers, Tailscale
+		// toggle) into the live LAN instance.
+		web.SetConfigSavedHook(func(_ *config.AppConfig) {
+			if lanController != nil {
+				applyDiscoveryConfig(lanController.CurrentLAN())
+			}
+		})
+
 		// Reuse the existing HTTP handler inside Wails.
 		apiHandler := web.NewHandlerWithLANController(database, calc, w, lanController, *token, root.DistBinFS)
 
@@ -430,6 +438,12 @@ func main() {
 	if *webMode {
 		lanController = newRuntimeLANController(ctx, *lanMode, *deviceID, *port, *token, database, w.BroadcastChan, w.UsageChan, nil, startLANGoroutines)
 		startDBDrain()
+
+		web.SetConfigSavedHook(func(_ *config.AppConfig) {
+			if lanController != nil {
+				applyDiscoveryConfig(lanController.CurrentLAN())
+			}
+		})
 
 		// Web dashboard mode with graceful shutdown
 		handler := web.NewHandlerWithLANController(database, calc, w, lanController, *token, root.DistBinFS)

@@ -97,6 +97,30 @@ func (l *LAN) SetHTTPDiscoveryPorts(ports ...int) {
 	l.httpProbePorts = normalizeHTTPDiscoveryPorts(ports)
 }
 
+// SetExtraPeerHosts configures user-supplied hostnames/IPs that should be
+// probed in addition to local subnet sweeps. Useful for Tailscale, VPN, or
+// cross-subnet peers that broadcast/multicast cannot reach.
+func (l *LAN) SetExtraPeerHosts(hosts []string) {
+	cleaned := NormalizeExtraPeerHosts(hosts)
+	l.extraHostsMu.Lock()
+	defer l.extraHostsMu.Unlock()
+	l.extraStaticHosts = cleaned
+}
+
+// SetTailscaleDiscovery toggles automatic peer discovery via the `tailscale`
+// CLI. When enabled, online Tailscale peers are unicast-probed each scan.
+func (l *LAN) SetTailscaleDiscovery(enabled bool) {
+	l.extraHostsMu.Lock()
+	defer l.extraHostsMu.Unlock()
+	l.tailscaleDiscovery = enabled
+}
+
+func (l *LAN) extraHostsSnapshot() (static []string, tailscale bool) {
+	l.extraHostsMu.RLock()
+	defer l.extraHostsMu.RUnlock()
+	return append([]string(nil), l.extraStaticHosts...), l.tailscaleDiscovery
+}
+
 func (l *LAN) httpDiscoveryPorts() []int {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

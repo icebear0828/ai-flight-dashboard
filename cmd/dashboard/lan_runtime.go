@@ -250,5 +250,28 @@ func newLANInstance(lanMode bool, enableLAN *bool, token string, deviceID string
 	}
 	lanInst := lan.New(deviceID, portInt)
 	lanInst.SetHTTPDiscoveryPorts(portInt)
+	applyDiscoveryConfig(lanInst)
 	return lanInst
+}
+
+// applyDiscoveryConfig reads the current config and pushes the extra-host
+// settings into the LAN instance. Safe to call any time the config changes.
+// Tailscale auto-discovery defaults to ON when the field is absent so that
+// existing users on Tailscale see peers without changing their config.
+func applyDiscoveryConfig(lanInst *lan.LAN) {
+	if lanInst == nil {
+		return
+	}
+	cfg, err := config.LoadConfig()
+	if err != nil || cfg == nil {
+		lanInst.SetExtraPeerHosts(nil)
+		lanInst.SetTailscaleDiscovery(true)
+		return
+	}
+	lanInst.SetExtraPeerHosts(cfg.ExtraPeerHosts)
+	tailscale := true
+	if cfg.TailscaleDiscovery != nil {
+		tailscale = *cfg.TailscaleDiscovery
+	}
+	lanInst.SetTailscaleDiscovery(tailscale)
 }
