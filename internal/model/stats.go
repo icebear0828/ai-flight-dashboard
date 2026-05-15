@@ -152,3 +152,21 @@ type CacheSavingsResponse struct {
 	SavedPercent     float64 `json:"saved_percent"`
 	CacheHitRate     float64 `json:"cache_hit_rate"`
 }
+
+// SourceCoverageResponse describes zero-config onboarding coverage for local AI tools.
+type SourceCoverageResponse struct {
+	Sources []SourceCoverage `json:"sources"`
+}
+
+// SourceCoverage describes whether Token Ray can detect, import, and trust a source.
+type SourceCoverage struct {
+	Source      string     `json:"source"`
+	DisplayName string     `json:"display_name"`
+	Status      string     `json:"status"`
+	Health      string     `json:"health"`
+	DataDir     string     `json:"data_dir,omitempty"`
+	Records     int        `json:"records"`
+	TotalCost   float64    `json:"total_cost"`
+	LastSeen    *time.Time `json:"last_seen,omitempty"`
+	Reason      string     `json:"reason,omitempty"`
+}

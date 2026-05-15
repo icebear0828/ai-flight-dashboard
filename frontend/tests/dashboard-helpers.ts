@@ -18,6 +18,42 @@ export const emptyStatsPayload = {
   is_paused: false,
 };
 
+export const sourceCoveragePayload = {
+  sources: [
+    {
+      source: 'Claude Code',
+      display_name: 'Claude Code',
+      status: 'detected',
+      health: 'pending_import',
+      data_dir: '/Users/test/.claude/projects',
+      records: 0,
+      total_cost: 0,
+      reason: 'Source logs were found but have not been imported yet.',
+    },
+    {
+      source: 'Codex',
+      display_name: 'Codex',
+      status: 'watching',
+      health: 'complete',
+      data_dir: '/Users/test/.codex/sessions',
+      records: 2,
+      total_cost: 2.5,
+      last_seen: '2026-05-15T10:00:00Z',
+      reason: 'Usage records are present in the local Token Ray ledger.',
+    },
+    {
+      source: 'Gemini CLI',
+      display_name: 'Gemini CLI',
+      status: 'no_data',
+      health: 'unavailable',
+      data_dir: '/Users/test/.gemini/tmp',
+      records: 0,
+      total_cost: 0,
+      reason: 'Default source data directory was not found.',
+    },
+  ],
+};
+
 export async function fulfillJSON(route: Route, body: unknown, status = 200) {
   await route.fulfill({
     status,
@@ -32,4 +68,8 @@ export async function fulfillEmptyLANScan(route: Route) {
 
 export async function fulfillLANStatus(route: Route, enabled = true) {
   await fulfillJSON(route, { enabled });
+}
+
+export async function fulfillSourceCoverage(route: Route) {
+  await fulfillJSON(route, sourceCoveragePayload);
 }
