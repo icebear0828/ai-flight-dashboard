@@ -1,10 +1,11 @@
 package db
 
 import (
-	"ai-flight-dashboard/internal/model"
 	"database/sql"
 	"strings"
 	"time"
+
+	"ai-flight-dashboard/internal/model"
 )
 
 // QueryPeriodStatsSince returns total cost and token breakdown since the given time.
@@ -221,6 +222,44 @@ func (d *DB) QueryStatsSince(since time.Time, deviceID string, source string) ([
 			return nil, err
 		}
 		stats = append(stats, s)
+	}
+	return stats, rows.Err()
+}
+
+// QuerySourceCoverageStats returns per-source record counts, total cost, and latest usage time.
+func (d *DB) QuerySourceCoverageStats(deviceID string) ([]SourceCoverageStat, error) {
+	query := `
+		SELECT source, COUNT(*) as records, COALESCE(SUM(cost_usd), 0), MAX(log_timestamp)
+		FROM usage_records
+		WHERE ` + activeUsagePredicate
+	var args []interface{}
+
+	if deviceID != "" && deviceID != "all" {
+		query += " AND device_id = ?"
+		args = append(args, deviceID)
+	}
+
+	query += " GROUP BY source ORDER BY source"
+
+	rows, err := d.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stats []SourceCoverageStat
+	for rows.Next() {
+		var stat SourceCoverageStat
+		var lastSeen sql.NullString
+		if err := rows.Scan(&stat.Source, &stat.Records, &stat.TotalCost, &lastSeen); err != nil {
+			return nil, err
+		}
+		if lastSeen.Valid {
+			if ts, err := parseLogTimestamp(lastSeen.String); err == nil {
+				stat.LastSeen = ts
+			}
+		}
+		stats = append(stats, stat)
 	}
 	return stats, rows.Err()
 }

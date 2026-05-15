@@ -29,6 +29,10 @@ func NewHandlerWithLANController(database *db.DB, calc *calculator.Calculator, w
 		handleCacheSavings(w, r, database, calc)
 	})
 
+	mux.HandleFunc("/api/sources/status", func(w http.ResponseWriter, r *http.Request) {
+		handleSourceStatus(w, r, database)
+	})
+
 	mux.HandleFunc("/api/pricing", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			handleGetPricing(w, r, calc)

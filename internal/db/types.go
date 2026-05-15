@@ -23,6 +23,14 @@ type SourceTotalStat struct {
 	OutputTokens        int
 	TotalCost           float64
 }
+
+type SourceCoverageStat struct {
+	Source    string
+	Records   int
+	TotalCost float64
+	LastSeen  time.Time
+}
+
 type PeriodStatsWindow struct {
 	Label string
 	Since time.Time

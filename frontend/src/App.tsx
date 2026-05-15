@@ -7,9 +7,11 @@ import {
   mergeDashboardDetails,
   mergeSummaryWithPreviousDetails,
   normalizeDashboardData,
+  normalizeSourceCoverageResponse,
   type DashboardData,
   type DeviceStats,
   type PeriodStats,
+  type SourceCoverage,
   type SourceModelStats,
   type SourceStats,
 } from "./dashboardData";
@@ -29,6 +31,7 @@ export default function App() {
   const [systemLogsNotice, setSystemLogsNotice] = useState<string>("");
   const [projectsCollapsed, setProjectsCollapsed] = useState(false);
   const [collapsedModelSources, setCollapsedModelSources] = useState<Record<string, boolean>>({});
+  const [sourceCoverage, setSourceCoverage] = useState<SourceCoverage[]>([]);
   const statsRequestSeqRef = useRef(0);
   
   useEffect(() => {
@@ -90,6 +93,36 @@ export default function App() {
       clearInterval(interval);
     };
   }, [selectedDevice, selectedSource]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchSourceCoverage = async () => {
+      const params = new URLSearchParams({ device: selectedDevice });
+      try {
+        const res = await fetch(`/api/sources/status?${params.toString()}`);
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        }
+        const payload = normalizeSourceCoverageResponse(await res.json());
+        if (!cancelled) {
+          setSourceCoverage(payload.sources);
+        }
+      } catch (e: unknown) {
+        if (!cancelled) {
+          console.warn('Failed to load source coverage', e);
+          setSourceCoverage([]);
+        }
+      }
+    };
+
+    fetchSourceCoverage();
+    const interval = setInterval(fetchSourceCoverage, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [selectedDevice]);
 
   const togglePause = async () => {
 		try {
@@ -242,6 +275,8 @@ export default function App() {
           <SettingsModal onClose={() => setIsSettingsOpen(false)} />
         </Suspense>
       )}
+
+      <SourceCoverageCards sources={sourceCoverage} />
 
       {/* Source Filter Tabs + PeriodCost Stats */}
       <section className="mb-12 md:mb-20">
@@ -486,4 +521,80 @@ export default function App() {
       </section>
     </div>
   );
+}
+
+function SourceCoverageCards({ sources }: { sources: SourceCoverage[] }) {
+  const { t } = useTranslation();
+
+  if (sources.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="mb-12 md:mb-16" aria-labelledby="source-coverage-heading">
+      <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+        <h2 id="source-coverage-heading" className="font-display text-3xl sm:text-4xl uppercase leading-none">
+          {t('sourceCoverage')}
+        </h2>
+        <p className="max-w-3xl font-mono text-xs uppercase text-[#333333]">
+          {t('sourceCoverageDesc')}
+        </p>
+      </div>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {sources.map((source) => (
+          <article key={source.source} className={`border-[4px] bg-[#FFFFFF] p-4 ${sourceCoverageTone(source.status)}`}>
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div className="font-display text-2xl uppercase leading-none break-words">
+                {source.display_name}
+              </div>
+              <span className="shrink-0 border-[3px] border-current px-2 py-1 font-mono text-[11px] uppercase leading-none">
+                {t(`sourceStatus_${source.status}`)}
+              </span>
+            </div>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-2 font-mono text-xs uppercase">
+              <div>
+                <dt className="text-[#555555]">{t('records')}</dt>
+                <dd className="text-base font-bold text-[#000000]">{fmt(source.records)}</dd>
+              </div>
+              <div>
+                <dt className="text-[#555555]">{t('totalSpend')}</dt>
+                <dd className="text-base font-bold text-[#000000]">{fmtCost(source.total_cost)}</dd>
+              </div>
+              <div className="col-span-2">
+                <dt className="text-[#555555]">{t('dataHealth')}</dt>
+                <dd className="break-words text-[#000000]">{t(`sourceHealth_${source.health}`)}</dd>
+              </div>
+              {source.last_seen && (
+                <div className="col-span-2">
+                  <dt className="text-[#555555]">{t('lastSeen')}</dt>
+                  <dd className="break-words text-[#000000]">{new Date(source.last_seen).toLocaleString()}</dd>
+                </div>
+              )}
+            </dl>
+            {source.reason && (
+              <p className="mt-4 border-t-[3px] border-[#000000] pt-3 font-mono text-xs leading-snug text-[#000000]">
+                {source.reason}
+              </p>
+            )}
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function sourceCoverageTone(status: string): string {
+  switch (status) {
+    case 'watching':
+      return 'border-[#008000] text-[#008000]';
+    case 'detected':
+    case 'importing':
+      return 'border-[#0000FF] text-[#0000FF]';
+    case 'needs_permission':
+      return 'border-[#FF0000] text-[#FF0000]';
+    case 'unsupported':
+      return 'border-[#555555] text-[#555555]';
+    default:
+      return 'border-[#000000] text-[#000000]';
+  }
 }

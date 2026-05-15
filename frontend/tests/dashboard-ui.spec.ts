@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-import { fulfillEmptyLANScan, fulfillJSON, fulfillLANStatus, periods } from './dashboard-helpers';
+import { fulfillEmptyLANScan, fulfillJSON, fulfillLANStatus, fulfillSourceCoverage, periods } from './dashboard-helpers';
 
 test('system logs click shows a visible fallback in web mode', async ({ page }) => {
   await page.route('**/api/stats?*', async (route) => {
@@ -22,6 +22,30 @@ test('system logs click shows a visible fallback in web mode', async ({ page }) 
 
   await page.getByText('[ 系统日志 ]').click();
   await expect(page.getByText('系统日志路径: /tmp/ai-flight-dashboard/stats')).toBeVisible();
+});
+
+test('dashboard shows source coverage cards', async ({ page }) => {
+  await page.route('**/api/stats?*', async (route) => {
+    await fulfillJSON(route, {
+      periods,
+      sources: [],
+      devices: [{ id: 'local', display_name: 'local' }],
+      projects: [],
+      is_paused: false,
+    });
+  });
+  await page.route('**/api/sources/status?*', fulfillSourceCoverage);
+  await page.route('**/api/lan/scan', fulfillEmptyLANScan);
+  await page.route('**/api/lan/status', fulfillLANStatus);
+
+  await page.goto('/');
+
+  await expect(page.getByRole('heading', { name: '来源覆盖' })).toBeVisible();
+  await expect(page.getByText('Claude Code', { exact: true })).toBeVisible();
+  await expect(page.getByText('已发现')).toBeVisible();
+  await expect(page.getByText('Codex', { exact: true })).toBeVisible();
+  await expect(page.getByText('监听中')).toBeVisible();
+  await expect(page.getByText('$2.50')).toBeVisible();
 });
 
 test('dashboard shows cache hit rate in stats tables', async ({ page }) => {

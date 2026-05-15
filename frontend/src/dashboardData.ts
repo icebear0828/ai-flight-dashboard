@@ -67,6 +67,22 @@ export interface DashboardData {
   is_paused?: boolean;
 }
 
+export interface SourceCoverage {
+  source: string;
+  display_name: string;
+  status: string;
+  health: string;
+  data_dir?: string;
+  records: number;
+  total_cost: number;
+  last_seen?: string;
+  reason?: string;
+}
+
+export interface SourceCoverageResponse {
+  sources: SourceCoverage[];
+}
+
 export const normalizeDashboardData = (raw: unknown): DashboardData => {
   const root = asRecord(raw);
   const periods = Array.isArray(root.periods) ? root.periods : [];
@@ -141,6 +157,28 @@ export const normalizeDashboardData = (raw: unknown): DashboardData => {
       };
     }),
     is_paused: Boolean(root.is_paused),
+  };
+};
+
+export const normalizeSourceCoverageResponse = (raw: unknown): SourceCoverageResponse => {
+  const root = asRecord(raw);
+  const sources = Array.isArray(root.sources) ? root.sources : [];
+
+  return {
+    sources: sources.map((source) => {
+      const src = asRecord(source);
+      return {
+        source: text(src.source, 'Unknown'),
+        display_name: text(src.display_name, text(src.source, 'Unknown')),
+        status: text(src.status, 'no_data'),
+        health: text(src.health, 'unknown'),
+        data_dir: text(src.data_dir),
+        records: num(src.records),
+        total_cost: num(src.total_cost),
+        last_seen: text(src.last_seen),
+        reason: text(src.reason),
+      };
+    }),
   };
 };
 
