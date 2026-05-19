@@ -11,7 +11,7 @@ import (
 )
 
 func TestEmbeddedPricingMatchesOfficialRates(t *testing.T) {
-	// Sources checked on 2026-05-12:
+	// Sources checked on 2026-05-19:
 	// Anthropic: https://platform.claude.com/docs/en/docs/about-claude/models/overview
 	// Gemini: https://ai.google.dev/gemini-api/docs/pricing
 	// OpenAI: https://developers.openai.com/api/docs/models/gpt-5.5
@@ -40,6 +40,12 @@ func TestEmbeddedPricingMatchesOfficialRates(t *testing.T) {
 			InputPricePerM:  0.50,
 			CachedPricePerM: 0.05,
 			OutputPricePerM: 3.00,
+		},
+		"gemini-3.5-flash": {
+			InputPricePerM:         1.50,
+			CachedPricePerM:        0.15,
+			CacheCreationPricePerM: 1.50,
+			OutputPricePerM:        9.00,
 		},
 		"gemini-3.1-pro-preview": {
 			InputPricePerM:  2.00,

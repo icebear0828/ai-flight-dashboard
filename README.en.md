@@ -144,6 +144,7 @@ The GUI settings screen can:
 | `--billing-mode` | `auto`, `subscription`, or `api`. |
 | `--plan` | Subscription plan: `pro`, `max5`, or `max20`. |
 | `--budget-daily` | Daily API-mode budget, `0` disables it. |
+| `antigravity-statusline` | Read Antigravity CLI statusline JSON, store the current usage, and print a one-line status. |
 | `repair-history` | Rescan local Claude, Gemini, and Codex history and repair stats. |
 | `export` | Export CSV to stdout. |
 | `import <file.csv>` | Import CSV and skip duplicates. |

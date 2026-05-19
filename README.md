@@ -144,6 +144,7 @@ GUI 设置页可以执行：
 | `--billing-mode` | `auto`、`subscription` 或 `api`。 |
 | `--plan` | 订阅计划：`pro`、`max5`、`max20`。 |
 | `--budget-daily` | API 模式每日预算，`0` 表示关闭。 |
+| `antigravity-statusline` | 从 Antigravity CLI statusline JSON 读取本次用量，写入本地数据库并输出单行状态。 |
 | `repair-history` | 重扫本机 Claude、Gemini、Codex 历史数据并修复统计。 |
 | `export` | 导出 CSV 到 stdout。 |
 | `import <file.csv>` | 导入 CSV，重复记录会跳过。 |

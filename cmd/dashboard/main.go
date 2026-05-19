@@ -90,9 +90,11 @@ func main() {
 		}
 	}
 
-	// Subcommand dispatch: export | import | dedup | repair-history
+	// Subcommand dispatch: export | import | dedup | repair-history | antigravity-statusline
 	if len(args) > 0 {
 		switch args[0] {
+		case "antigravity-statusline":
+			os.Exit(runAntigravityStatuslineCommand(*deviceID))
 		case "export":
 			runExport(*deviceID)
 			return
