@@ -83,6 +83,7 @@ func TestParseStatuslineSupportsSnakeCaseUsageMetadata(t *testing.T) {
 
 func TestParseStatuslineSupportsCurrentCLIStatuslineShape(t *testing.T) {
 	raw := []byte(`{
+		"cwd": "/Users/c",
 		"session_id": "e5eb6631-8ca4-4119-b314-6625b2894992",
 		"conversation_id": "e5eb6631-8ca4-4119-b314-6625b2894992",
 		"transcript_path": "/Users/c/.gemini/antigravity/brain/e5eb6631-8ca4-4119-b314-6625b2894992/.system_generated/logs/transcript.jsonl",
@@ -127,6 +128,43 @@ func TestParseStatuslineSupportsCurrentCLIStatuslineShape(t *testing.T) {
 	}
 	if usage.UUID != "antigravity-statusline:e5eb6631-8ca4-4119-b314-6625b2894992" {
 		t.Fatalf("expected conversation-level UUID, got %q", usage.UUID)
+	}
+}
+
+func TestParseStatuslineIgnoresZeroCurrentUsageFromInitializingSession(t *testing.T) {
+	raw := []byte(`{
+		"cwd": "/private/tmp/token-antigravity-pr",
+		"session_id": "47944395-8267-491e-857e-cded9e285e7e",
+		"conversation_id": "47944395-8267-491e-857e-cded9e285e7e",
+		"model": {
+			"id": "Gemini 3.5 Flash (High)",
+			"display_name": "Gemini 3.5 Flash (High)"
+		},
+		"workspace": {
+			"current_dir": "/private/tmp/token-antigravity-pr",
+			"project_dir": "file:///private/tmp/token-antigravity-pr"
+		},
+		"context_window": {
+			"total_input_tokens": 151,
+			"total_output_tokens": 0,
+			"context_window_size": 1048576,
+			"current_usage": {
+				"input_tokens": 0,
+				"output_tokens": 0,
+				"cache_creation_input_tokens": 0,
+				"cache_read_input_tokens": 0
+			}
+		},
+		"product": "antigravity",
+		"agent_state": "idle"
+	}`)
+
+	usage, ok, err := ParseStatusline(raw, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatalf("expected zero current usage to be ignored, got %+v", usage)
 	}
 }
 

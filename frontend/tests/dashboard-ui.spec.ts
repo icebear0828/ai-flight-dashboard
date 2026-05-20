@@ -80,8 +80,8 @@ test('dashboard shows cache hit rate in stats tables', async ({ page }) => {
 });
 
 test('dashboard period cards show raw input tokens without subtracting cache', async ({ page }) => {
-  await page.route('**/api/stats?*', async (route) => {
-    await fulfillJSON(route, {
+	await page.route('**/api/stats?*', async (route) => {
+		await fulfillJSON(route, {
       periods: periods.map((period) => ({
         ...period,
         input_tokens: 322_400_000,
@@ -101,12 +101,70 @@ test('dashboard period cards show raw input tokens without subtracting cache', a
 
   await expect(page.getByText('输入: 322.40M').first()).toBeVisible();
   await expect(page.getByText('缓存读取: 304.90M').first()).toBeVisible();
-  await expect(page.getByText('输入: 17.50M')).toHaveCount(0);
+	await expect(page.getByText('输入: 17.50M')).toHaveCount(0);
+});
+
+test('dashboard shows nonzero small costs instead of rounding them to zero', async ({ page }) => {
+	await page.route('**/api/stats?*', async (route) => {
+		await fulfillJSON(route, {
+			periods: periods.map((period) => ({
+				...period,
+				cost: 0.003765,
+				input_tokens: 2150,
+				cached_tokens: 100,
+				cache_creation_tokens: 50,
+				output_tokens: 75,
+				cache_hit_rate: 4.651162790697675,
+			})),
+			sources: [{
+				name: 'Antigravity',
+				total_input: 2150,
+				total_cached: 100,
+				total_cache_creation: 50,
+				total_output: 75,
+				total_cost: 0.003765,
+				total_events: 1,
+				cache_hit_rate: 4.651162790697675,
+				models: [{
+					model: 'gemini-3.5-flash',
+					events: 1,
+					input_tokens: 2150,
+					cached_tokens: 100,
+					cache_creation_tokens: 50,
+					output_tokens: 75,
+					total_cost: 0.003765,
+					input_price_per_m: 1.5,
+					cached_price_per_m: 0.15,
+					cache_creation_price_per_m: 1.5,
+					output_price_per_m: 9,
+					cache_hit_rate: 4.651162790697675,
+				}],
+			}],
+			devices: [{ id: 'local', display_name: 'local' }],
+			projects: [{
+				project: 'token',
+				events: 1,
+				input_tokens: 2150,
+				cached_tokens: 100,
+				cache_creation_tokens: 50,
+				output_tokens: 75,
+				total_cost: 0.003765,
+				cache_hit_rate: 4.651162790697675,
+			}],
+			is_paused: false,
+		});
+	});
+	await page.route('**/api/lan/scan', fulfillEmptyLANScan);
+
+	await page.goto('/');
+
+	await expect(page.getByText('$0.0038').first()).toBeVisible();
+	await expect(page.getByText('gemini-3.5-flash', { exact: true })).toBeVisible();
 });
 
 test('dashboard can collapse project and model tables', async ({ page }) => {
-  await page.route('**/api/stats?*', async (route) => {
-    await fulfillJSON(route, {
+	await page.route('**/api/stats?*', async (route) => {
+		await fulfillJSON(route, {
       periods,
       sources: [{
         name: 'Codex',

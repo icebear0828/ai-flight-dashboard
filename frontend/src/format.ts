@@ -15,5 +15,9 @@ export const fmt = (value: unknown) => {
   return n.toString();
 };
 
-export const fmtCost = (value: unknown) => '$' + num(value).toFixed(2);
+export const fmtCost = (value: unknown) => {
+  const n = num(value);
+  if (n !== 0 && Math.abs(n) < 0.01) return '$' + n.toFixed(4);
+  return '$' + n.toFixed(2);
+};
 export const fmtPercent = (value: unknown) => num(value).toFixed(1) + '%';

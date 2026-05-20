@@ -33,10 +33,12 @@ var (
 		"current_working_directory",
 		"workspacePath",
 		"workspace_path",
-		"projectDir",
-		"project_dir",
 		"currentDir",
 		"current_dir",
+	}
+	projectDirAliases = []string{
+		"projectDir",
+		"project_dir",
 	}
 	workspacePathsAliases = []string{
 		"workspacePaths",
@@ -153,6 +155,9 @@ func ParseStatusline(raw []byte, now time.Time) (model.TokenUsage, bool, error) 
 	if outputTotal < 0 {
 		outputTotal = 0
 	}
+	if input == 0 && cached == 0 && cacheCreation == 0 && outputTotal == 0 && thoughts == 0 {
+		return model.TokenUsage{}, false, nil
+	}
 
 	modelName := normalizeModelName(firstString(objects, modelAliases))
 	if modelName == "" {
@@ -206,10 +211,13 @@ func collectObjects(raw json.RawMessage, depth int) []jsonObject {
 }
 
 func firstWorkspacePath(objects []jsonObject) string {
-	if cwd := firstString(objects, cwdAliases); cwd != "" {
-		return cwd
+	if projectDir := firstString(objects, projectDirAliases); projectDir != "" {
+		return projectDir
 	}
-	return firstStringFromArray(objects, workspacePathsAliases)
+	if workspacePath := firstStringFromArray(objects, workspacePathsAliases); workspacePath != "" {
+		return workspacePath
+	}
+	return firstString(objects, cwdAliases)
 }
 
 func firstString(objects []jsonObject, aliases []string) string {

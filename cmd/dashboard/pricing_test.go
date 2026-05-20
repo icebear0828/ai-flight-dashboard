@@ -129,6 +129,53 @@ func TestFetchDynamicPricingFromURLsFallsBackAfterFailure(t *testing.T) {
 	}
 }
 
+func TestMergePricingDataPreservesEmbeddedModelsWhenDynamicIsStale(t *testing.T) {
+	baseJSON := []byte(`{
+		"models": {
+			"gemini-3.5-flash": {
+				"input_price_per_m": 1.5,
+				"cached_price_per_m": 0.15,
+				"cache_creation_price_per_m": 1.5,
+				"output_price_per_m": 9
+			},
+			"gemini-2.5-pro": {
+				"input_price_per_m": 1.25,
+				"cached_price_per_m": 0.125,
+				"cache_creation_price_per_m": 0,
+				"output_price_per_m": 10
+			}
+		}
+	}`)
+	dynamicJSON := []byte(`{
+		"models": {
+			"gemini-2.5-pro": {
+				"input_price_per_m": 2,
+				"cached_price_per_m": 0.2,
+				"cache_creation_price_per_m": 0,
+				"output_price_per_m": 12
+			}
+		}
+	}`)
+
+	merged, err := mergePricingData(baseJSON, dynamicJSON)
+	if err != nil {
+		t.Fatalf("merge pricing data: %v", err)
+	}
+
+	var table calculator.PricingTable
+	if err := json.Unmarshal(merged, &table); err != nil {
+		t.Fatalf("unmarshal merged pricing: %v", err)
+	}
+	if got, ok := table.Models["gemini-3.5-flash"]; !ok {
+		t.Fatal("expected embedded-only gemini-3.5-flash pricing to be preserved")
+	} else if got.InputPricePerM != 1.5 || got.CacheCreationPricePerM != 1.5 || got.OutputPricePerM != 9 {
+		t.Fatalf("unexpected preserved pricing: %+v", got)
+	}
+	if got := table.Models["gemini-2.5-pro"]; got.InputPricePerM != 2 || got.OutputPricePerM != 12 {
+		t.Fatalf("expected dynamic pricing to override embedded model, got %+v", got)
+	}
+}
+
 func TestDynamicPricingURLsUseCurrentRepository(t *testing.T) {
 	if len(pricingTableURLs) == 0 {
 		t.Fatal("expected at least one dynamic pricing URL")
