@@ -88,6 +88,70 @@ test('source switching shows loading and ignores stale stats responses', async (
   expect(pageErrors).toEqual([]);
 });
 
+test('source switching includes Antigravity source tab', async ({ page }) => {
+  const requestedSources: string[] = [];
+
+  const statsPayload = (source: string) => ({
+    periods,
+    sources: source
+      ? [{
+          name: source,
+          total_input: 2150,
+          total_cached: 100,
+          total_cache_creation: 50,
+          total_output: 75,
+          total_cost: 0.003765,
+          total_events: 1,
+          cache_hit_rate: 4.651162790697675,
+          models: [{
+            model: 'gemini-3.5-flash',
+            events: 1,
+            input_tokens: 2150,
+            cached_tokens: 100,
+            cache_creation_tokens: 50,
+            output_tokens: 75,
+            total_cost: 0.003765,
+            input_price_per_m: 1.5,
+            cached_price_per_m: 0.15,
+            cache_creation_price_per_m: 1.5,
+            output_price_per_m: 9,
+            cache_hit_rate: 4.651162790697675,
+          }],
+        }]
+      : [],
+    devices: [{ id: 'local', display_name: 'local' }],
+    projects: source ? [{
+      project: 'token',
+      events: 1,
+      input_tokens: 2150,
+      cached_tokens: 100,
+      cache_creation_tokens: 50,
+      output_tokens: 75,
+      total_cost: 0.003765,
+      cache_hit_rate: 4.651162790697675,
+    }] : [],
+    is_paused: false,
+  });
+
+  await page.route('**/api/stats?*', async (route) => {
+    const url = new URL(route.request().url());
+    const source = url.searchParams.get('source') ?? '';
+    requestedSources.push(source);
+    await fulfillJSON(route, statsPayload(source));
+  });
+  await page.route('**/api/lan/scan', fulfillEmptyLANScan);
+  await page.route('**/api/lan/status', fulfillLANStatus);
+
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'ANTIGRAVITY' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'ANTIGRAVITY' }).click();
+  await expect(page.getByRole('heading', { name: 'Antigravity' })).toBeVisible();
+  await expect(page.getByText('gemini-3.5-flash', { exact: true })).toBeVisible();
+  await expect(page.getByText('$0.0038').first()).toBeVisible();
+  expect(requestedSources).toContain('Antigravity');
+});
+
 test('source switching renders summary before delayed details', async ({ page }) => {
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));

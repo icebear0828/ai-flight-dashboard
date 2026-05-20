@@ -1,7 +1,9 @@
 package main
 
 import (
+	"ai-flight-dashboard/internal/calculator"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,6 +30,30 @@ func fetchDynamicPricingFromURLs(urls []string, timeout time.Duration) ([]byte, 
 		lastErr = fmt.Errorf("%s: %w", url, err)
 	}
 	return nil, lastErr
+}
+
+func mergePricingData(baseData []byte, overrideData []byte) ([]byte, error) {
+	var base calculator.PricingTable
+	if err := json.Unmarshal(baseData, &base); err != nil {
+		return nil, fmt.Errorf("unmarshal base pricing table: %w", err)
+	}
+	if base.Models == nil {
+		base.Models = make(map[string]calculator.ModelPrice)
+	}
+
+	var override calculator.PricingTable
+	if err := json.Unmarshal(overrideData, &override); err != nil {
+		return nil, fmt.Errorf("unmarshal override pricing table: %w", err)
+	}
+	for model, price := range override.Models {
+		base.Models[model] = price
+	}
+
+	merged, err := json.Marshal(base)
+	if err != nil {
+		return nil, fmt.Errorf("marshal merged pricing table: %w", err)
+	}
+	return merged, nil
 }
 
 func fetchDynamicPricing(url string, timeout time.Duration) ([]byte, error) {

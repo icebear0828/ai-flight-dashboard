@@ -24,6 +24,12 @@
       "cache_creation_price_per_m": 0.00,
       "output_price_per_m": 3.00
     },
+    "gemini-3.5-flash": {
+      "input_price_per_m": 1.50,
+      "cached_price_per_m": 0.15,
+      "cache_creation_price_per_m": 1.50,
+      "output_price_per_m": 9.00
+    },
     "gemini-3.1-pro-preview": {
       "input_price_per_m": 2.00,
       "cached_price_per_m": 0.20,

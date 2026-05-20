@@ -1,19 +1,19 @@
 # AI Flight Dashboard
 
-> 本地优先的 AI Token、成本和设备用量仪表盘，支持 Claude Code、Gemini CLI 和 Codex。
+> 本地优先的 AI Token、成本和设备用量仪表盘，支持 Claude Code、Gemini CLI、Codex 和 Antigravity CLI。
 
 [English](README.en.md)
 
 AI Flight Dashboard 是一个 Go + React + Wails 应用。它通过被动扫描本机 AI CLI 工具写入的日志和本地数据库，统计 Token、缓存命中、模型成本、项目归因和多设备用量。默认启动桌面 GUI，也可以作为 Web 面板、legacy TUI 或远程 forwarder 运行。
 
-它不需要改造 Claude Code、Gemini CLI 或 Codex，也不需要代理真实 API 流量。数据默认保存在本机 `~/.ai-flight-dashboard` 下的 SQLite 数据库中；局域网模式可在多台设备之间发现、同步和去重。
+它不需要改造 Claude Code、Gemini CLI、Codex 或 Antigravity CLI，也不需要代理真实 API 流量。数据默认保存在本机 `~/.ai-flight-dashboard` 下的 SQLite 数据库中；局域网模式可在多台设备之间发现、同步和去重。
 
 ## 当前能力
 
-- 支持 Claude Code、Gemini CLI、Codex 三类来源。
+- 支持 Claude Code、Gemini CLI、Codex 和 Antigravity CLI 来源。
 - 默认 Wails 桌面 GUI；可切换 Web、legacy TUI、forwarder 探针模式。
 - 统计 1h、24h、7d、30d、3mo、6mo、1y、ALL 时间窗口。
-- 按 TOTAL、CLAUDE、GEMINI、CODEX 来源切换统计视图。
+- 按 TOTAL、CLAUDE、GEMINI、CODEX、ANTIGRAVITY 来源切换统计视图。
 - 展示项目、模型、设备、Token、缓存读取、缓存写入、输出和总成本。
 - 展示缓存命中率，计算口径为 `cached_tokens / input_tokens * 100`。
 - 支持项目表和模型表折叠，适合长期运行后的大数据量视图。
@@ -67,6 +67,7 @@ DASHBOARD_TOKEN=your-token ./dashboard \
 | Claude Code | `~/.claude/projects/**/*.jsonl` | 解析会话 JSONL、模型、Token 和工作目录归因。 |
 | Gemini CLI | `~/.gemini/tmp/**/*.jsonl` | 支持流式日志、`.project_root` 项目归因和增量 offset。 |
 | Codex | `~/.codex/sessions/**/*.jsonl`、`~/.codex/logs_2.sqlite`、`~/.codex/state_5.sqlite` | 优先读取 session JSONL 的累计 token usage，缺失时回退 telemetry SQLite，并用 state 数据解析项目路径。 |
+| Antigravity CLI | `/statusline` JSON stdin | 读取当前 statusline payload，记录实时 token、缓存 token、模型和项目归因。 |
 
 默认同步模式为 `poll`：首次启动会扫描历史文件，之后快速轮询已知文件并周期性发现新文件。也可使用 `--sync-mode fsnotify` 或 `--sync-mode once`。
 
@@ -144,6 +145,7 @@ GUI 设置页可以执行：
 | `--billing-mode` | `auto`、`subscription` 或 `api`。 |
 | `--plan` | 订阅计划：`pro`、`max5`、`max20`。 |
 | `--budget-daily` | API 模式每日预算，`0` 表示关闭。 |
+| `antigravity-statusline` | 从 Antigravity CLI statusline JSON 读取本次用量，写入本地数据库并输出单行状态。 |
 | `repair-history` | 重扫本机 Claude、Gemini、Codex 历史数据并修复统计。 |
 | `export` | 导出 CSV 到 stdout。 |
 | `import <file.csv>` | 导入 CSV，重复记录会跳过。 |

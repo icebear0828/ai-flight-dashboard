@@ -79,7 +79,7 @@ GET /api/stats?device={device_id}&source={source_name}
 GET /api/stats?device={device_id}&source={source_name}&detail={full|summary|details}
 ```
 
-`source_name` supports the same source names shown in the dashboard, including `Claude Code`, `Gemini CLI`, and `Codex`.
+`source_name` supports the same source names shown in the dashboard, including `Claude Code`, `Gemini CLI`, `Codex`, and `Antigravity`.
 
 `detail` is optional. Omit it, or use `full`, to return the complete legacy payload. Use `summary` for a lightweight response containing periods, source totals, devices, and pause state. Use `details` for model/project details that can be loaded after the summary.
 

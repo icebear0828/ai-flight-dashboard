@@ -90,9 +90,11 @@ func main() {
 		}
 	}
 
-	// Subcommand dispatch: export | import | dedup | repair-history
+	// Subcommand dispatch: export | import | dedup | repair-history | antigravity-statusline
 	if len(args) > 0 {
 		switch args[0] {
+		case "antigravity-statusline":
+			os.Exit(runAntigravityStatuslineCommand(*deviceID))
 		case "export":
 			runExport(*deviceID)
 			return
@@ -139,8 +141,12 @@ func main() {
 	// Initialize Calculator from pricing table
 	pricingData := embeddedPricing
 	if dynPricing, err := fetchDynamicPricingFromURLs(pricingTableURLs, 3*time.Second); err == nil {
-		fmt.Println("☁️  Successfully fetched dynamic pricing table from GitHub.")
-		pricingData = dynPricing
+		if mergedPricing, err := mergePricingData(embeddedPricing, dynPricing); err == nil {
+			fmt.Println("☁️  Successfully fetched dynamic pricing table from GitHub.")
+			pricingData = mergedPricing
+		} else {
+			fmt.Printf("⚠️  Failed to merge dynamic pricing table, using embedded version: %v\n", err)
+		}
 	} else {
 		fmt.Printf("⚠️  Failed to fetch dynamic pricing table, using embedded version: %v\n", err)
 	}

@@ -11,7 +11,7 @@ import (
 )
 
 func TestEmbeddedPricingMatchesOfficialRates(t *testing.T) {
-	// Sources checked on 2026-05-12:
+	// Sources checked on 2026-05-19:
 	// Anthropic: https://platform.claude.com/docs/en/docs/about-claude/models/overview
 	// Gemini: https://ai.google.dev/gemini-api/docs/pricing
 	// OpenAI: https://developers.openai.com/api/docs/models/gpt-5.5
@@ -40,6 +40,12 @@ func TestEmbeddedPricingMatchesOfficialRates(t *testing.T) {
 			InputPricePerM:  0.50,
 			CachedPricePerM: 0.05,
 			OutputPricePerM: 3.00,
+		},
+		"gemini-3.5-flash": {
+			InputPricePerM:         1.50,
+			CachedPricePerM:        0.15,
+			CacheCreationPricePerM: 1.50,
+			OutputPricePerM:        9.00,
 		},
 		"gemini-3.1-pro-preview": {
 			InputPricePerM:  2.00,
@@ -120,6 +126,53 @@ func TestFetchDynamicPricingFromURLsFallsBackAfterFailure(t *testing.T) {
 	}
 	if strings.Join(requests, ",") != "/first.json,/second.json" {
 		t.Fatalf("unexpected request sequence: %v", requests)
+	}
+}
+
+func TestMergePricingDataPreservesEmbeddedModelsWhenDynamicIsStale(t *testing.T) {
+	baseJSON := []byte(`{
+		"models": {
+			"gemini-3.5-flash": {
+				"input_price_per_m": 1.5,
+				"cached_price_per_m": 0.15,
+				"cache_creation_price_per_m": 1.5,
+				"output_price_per_m": 9
+			},
+			"gemini-2.5-pro": {
+				"input_price_per_m": 1.25,
+				"cached_price_per_m": 0.125,
+				"cache_creation_price_per_m": 0,
+				"output_price_per_m": 10
+			}
+		}
+	}`)
+	dynamicJSON := []byte(`{
+		"models": {
+			"gemini-2.5-pro": {
+				"input_price_per_m": 2,
+				"cached_price_per_m": 0.2,
+				"cache_creation_price_per_m": 0,
+				"output_price_per_m": 12
+			}
+		}
+	}`)
+
+	merged, err := mergePricingData(baseJSON, dynamicJSON)
+	if err != nil {
+		t.Fatalf("merge pricing data: %v", err)
+	}
+
+	var table calculator.PricingTable
+	if err := json.Unmarshal(merged, &table); err != nil {
+		t.Fatalf("unmarshal merged pricing: %v", err)
+	}
+	if got, ok := table.Models["gemini-3.5-flash"]; !ok {
+		t.Fatal("expected embedded-only gemini-3.5-flash pricing to be preserved")
+	} else if got.InputPricePerM != 1.5 || got.CacheCreationPricePerM != 1.5 || got.OutputPricePerM != 9 {
+		t.Fatalf("unexpected preserved pricing: %+v", got)
+	}
+	if got := table.Models["gemini-2.5-pro"]; got.InputPricePerM != 2 || got.OutputPricePerM != 12 {
+		t.Fatalf("expected dynamic pricing to override embedded model, got %+v", got)
 	}
 }
 

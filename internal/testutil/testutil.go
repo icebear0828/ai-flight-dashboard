@@ -27,6 +27,12 @@ const PricingJSON = `{
       "cache_creation_price_per_m": 0,
       "output_price_per_m": 10
     },
+    "gemini-3.5-flash": {
+      "input_price_per_m": 1.5,
+      "cached_price_per_m": 0.15,
+      "cache_creation_price_per_m": 1.5,
+      "output_price_per_m": 9
+    },
     "gpt-5.5": {
       "input_price_per_m": 5,
       "cached_price_per_m": 0.5,

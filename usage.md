@@ -201,6 +201,14 @@ GET  /api/sync/pull
 
 用于清理历史重复记录。执行前建议先导出 CSV 备份。
 
+### Antigravity CLI statusline
+
+```bash
+./dashboard antigravity-statusline
+```
+
+该命令从 stdin 读取 Antigravity CLI `/statusline` JSON，记录当前会话 token 用量，并输出一行状态文本。
+
 ## HTTP API 摘要
 
 ```text
@@ -224,6 +232,7 @@ GET  /install.sh
 - `Claude Code`
 - `Gemini CLI`
 - `Codex`
+- `Antigravity`
 
 需要认证的写接口使用 bearer token：
 

@@ -245,12 +245,13 @@ export default function App() {
 
       {/* Source Filter Tabs + PeriodCost Stats */}
       <section className="mb-12 md:mb-20">
-        <div className="flex items-center gap-0 mb-6">
+        <div className="flex flex-wrap items-center gap-0 mb-6">
           {[
             { label: t('total'), value: '' },
             { label: 'CLAUDE', value: 'Claude Code' },
             { label: 'GEMINI', value: 'Gemini CLI' },
             { label: 'CODEX', value: 'Codex' },
+            { label: 'ANTIGRAVITY', value: 'Antigravity' },
           ].map((tab) => (
             <button
               key={tab.value}
